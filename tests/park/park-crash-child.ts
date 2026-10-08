@@ -24,6 +24,7 @@
 // Node's type stripping does not resolve.
 
 import { writeSync } from 'node:fs'
+import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import CommandRuntime from '@deepseek-ai/dsh-commands'
 import { SessionId } from '@deepseek-ai/dsh-session'
@@ -33,6 +34,7 @@ import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { apply, inject, name } from 'dsh-safe-stop'
 import { FakeProvider } from '../assumptions/fake-provider.ts'
 import { textResponse } from '../assumptions/fake-provider.ts'
+import { mountParkStorage } from '../registry/storage.ts'
 
 const [root, rawId] = process.argv.slice(2)
 if (root === undefined || rawId === undefined) {
@@ -45,6 +47,9 @@ const ctx = new Context()
 await mountAgentLoopTestDependencies(ctx)
 await ctx.plugin(JsonlSessionPersistence, { root, compression: 'none' })
 await ctx.plugin(CommandRuntime)
+// The plugin opens its park registry through `storageDomain`, so it cannot
+// mount without the storage stack; this probe only needs the row to exist.
+await mountParkStorage(ctx, join(root, 'storages'))
 const harness = await mountAgentLoopTestHarness(ctx)
 ctx.llm.registerAdapter(['fake'], new FakeProvider([textResponse('first answer'), textResponse('held answer')]))
 const agent = await harness.create(id, { provider: 'fake', model: 'fake' })

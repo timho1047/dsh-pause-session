@@ -3,13 +3,17 @@
  *
  * The spike's harness (`tests/assumptions/loop-harness.ts` + its scripted fake
  * provider) is reused as-is; this module only adds what a gate spec needs on
- * top — the real command registry the browser half calls, the plugin under
- * test, and a recorder upstream of the gate that captures the request the loop
- * built. Listeners are registered before the plugin, so the recorder sits
- * closer to the loop than the gate does.
+ * top — the real command registry the browser half calls, the storage the
+ * plugin's park registry opens through (it cannot mount without it), and a
+ * recorder upstream of the gate that captures the request the loop built.
+ * Listeners are registered before the plugin, so the recorder sits closer to
+ * the loop than the gate does.
  * @module dsh-safe-stop/test/gate/loop
  */
 
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import CommandRuntime from '@deepseek-ai/dsh-commands'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
@@ -18,6 +22,7 @@ import { apply, inject, name } from '../../src/index.ts'
 import type { ScriptEntry } from '../assumptions/fake-provider.ts'
 import { mountFakeLoop } from '../assumptions/loop-harness.ts'
 import type { FakeLoop } from '../assumptions/loop-harness.ts'
+import { mountParkStorage } from '../registry/storage.ts'
 
 /** The spike's loop plus the plugin under test and the registry it drives. */
 export interface GatedLoop extends FakeLoop {
@@ -27,15 +32,20 @@ export interface GatedLoop extends FakeLoop {
   requestSeen(count: number): Promise<void>
   /** The plugin's own fiber, so a spec can unload exactly it. */
   readonly plugin: { dispose(): Promise<void> }
+  /** Directory this loop's durable park registry lives in. */
+  readonly storageRoot: string
 }
 
-/** Mount the loop, the command registry, and the plugin under test. */
+/** Mount the loop, the command registry, the storage the plugin needs, and the plugin under test. */
 export async function mountGatedLoop(
   id: string,
   script: ScriptEntry[],
   options: { idleTimeoutMs?: number } = {},
 ): Promise<GatedLoop> {
   const loop = await mountFakeLoop(id, script, options)
+  const storageRoot = mkdtempSync(join(tmpdir(), 'dsh-safe-stop-loop-'))
+  loop.ctx.effect(() => () => rmSync(storageRoot, { recursive: true, force: true }), 'spec: registry root')
+  await mountParkStorage(loop.ctx, storageRoot)
   const seen: GenerateOptions[] = []
   const waiters = new Map<number, () => void>()
   // Upstream of the gate: the request is recorded when the loop builds it, not
@@ -51,6 +61,7 @@ export async function mountGatedLoop(
     ...loop,
     seen,
     plugin,
+    storageRoot,
     requestSeen: async (count: number) => {
       if (seen.length >= count) return
       await new Promise<void>((resolve) => { waiters.set(count, resolve) })

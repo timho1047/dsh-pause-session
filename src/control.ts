@@ -24,6 +24,11 @@
  * session flushed, at the session level — `SessionHandle.flush()` does not
  * drain the routed live buffer, so it would record a park that a crash erases.
  * The "safe to close" phase appears only after that flush resolves.
+ *
+ * Every phase a pause reaches is written to the durable registry before it is
+ * published, so a restart re-holds exactly the sessions the last process left
+ * parked — and a phase that could not be recorded is never shown as cleaner
+ * than the record says.
  * @module dsh-safe-stop/control
  */
 
@@ -34,11 +39,12 @@ import type {} from '@deepseek-ai/dsh-commands'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { PauseGate } from './gate.js'
 import type { ParkWatch } from './park.js'
+import type { ParkRegistry } from './registry.js'
 import {
   encodeParkStatus, PAUSE_COMMAND, PAUSE_DEFINITION_ID, RESUME_COMMAND, RESUME_DEFINITION_ID,
   STATUS_COMMAND, STATUS_DEFINITION_ID,
 } from './shared.js'
-import type { ParkStatus } from './shared.js'
+import type { ParkPhase, ParkStatus } from './shared.js'
 
 /** Result copy for a session that just reached the pause point; the model never sees it. */
 const PAUSED_TEXT = 'This session is paused. It stops once the work in flight drains.'
@@ -46,6 +52,9 @@ const PAUSED_TEXT = 'This session is paused. It stops once the work in flight dr
 
 /** Result copy for a released session. */
 const RESUMED_TEXT = 'This session resumed from where it paused.'
+
+/** Result copy for a press or a release the durable registry refused to record. */
+const UNRECORDED_TEXT = 'safe-stop could not write the pause registry, so it did not change the pause state.'
 
 /** One session's park in progress. */
 interface ParkMark {
@@ -55,13 +64,22 @@ interface ParkMark {
    * `parking`, and the session-level flush resolves it to `safe` — or to
    * `flush-failed`, which must never be reported as clean.
    */
-  phase: 'draining' | 'parking' | 'safe' | 'flush-failed'
+  phase: ParkPhase
   /**
    * Whether this attempt still owns its mark. Cancelling during the drain bumps
    * the generation, so the flush that lands afterwards cannot publish a state
    * for a session the user has already returned to normal.
    */
   generation: number
+  /**
+   * Where this mark came from. A `press` mark walks the park machine forward in
+   * this process. A `registry` mark is the durable outcome of an earlier park
+   * episode, adopted at mount so the session is held again: it never advances,
+   * because a flush this process runs cannot testify about how the session
+   * stopped before it started, and re-deriving one would turn last night's
+   * unclean entry into a false "clean".
+   */
+  origin: 'press' | 'registry'
 }
 
 /** The status one mark reports right now. */
@@ -78,6 +96,15 @@ function statusOf(mark: ParkMark, runningTools: readonly string[]): ParkStatus {
   }
 }
 
+/** What mounting the session control hands back to the plugin entry. */
+export interface SessionControl {
+  /**
+   * Hold every session the registry remembers, and publish the marker for the
+   * ones that already have a live agent. Called once, right after mount.
+   */
+  adopt(): Promise<void>
+}
+
 /**
  * Contribute the session control: the pause verb, the per-session status read,
  * and — for every paused session that has a live agent — the resume marker.
@@ -85,8 +112,15 @@ function statusOf(mark: ParkMark, runningTools: readonly string[]): ParkStatus {
  * session store, and the projection registry.
  * @param gate - the pause gate this control drives and reflects.
  * @param watch - the per-session activity fold the park predicate reads.
+ * @param registry - the durable pause list every phase change is written to.
+ * @returns the mount-time adoption step.
  */
-export function installSessionControl(ctx: Context, gate: PauseGate, watch: ParkWatch): void {
+export function installSessionControl(
+  ctx: Context,
+  gate: PauseGate,
+  watch: ParkWatch,
+  registry: ParkRegistry,
+): SessionControl {
   /** Marks per paused session; presence here mirrors the gate's own membership. */
   const marks = new Map<SessionId, ParkMark>()
   /** Publish fibers per paused session; disposing one removes both commands. */
@@ -104,6 +138,30 @@ export function installSessionControl(ctx: Context, gate: PauseGate, watch: Park
     })
   }
 
+  /**
+   * Write one phase to the durable registry, then publish it on the mark.
+   *
+   * The order is the whole point: a phase is published only once a later
+   * process would read it back. A failed write leaves the mark on its previous
+   * phase, which is never cleaner than what the registry holds — the direction
+   * that matters, because "safe to close" is a promise about surviving the
+   * process, not about this process's memory.
+   * @param sessionId - the paused session.
+   * @param mark - its live mark, updated in place on success.
+   * @param phase - the phase to record and publish.
+   * @returns whether the phase became durable.
+   */
+  const commit = async (sessionId: SessionId, mark: ParkMark, phase: ParkPhase): Promise<boolean> => {
+    try {
+      await registry.record(sessionId, phase)
+    } catch (error: unknown) {
+      ctx.logger.warn(`safe-stop: could not record the park state of "${sessionId}" as ${phase}: ${error instanceof Error ? error.message : String(error)}`)
+      return false
+    }
+    mark.phase = phase
+    return true
+  }
+
   /** Whether this session is standing still at the park point. */
   const parked = (sessionId: SessionId): boolean => {
     const activity = watch.activity(sessionId)
@@ -116,8 +174,8 @@ export function installSessionControl(ctx: Context, gate: PauseGate, watch: Park
 
   /**
    * Ensure one paused session has both commands registered. Registration is
-   * once per park: the status is answered by the command, not frozen into it,
-   * so a phase change needs no registry write.
+   * once per park: the status is answered by the command, not frozen into the
+   * descriptor, so a phase change needs no command re-registration.
    */
   const publish = (sessionId: SessionId): void => {
     const mark = marks.get(sessionId)
@@ -135,10 +193,7 @@ export function installSessionControl(ctx: Context, gate: PauseGate, watch: Park
         definitionId: CommandDefinitionId(RESUME_DEFINITION_ID),
         name: RESUME_COMMAND,
         description: 'Resume this paused Session',
-        handler: (invocation) => {
-          gate.resume(invocation.agent.id)
-          return { kind: 'success', text: RESUMED_TEXT }
-        },
+        handler: (invocation) => release(invocation.agent.id, RESUMED_TEXT),
       })
       scope.commands.register({
         definitionId: CommandDefinitionId(STATUS_DEFINITION_ID),
@@ -158,7 +213,13 @@ export function installSessionControl(ctx: Context, gate: PauseGate, watch: Park
   const advance = (sessionId: SessionId): boolean => {
     const mark = marks.get(sessionId)
     if (mark === undefined || mark.phase !== 'draining') return false
+    // An adopted mark reports the outcome of the episode that ended with the
+    // previous process; this process may hold the session, but it does not get
+    // to rewrite that outcome.
+    if (mark.origin === 'registry') return false
     if (!parked(sessionId)) return false
+    // Published now, recorded by `settle`: a mark that claims less than the
+    // truth is the safe direction while the write is in flight.
     mark.phase = 'parking'
     return true
   }
@@ -175,19 +236,23 @@ export function installSessionControl(ctx: Context, gate: PauseGate, watch: Park
     // Nothing live to flush: the session left the store, so there is no durable
     // promise left to keep either.
     if (session === undefined) {
-      mark.phase = 'safe'
+      await commit(sessionId, mark, 'safe')
       return
     }
+    // "Stopped, flush pending" is the state a crash during this flush leaves
+    // behind, and it must be on disk before the flush starts.
+    await commit(sessionId, mark, 'parking')
+    if (mark.generation !== attempt) return
     try {
       await ctx.sessions.flush(session)
     } catch (error: unknown) {
       if (mark.generation !== attempt) return
-      mark.phase = 'flush-failed'
       ctx.logger.warn(`safe-stop: flush failed for "${sessionId}": ${error instanceof Error ? error.message : String(error)}`)
+      await commit(sessionId, mark, 'flush-failed')
       return
     }
-    if (mark.generation !== attempt || mark.phase !== 'parking') return
-    mark.phase = 'safe'
+    if (mark.generation !== attempt) return
+    await commit(sessionId, mark, 'safe')
   }
 
   /** Look at one marked session and act on what it is doing. */
@@ -208,6 +273,24 @@ export function installSessionControl(ctx: Context, gate: PauseGate, watch: Park
     publish(sessionId)
   }
 
+  /**
+   * Take the pause back: the durable record goes first, so a process that dies
+   * in between does not re-hold a session the user has already released. A
+   * record that cannot be dropped leaves the session paused, which is the state
+   * the registry still describes.
+   */
+  const release = async (sessionId: SessionId, text: string): Promise<{ kind: 'success'; text: string } | { kind: 'error'; text: string }> => {
+    if (!gate.isPaused(sessionId)) return { kind: 'success', text }
+    try {
+      await registry.forget(sessionId)
+    } catch (error: unknown) {
+      ctx.logger.warn(`safe-stop: could not drop "${sessionId}" from the pause registry: ${error instanceof Error ? error.message : String(error)}`)
+      return { kind: 'error', text: UNRECORDED_TEXT }
+    }
+    gate.resume(sessionId)
+    return { kind: 'success', text }
+  }
+
   // One effect owns the whole surface: unloading removes the pause verb, the
   // subscriptions, and every marker this plugin registered.
   ctx.effect(function* () {
@@ -215,10 +298,18 @@ export function installSessionControl(ctx: Context, gate: PauseGate, watch: Park
       definitionId: CommandDefinitionId(PAUSE_DEFINITION_ID),
       name: PAUSE_COMMAND,
       description: 'Pause this Session before its next model request',
-      handler: (invocation) => {
+      handler: async (invocation) => {
         const sessionId = invocation.agent.id
         if (gate.pause(sessionId)) {
-          marks.set(sessionId, { phase: 'draining', generation: ++generation })
+          const mark: ParkMark = { phase: 'draining', generation: ++generation, origin: 'press' }
+          marks.set(sessionId, mark)
+          // The press IS a durable promise: a pause that cannot be recorded is
+          // taken back here rather than left as one a restart silently forgets.
+          if (!await commit(sessionId, mark, 'draining')) {
+            drop(sessionId)
+            gate.resume(sessionId)
+            return { kind: 'error', text: UNRECORDED_TEXT }
+          }
         }
         // The press returns now: the drain happens while the user stays free to
         // walk away or press again to cancel it.
@@ -253,4 +344,23 @@ export function installSessionControl(ctx: Context, gate: PauseGate, watch: Park
       await Promise.all(pending)
     }
   }, 'safe-stop: session control')
+
+  return {
+    adopt: async () => {
+      for (const entry of registry.list()) {
+        // Every registered session is held again, whether or not anything is
+        // live: the request that wakes it is the one this gate must catch, and
+        // the wake-up may come from a scheduled task or a webhook long after
+        // this mount.
+        if (gate.pause(entry.sessionId)) {
+          marks.set(entry.sessionId, { phase: entry.phase, generation: ++generation, origin: 'registry' })
+        }
+        publish(entry.sessionId)
+      }
+      // A session that was already live when this instance mounted still owes
+      // the browser the marker: the registry holds the list, and nothing else
+      // re-publishes it for agents that predate this mount.
+      for (const agent of ctx.agents.list()) sync(agent.id)
+    },
+  }
 }

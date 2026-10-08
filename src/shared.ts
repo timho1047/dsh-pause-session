@@ -39,16 +39,23 @@ export const STATUS_DEFINITION_ID = 'dsh-safe-stop/status'
 /** First token of every encoded status, so a descriptor is never parsed by accident. */
 export const STATUS_PREFIX = 'safe-stop: '
 
-/** What the host reports about one paused session. */
-export type ParkPhase =
-  /** Paused, and the session is still working: a tool is running or a turn is between steps. */
-  | 'draining'
-  /** Standing still at the park point; the session-level flush has not resolved yet. */
-  | 'parking'
-  /** Parked and flushed: it is safe to walk away. */
-  | 'safe'
-  /** Parked, but the flush failed — the durable promise is not kept. */
-  | 'flush-failed'
+/**
+ * The four park outcomes, listed in the order a park walks them — and the one
+ * vocabulary the live status, the durable registry, and the published words all
+ * derive from, so they cannot drift apart:
+ *
+ * - `draining`: paused, and the session is still working — a tool is running, or
+ *   a turn is between steps.
+ * - `parking`: standing still at the park point; the session-level flush has
+ *   not resolved yet.
+ * - `safe`: parked and flushed, so it is safe to walk away. The only clean one.
+ * - `flush-failed`: parked, but the flush failed — the durable promise is not
+ *   kept, and it must never be read as clean.
+ */
+export const PARK_PHASES = ['draining', 'parking', 'safe', 'flush-failed'] as const
+
+/** One park outcome. */
+export type ParkPhase = (typeof PARK_PHASES)[number]
 
 /** The one word each phase is published as, and the whole decoding vocabulary. */
 const PHASE_WORD: Record<ParkPhase, string> = {

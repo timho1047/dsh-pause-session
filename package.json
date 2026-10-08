@@ -50,10 +50,15 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-client-locale": "*",
+    "@deepseek-ai/dsh-client-store": "*",
     "@deepseek-ai/dsh-client-ui-conversation": "*",
     "@deepseek-ai/dsh-client-ui-renderer": "*",
     "@deepseek-ai/dsh-commands": "*",
-    "@deepseek-ai/dsh-client-store": "*"
+    "@deepseek-ai/dsh-storage": "*",
+    "@deepseek-ai/dsh-storage-domain": "*"
+  },
+  "dependencies": {
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "link:../../deepseek-harness/vendor/cordis",
@@ -76,6 +81,9 @@
     "@deepseek-ai/dsh-session-persistence": "link:../../deepseek-harness/packages/session/session-persistence",
     "@deepseek-ai/dsh-session-persistence-jsonl": "link:../../deepseek-harness/packages/session/session-persistence-jsonl",
     "@deepseek-ai/dsh-session-projection": "link:../../deepseek-harness/packages/session/session-projection",
+    "@deepseek-ai/dsh-storage": "link:../../deepseek-harness/packages/storage/storage",
+    "@deepseek-ai/dsh-storage-domain": "link:../../deepseek-harness/packages/storage/storage-domain",
+    "@deepseek-ai/dsh-storage-json": "link:../../deepseek-harness/packages/storage/storage-json",
     "@deepseek-ai/dsh-system-prompt": "link:../../deepseek-harness/packages/core/system-prompt",
     "@deepseek-ai/dsh-timeout": "link:../../deepseek-harness/packages/util/timeout",
     "@deepseek-ai/dsh-tools": "link:../../deepseek-harness/packages/core/tools",
