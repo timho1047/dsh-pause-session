@@ -51,6 +51,12 @@ importers:
       '@deepseek-ai/dsh-commands':
         specifier: link:../../deepseek-harness/packages/interaction/commands
         version: link:../../deepseek-harness/packages/interaction/commands
+      '@deepseek-ai/dsh-goal':
+        specifier: link:../../deepseek-harness/packages/goal/goal
+        version: link:../../deepseek-harness/packages/goal/goal
+      '@deepseek-ai/dsh-goal-round-driver':
+        specifier: link:../../deepseek-harness/packages/goal/goal-round-driver
+        version: link:../../deepseek-harness/packages/goal/goal-round-driver
       '@deepseek-ai/dsh-llm':
         specifier: link:../../deepseek-harness/packages/llm/llm
         version: link:../../deepseek-harness/packages/llm/llm

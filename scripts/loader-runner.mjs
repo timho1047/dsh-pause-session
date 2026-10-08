@@ -46,11 +46,19 @@ try {
   })
   await ctx.loader.await()
 
-  // Every mounted plugin, root and Loader rows alike, is a registry entry.
-  // The count is reported so a caller can tell "composed" from "composed
-  // nothing"; identity assertions belong to the spec that knows the entry.
-  const mounted = [...ctx.registry.values()].length
-  process.stdout.write(`DSH_LOADER_RESULT ${JSON.stringify({ mounted })}\n`)
+  // Every mounted plugin, root and Loader rows alike, is a registry runtime
+  // holding one fiber per `ctx.plugin()` call. The rows are reported with the
+  // Loader entry id and each fiber's lifecycle state, so a caller can tell
+  // "composed" from "composed nothing" AND "activated" from "still waiting for
+  // the services it injects"; identity assertions belong to the spec that knows
+  // the entry. FiberState is a const enum, so the names are listed here.
+  const FIBER_STATE = ['pending', 'loading', 'active', 'failed', 'disposed', 'unloading']
+  const rows = [...ctx.registry.values()].flatMap(runtime => [...runtime.fibers].map(fiber => ({
+    id: fiber.entry?.id ?? fiber.entry?.options?.name ?? null,
+    name: typeof runtime.name === 'string' ? runtime.name : null,
+    state: FIBER_STATE[fiber.state] ?? String(fiber.state),
+  })))
+  process.stdout.write(`DSH_LOADER_RESULT ${JSON.stringify({ mounted: rows.length, rows })}\n`)
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error))
   process.exit(1)

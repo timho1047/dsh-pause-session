@@ -24,6 +24,9 @@ export const PAUSE_COMMAND = 'safe-stop'
 /** Command that resumes the receiving session; registered only while that session is paused. */
 export const RESUME_COMMAND = 'safe-resume'
 
+/** Command that resumes every parked session the registry remembers. */
+export const RESUME_ALL_COMMAND = 'safe-resume-all'
+
 /** Command that reports the receiving session's park state; registered only while it is paused. */
 export const STATUS_COMMAND = 'safe-state'
 
@@ -32,6 +35,9 @@ export const PAUSE_DEFINITION_ID = 'dsh-safe-stop/pause'
 
 /** Stable definition id of the resume command: the host's own "this session is paused" fact. */
 export const RESUME_DEFINITION_ID = 'dsh-safe-stop/resume'
+
+/** Stable definition id of the global resume command, matched by identity rather than by copy. */
+export const RESUME_ALL_DEFINITION_ID = 'dsh-safe-stop/resume-all'
 
 /** Stable definition id of the status read, matched by identity rather than by copy. */
 export const STATUS_DEFINITION_ID = 'dsh-safe-stop/status'

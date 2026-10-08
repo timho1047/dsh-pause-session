@@ -49,11 +49,14 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-agent": "*",
     "@deepseek-ai/dsh-client-locale": "*",
     "@deepseek-ai/dsh-client-store": "*",
     "@deepseek-ai/dsh-client-ui-conversation": "*",
     "@deepseek-ai/dsh-client-ui-renderer": "*",
     "@deepseek-ai/dsh-commands": "*",
+    "@deepseek-ai/dsh-goal": "*",
+    "@deepseek-ai/dsh-llm": "*",
     "@deepseek-ai/dsh-storage": "*",
     "@deepseek-ai/dsh-storage-domain": "*"
   },
@@ -74,6 +77,8 @@
     "@deepseek-ai/dsh-client-ui-renderer": "link:../../deepseek-harness/packages/client/ui-renderer",
     "@deepseek-ai/dsh-client-ui-slots": "link:../../deepseek-harness/packages/client/ui-slots",
     "@deepseek-ai/dsh-commands": "link:../../deepseek-harness/packages/interaction/commands",
+    "@deepseek-ai/dsh-goal": "link:../../deepseek-harness/packages/goal/goal",
+    "@deepseek-ai/dsh-goal-round-driver": "link:../../deepseek-harness/packages/goal/goal-round-driver",
     "@deepseek-ai/dsh-llm": "link:../../deepseek-harness/packages/llm/llm",
     "@deepseek-ai/dsh-llm-deepseek": "link:../../deepseek-harness/packages/llm/llm-deepseek",
     "@deepseek-ai/dsh-llm-pi-ai": "link:../../deepseek-harness/packages/llm/llm-pi-ai",

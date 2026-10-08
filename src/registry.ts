@@ -20,7 +20,7 @@
 import { z } from 'zod'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionId } from '@deepseek-ai/dsh-session'
-import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
+import { defineDomain, domainTable, DomainError } from '@deepseek-ai/dsh-storage-domain'
 import type { Domain } from '@deepseek-ai/dsh-storage-domain'
 import { PARK_PHASES } from './shared.js'
 import type { ParkPhase } from './shared.js'
@@ -34,6 +34,13 @@ export const parkRecord = z.object({
   phase: z.enum(PARK_PHASES),
   /** When the phase was last written, for the morning list. */
   updatedAt: z.number().int().nonnegative(),
+  /**
+   * Whether resuming this session may re-arm its goal. Re-arming is opt-OUT
+   * because a re-armed goal continues on its own and spends the owner's money;
+   * a record written before this field existed reads as `true`, which is the
+   * product default (a goal session comes back running its rounds).
+   */
+  rearmGoal: z.boolean().default(true),
 })
 
 /** One session's stored park outcome. */
@@ -58,6 +65,8 @@ export interface ParkedSession {
   readonly phase: ParkPhase
   /** When the phase was written. */
   readonly updatedAt: number
+  /** Whether resuming this session may re-arm its goal; see {@link parkRecord}. */
+  readonly rearmGoal: boolean
 }
 
 /** The durable pause list, opened over the profile's storage. */
@@ -67,11 +76,26 @@ export interface ParkRegistry {
    */
   list(): readonly ParkedSession[]
   /**
-   * Write one session's outcome; resolves once it is durable.
+   * @param sessionId - session to look up.
+   * @returns the remembered session, or `undefined` when nothing is parked under that id.
+   */
+  get(sessionId: SessionId): ParkedSession | undefined
+  /**
+   * Write one session's outcome; resolves once it is durable. The goal opt-out
+   * already recorded for that session survives a phase change — the phases of
+   * one park episode all describe the same parked session.
    * @param sessionId - the session being parked.
    * @param phase - how far the park has got.
    */
   record(sessionId: SessionId, phase: ParkPhase): Promise<void>
+  /**
+   * Set one session's goal opt-out; resolves once it is durable.
+   * @param sessionId - the parked session to change.
+   * @param rearmGoal - whether the clean resume path may re-arm its goal.
+   * @throws when no record exists for that session — the flag describes a
+   * parked session, and inventing a record would invent a park.
+   */
+  setRearmGoal(sessionId: SessionId, rearmGoal: boolean): Promise<void>
   /**
    * Drop one session from the list, so a later process does not re-hold it.
    * @param sessionId - the session being released.
@@ -92,16 +116,44 @@ export async function openParkRegistry(ctx: Context): Promise<ParkRegistry> {
   const domain: Domain<typeof parkRegistryDomain> = await ctx.storageDomain.open(parkRegistryDomain)
   ctx.effect(() => () => domain.close(), 'safe-stop: registry')
   const sessions = domain.table('sessions')
+  const entryOf = (sessionId: SessionId): ParkedSession | undefined => {
+    const record = sessions.get(sessionId)
+    return record === undefined
+      ? undefined
+      : { sessionId, phase: record.phase, updatedAt: record.updatedAt, rearmGoal: record.rearmGoal }
+  }
   return {
     list: () => [...sessions.entries()].map(([sessionId, record]) => ({
       sessionId,
       phase: record.phase,
       updatedAt: record.updatedAt,
+      rearmGoal: record.rearmGoal,
     })),
+    get: entryOf,
     record: async (sessionId, phase) => {
+      const updatedAt = Date.now()
+      // A record already there is folded through `update`, so the phase write
+      // and the record's own goal opt-out are decided in the backend's job
+      // order rather than from a read taken before this write was queued.
+      if (sessions.get(sessionId) !== undefined) {
+        try {
+          await sessions.update(sessionId, current => ({ ...current, phase, updatedAt }))
+          return
+        } catch (error: unknown) {
+          // Released between that read and this job: fall through and start the
+          // record again, which is what the park phase is asking for.
+          if (!(error instanceof DomainError) || error.code !== 'missing-key') throw error
+        }
+      }
       // A fresh object per write: domain records are the stored objects and are
       // never mutated in place.
-      await sessions.put(sessionId, { phase, updatedAt: Date.now() })
+      await sessions.put(sessionId, { phase, updatedAt, rearmGoal: true })
+    },
+    setRearmGoal: async (sessionId, rearmGoal) => {
+      // `update` decides existence and reads the current record inside the
+      // backend's own job order, so a phase write queued beside it cannot be
+      // clobbered by a stale read.
+      await sessions.update(sessionId, current => ({ ...current, rearmGoal, updatedAt: Date.now() }))
     },
     forget: async (sessionId) => {
       await sessions.delete(sessionId)

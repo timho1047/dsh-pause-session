@@ -94,7 +94,7 @@ describe('the durable park registry', () => {
       // A new process reads the same root through the same service; only the
       // registry already knows this session is parked.
       expect(await readParkRegistry(loop.storageRoot)).toEqual([
-        { sessionId: SessionId('registry-records'), phase: 'safe', updatedAt: expect.any(Number) },
+        { sessionId: SessionId('registry-records'), phase: 'safe', rearmGoal: true, updatedAt: expect.any(Number) },
       ])
       // The record is a document in the profile's storage, not an event in the
       // session: the loop harness here has no session storage at all.
@@ -115,7 +115,7 @@ describe('the durable park registry', () => {
       await phaseBecomes(loop, agent, 'flush-failed')
       expect(await published(ctx, agent)).toEqual({ phase: 'flush-failed', safe: false, runningTools: [] })
       expect(await readParkRegistry(loop.storageRoot)).toEqual([
-        { sessionId: SessionId('registry-flush-failed'), phase: 'flush-failed', updatedAt: expect.any(Number) },
+        { sessionId: SessionId('registry-flush-failed'), phase: 'flush-failed', rearmGoal: true, updatedAt: expect.any(Number) },
       ])
 
       // A later instance adopts the record as it stands and still does not call
@@ -214,7 +214,7 @@ describe('the durable park registry', () => {
       // The agent goes away; the pause does not.
       await first.dispose()
       expect(await readParkRegistry(loop.storageRoot)).toEqual([
-        { sessionId, phase: 'safe', updatedAt: expect.any(Number) },
+        { sessionId, phase: 'safe', rearmGoal: true, updatedAt: expect.any(Number) },
       ])
 
       // A replacement agent is published as paused again, from the registry.

@@ -35,23 +35,22 @@
 import type { Context, Fiber } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { CommandDefinitionId } from '@deepseek-ai/dsh-commands/brand'
-import type {} from '@deepseek-ai/dsh-commands'
+import type { CommandResult } from '@deepseek-ai/dsh-commands'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { PauseGate } from './gate.js'
 import type { ParkWatch } from './park.js'
 import type { ParkRegistry } from './registry.js'
+import { installResumePath } from './resume.js'
+import type { ResumeAttempt, ResumeOptions, ResumePath } from './resume.js'
 import {
-  encodeParkStatus, PAUSE_COMMAND, PAUSE_DEFINITION_ID, RESUME_COMMAND, RESUME_DEFINITION_ID,
-  STATUS_COMMAND, STATUS_DEFINITION_ID,
+  encodeParkStatus, PAUSE_COMMAND, PAUSE_DEFINITION_ID, RESUME_ALL_COMMAND, RESUME_ALL_DEFINITION_ID,
+  RESUME_COMMAND, RESUME_DEFINITION_ID, STATUS_COMMAND, STATUS_DEFINITION_ID,
 } from './shared.js'
 import type { ParkPhase, ParkStatus } from './shared.js'
 
 /** Result copy for a session that just reached the pause point; the model never sees it. */
 const PAUSED_TEXT = 'This session is paused. It stops once the work in flight drains.'
   + ' Press again to cancel the pause.'
-
-/** Result copy for a released session. */
-const RESUMED_TEXT = 'This session resumed from where it paused.'
 
 /** Result copy for a press or a release the durable registry refused to record. */
 const UNRECORDED_TEXT = 'safe-stop could not write the pause registry, so it did not change the pause state.'
@@ -103,23 +102,57 @@ export interface SessionControl {
    * ones that already have a live agent. Called once, right after mount.
    */
   adopt(): Promise<void>
+  /**
+   * Resume every session the registry remembers, clean ones only — the morning
+   * path when nothing is live yet. One session's failure never stops the rest.
+   * @returns one attempt per recorded session, in registry order.
+   */
+  resumeParked(): Promise<readonly ResumeAttempt[]>
+  /**
+   * Record or clear one session's goal opt-out, for the control surface a later
+   * task puts in front of it.
+   * @param sessionId - the parked session to change.
+   * @param rearmGoal - whether the clean resume path may re-arm its goal.
+   * @returns the copy for whoever asked.
+   */
+  setRearmGoal(sessionId: SessionId, rearmGoal: boolean): Promise<CommandResult>
+}
+
+/** How resuming all parked sessions answers the command that asked for it. */
+export function summarizeResume(attempts: readonly ResumeAttempt[]): string {
+  const resumed = attempts.filter(attempt => attempt.resumed).length
+  const refused = attempts.length - resumed
+  const head = resumed === 0
+    ? 'safe-stop resumed no session'
+    : resumed === 1
+      ? 'safe-stop resumed 1 session from where it stopped'
+      : `safe-stop resumed ${resumed} sessions from where they stopped`
+  if (refused === 0) return `${head}.`
+  const unclean = attempts.filter(attempt => attempt.refusal === 'not-clean').length
+  const rest = unclean === refused
+    ? `${refused} did not stop cleanly and need your decision`
+    : `${refused} could not be resumed`
+  return `${head}; ${rest}.`
 }
 
 /**
  * Contribute the session control: the pause verb, the per-session status read,
- * and — for every paused session that has a live agent — the resume marker.
+ * the global resume verb, and — for every paused session that has a live agent
+ * — the resume marker.
  * @param ctx - host context carrying the command registry, the agent store, the
  * session store, and the projection registry.
  * @param gate - the pause gate this control drives and reflects.
  * @param watch - the per-session activity fold the park predicate reads.
  * @param registry - the durable pause list every phase change is written to.
- * @returns the mount-time adoption step.
+ * @param options - route knowledge the clean resume path's wake content needs.
+ * @returns the mount-time adoption step and the morning resume path.
  */
 export function installSessionControl(
   ctx: Context,
   gate: PauseGate,
   watch: ParkWatch,
   registry: ParkRegistry,
+  options: ResumeOptions,
 ): SessionControl {
   /** Marks per paused session; presence here mirrors the gate's own membership. */
   const marks = new Map<SessionId, ParkMark>()
@@ -193,7 +226,7 @@ export function installSessionControl(
         definitionId: CommandDefinitionId(RESUME_DEFINITION_ID),
         name: RESUME_COMMAND,
         description: 'Resume this paused Session',
-        handler: (invocation) => release(invocation.agent.id, RESUMED_TEXT),
+        handler: async (invocation) => (await resumePath.resumeSession(invocation.agent.id)).answer,
       })
       scope.commands.register({
         definitionId: CommandDefinitionId(STATUS_DEFINITION_ID),
@@ -279,7 +312,7 @@ export function installSessionControl(
    * record that cannot be dropped leaves the session paused, which is the state
    * the registry still describes.
    */
-  const release = async (sessionId: SessionId, text: string): Promise<{ kind: 'success'; text: string } | { kind: 'error'; text: string }> => {
+  const release = async (sessionId: SessionId, text: string): Promise<CommandResult> => {
     if (!gate.isPaused(sessionId)) return { kind: 'success', text }
     try {
       await registry.forget(sessionId)
@@ -291,8 +324,16 @@ export function installSessionControl(
     return { kind: 'success', text }
   }
 
+  // The resume verb, the global resume verb, and the goal opt-out ride one
+  // path. It is mounted here because the release order and the marked origin
+  // are this control's own facts.
+  const resumePath: ResumePath = installResumePath(ctx, gate, registry, options, {
+    release,
+    adopted: sessionId => marks.get(sessionId)?.origin === 'registry',
+  })
+
   // One effect owns the whole surface: unloading removes the pause verb, the
-  // subscriptions, and every marker this plugin registered.
+  // resume verbs, the subscriptions, and every marker this plugin registered.
   ctx.effect(function* () {
     yield ctx.commands.register({
       definitionId: CommandDefinitionId(PAUSE_DEFINITION_ID),
@@ -316,6 +357,15 @@ export function installSessionControl(
         look(sessionId)
         return { kind: 'success', text: PAUSED_TEXT }
       },
+    })
+    // Registered globally, so the morning path exists on any session the user
+    // has open — the sessions it resumes have no live agent to carry a command
+    // of their own yet.
+    yield ctx.commands.register({
+      definitionId: CommandDefinitionId(RESUME_ALL_DEFINITION_ID),
+      name: RESUME_ALL_COMMAND,
+      description: 'Resume every Session safe-stop parked',
+      handler: async () => ({ kind: 'success', text: summarizeResume(await resumePath.resumeParked()) }),
     })
     yield gate.onChange(sessionId => { sync(sessionId) })
     // A request arriving at (or leaving) the gate is the moment a session can
@@ -362,5 +412,7 @@ export function installSessionControl(
       // re-publishes it for agents that predate this mount.
       for (const agent of ctx.agents.list()) sync(agent.id)
     },
+    resumeParked: () => resumePath.resumeParked(),
+    setRearmGoal: (sessionId, rearmGoal) => resumePath.setRearmGoal(sessionId, rearmGoal),
   }
 }
