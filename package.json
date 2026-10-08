@@ -42,7 +42,9 @@
       "platform": "web",
       "inject": [
         "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-layout",
         "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-session",
         "@deepseek-ai/dsh-client-locale"
       ]
     }
@@ -53,12 +55,16 @@
     "@deepseek-ai/dsh-client-locale": "*",
     "@deepseek-ai/dsh-client-store": "*",
     "@deepseek-ai/dsh-client-ui-conversation": "*",
+    "@deepseek-ai/dsh-client-ui-layout": "*",
     "@deepseek-ai/dsh-client-ui-renderer": "*",
+    "@deepseek-ai/dsh-client-ui-session": "*",
     "@deepseek-ai/dsh-commands": "*",
     "@deepseek-ai/dsh-goal": "*",
+    "@deepseek-ai/dsh-jobs": "*",
     "@deepseek-ai/dsh-llm": "*",
     "@deepseek-ai/dsh-storage": "*",
-    "@deepseek-ai/dsh-storage-domain": "*"
+    "@deepseek-ai/dsh-storage-domain": "*",
+    "@deepseek-ai/dsh-subagent": "*"
   },
   "dependencies": {
     "zod": "4.4.3"
@@ -74,11 +80,15 @@
     "@deepseek-ai/dsh-client-locale": "link:../../deepseek-harness/packages/client/locale",
     "@deepseek-ai/dsh-client-store": "link:../../deepseek-harness/packages/client/store",
     "@deepseek-ai/dsh-client-ui-conversation": "link:../../deepseek-harness/packages/client/ui-conversation",
+    "@deepseek-ai/dsh-client-ui-layout": "link:../../deepseek-harness/packages/client/ui-layout",
     "@deepseek-ai/dsh-client-ui-renderer": "link:../../deepseek-harness/packages/client/ui-renderer",
+    "@deepseek-ai/dsh-client-ui-session": "link:../../deepseek-harness/packages/client/ui-session",
     "@deepseek-ai/dsh-client-ui-slots": "link:../../deepseek-harness/packages/client/ui-slots",
     "@deepseek-ai/dsh-commands": "link:../../deepseek-harness/packages/interaction/commands",
     "@deepseek-ai/dsh-goal": "link:../../deepseek-harness/packages/goal/goal",
     "@deepseek-ai/dsh-goal-round-driver": "link:../../deepseek-harness/packages/goal/goal-round-driver",
+    "@deepseek-ai/dsh-jobs": "link:../../deepseek-harness/packages/jobs/jobs",
+    "@deepseek-ai/dsh-jobs-local": "link:../../deepseek-harness/packages/jobs/jobs-local",
     "@deepseek-ai/dsh-llm": "link:../../deepseek-harness/packages/llm/llm",
     "@deepseek-ai/dsh-llm-deepseek": "link:../../deepseek-harness/packages/llm/llm-deepseek",
     "@deepseek-ai/dsh-llm-pi-ai": "link:../../deepseek-harness/packages/llm/llm-pi-ai",
@@ -86,9 +96,11 @@
     "@deepseek-ai/dsh-session-persistence": "link:../../deepseek-harness/packages/session/session-persistence",
     "@deepseek-ai/dsh-session-persistence-jsonl": "link:../../deepseek-harness/packages/session/session-persistence-jsonl",
     "@deepseek-ai/dsh-session-projection": "link:../../deepseek-harness/packages/session/session-projection",
+    "@deepseek-ai/dsh-session-query-sqlite": "link:../../deepseek-harness/packages/session-query/session-query-sqlite",
     "@deepseek-ai/dsh-storage": "link:../../deepseek-harness/packages/storage/storage",
     "@deepseek-ai/dsh-storage-domain": "link:../../deepseek-harness/packages/storage/storage-domain",
     "@deepseek-ai/dsh-storage-json": "link:../../deepseek-harness/packages/storage/storage-json",
+    "@deepseek-ai/dsh-subagent": "link:../../deepseek-harness/packages/subagent/subagent",
     "@deepseek-ai/dsh-system-prompt": "link:../../deepseek-harness/packages/core/system-prompt",
     "@deepseek-ai/dsh-timeout": "link:../../deepseek-harness/packages/util/timeout",
     "@deepseek-ai/dsh-tools": "link:../../deepseek-harness/packages/core/tools",

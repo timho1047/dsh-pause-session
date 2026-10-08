@@ -89,3 +89,78 @@
     transition: none;
   }
 }
+
+/* The whole-app pill. The overlay layer is click-through and covers the whole
+   frame, so the entry anchors itself to a corner and keeps its own events. */
+.dsssPill {
+  position: absolute;
+  right: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  display: inline-flex;
+  align-items: center;
+}
+
+.dsssPillBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(38ch, calc(100vw - 48px));
+  padding: 5px 10px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+  background: var(--dsw-alias-bg-layer-2);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 999px;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 0.14);
+  cursor: pointer;
+  user-select: none;
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+
+.dsssPillBtn:hover {
+  color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-border-l2);
+}
+
+/* Nothing parked: the pill is the bare affordance, so it stays a small round
+   chip in the corner instead of a labelled surface over the app. */
+.dsssPillIcon {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  justify-content: center;
+}
+
+.dsssPillBtn:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 1px;
+}
+
+.dsssPillBtn:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.dsssPillText {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Host numbers, not copy: the same field carries "2/3" and a bare count. */
+.dsssPillDetail {
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.dsssPillWarn {
+  color: var(--dsw-alias-state-warn-primary, var(--dsw-alias-label-primary));
+  font-weight: 600;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dsssPillBtn {
+    transition: none;
+  }
+}

@@ -151,6 +151,16 @@ function owedReply(session: Session): boolean {
 }
 
 /**
+ * How a batch release is sequenced: the tree edge each child was found under,
+ * and the depth levels a release walks, shallowest first.
+ */
+interface ReleaseOrder {
+  /** Direct parent inside the recorded set, for the sessions that have one. */
+  readonly parents: ReadonlyMap<SessionId, SessionId>
+  readonly levels: readonly (readonly SessionId[])[]
+}
+
+/**
  * Build the clean resume path.
  * @param ctx - host context carrying the agent store, the session store, and the goal service when one is mounted.
  * @param gate - the pause gate the resume releases.
@@ -239,13 +249,23 @@ export function installResumePath(
    * stopped in front of. The pause is not released until the durable record is
    * gone, so a record that cannot be dropped leaves the session parked rather
    * than silently running.
+   * @param sessionId - the parked session to bring back.
+   * @param rearm - whether the record's goal opt-out allows re-opening its goal.
+   * @param parentId - the direct parent a batch release already brought back,
+   * when there is one. A subagent child resumed under its live parent is the
+   * shape the harness's own cold resume uses; with no live parent the session
+   * comes back on its own, which is all that can be done with it.
    */
-  const activate = async (sessionId: SessionId, rearm: boolean): Promise<ResumeAttempt> => {
+  const activate = async (sessionId: SessionId, rearm: boolean, parentId?: SessionId): Promise<ResumeAttempt> => {
+    const parent = parentId === undefined ? undefined : ctx.agents.get(parentId)
     let agent: Agent
     try {
       // Owned by the root, not by this plugin's fiber: the session is the
       // user's, and it must outlive a plugin reload.
-      agent = (await ctx.root.agents.resume({ resumeSessionId: sessionId })).agent
+      agent = (await ctx.root.agents.resume({
+        resumeSessionId: sessionId,
+        ...parent === undefined ? {} : { parentAgent: parent },
+      })).agent
     } catch (error: unknown) {
       ctx.logger.warn(`safe-stop: could not open "${sessionId}" from its stored log: ${describe(error)}`)
       return {
@@ -270,7 +290,7 @@ export function installResumePath(
     return { sessionId, resumed: true, answer: { kind: 'success', text: RESUMED_TEXT } }
   }
 
-  const resumeSession = async (sessionId: SessionId): Promise<ResumeAttempt> => {
+  const resumeSession = async (sessionId: SessionId, parentId?: SessionId): Promise<ResumeAttempt> => {
     const record = registry.get(sessionId)
     const live = ctx.agents.get(sessionId)
 
@@ -305,14 +325,69 @@ export function installResumePath(
     if (record.phase !== 'safe') {
       return { sessionId, resumed: false, refusal: 'not-clean', answer: { kind: 'error', text: UNCLEAN_TEXT } }
     }
-    return await activate(sessionId, record.rearmGoal)
+    return await activate(sessionId, record.rearmGoal, parentId)
+  }
+
+  /**
+   * Order the recorded sessions so a session is released after the parent it
+   * hangs from: waking a child needs its direct parent to be live first. The
+   * relation is read from the parent catalogs themselves (which children this
+   * session actually has), never guessed from ids; a branch whose catalog
+   * cannot be read simply has no known parent and is released with the roots.
+   * @param sessionIds - every recorded session, in registry order.
+   * @returns the parent of each child, and one list per depth level, shallowest first.
+   */
+  const releaseOrder = async (sessionIds: readonly SessionId[]): Promise<ReleaseOrder> => {
+    const owned = new Set(sessionIds)
+    const parentOf = new Map<SessionId, SessionId>()
+    const subagents = ctx.get('subagents')
+    if (subagents !== undefined) {
+      for (const sessionId of sessionIds) {
+        try {
+          for (const child of await subagents.listChildren(sessionId)) {
+            if (owned.has(child.id)) parentOf.set(child.id, sessionId)
+          }
+        } catch (error: unknown) {
+          ctx.logger.warn(`safe-stop: could not read the children of "${sessionId}": ${describe(error)}`)
+        }
+      }
+    }
+    const depthOf = (sessionId: SessionId): number => {
+      let steps = 0
+      const seen = new Set<SessionId>([sessionId])
+      for (let at = parentOf.get(sessionId); at !== undefined; at = parentOf.get(at)) {
+        // A damaged catalog could describe a cycle; a session in one is a root.
+        if (seen.has(at)) break
+        seen.add(at)
+        steps += 1
+      }
+      return steps
+    }
+    const levels = new Map<number, SessionId[]>()
+    for (const sessionId of sessionIds) {
+      const level = depthOf(sessionId)
+      const bucket = levels.get(level)
+      if (bucket === undefined) levels.set(level, [sessionId])
+      else bucket.push(sessionId)
+    }
+    return {
+      parents: parentOf,
+      levels: [...levels.keys()].sort((left, right) => left - right)
+        .map(level => levels.get(level) ?? []),
+    }
   }
 
   return {
     resumeSession,
     resumeParked: async () => {
+      const release = await releaseOrder(registry.list().map(entry => entry.sessionId))
       const attempts: ResumeAttempt[] = []
-      for (const entry of registry.list()) attempts.push(await resumeSession(entry.sessionId))
+      for (const level of release.levels) {
+        // One release per level and no concurrency cap inside it: the levels
+        // are the milliseconds a child's wake needs, not a queue.
+        attempts.push(...await Promise.all(level.map(sessionId =>
+          resumeSession(sessionId, release.parents.get(sessionId)))))
+      }
       return attempts
     },
     setRearmGoal: async (sessionId, rearmGoal) => {

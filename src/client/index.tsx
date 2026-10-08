@@ -1,17 +1,19 @@
 /**
  * Browser half of dsh-safe-stop.
  *
- * Registers one control into the session header's title-adjacent action group
- * (`conversation.session.header.actions`). The slot is session-scoped and its
- * props carry `sessionId`, so every open session renders its own control and
- * switching sessions follows automatically.
+ * Registers two controls: one in the session header's title-adjacent action
+ * group (`conversation.session.header.actions`), which pauses or resumes the
+ * session it sits on, and one in the frame-wide overlay layer
+ * (`shell.overlay`), which answers for the whole app. The header slot is
+ * session-scoped and its props carry `sessionId`, so every open session renders
+ * its own control and switching sessions follows automatically; the overlay
+ * entry is root-scoped, which is what lets one control speak for every session.
  *
- * The control is host-authoritative: it reads the session's pause state from
- * the host's command registry and drives pause/resume through the host's
- * session commands (`./control.ts` documents why the command registry is the
- * only live channel a third-party plugin can use). It stays inert wherever
- * that round-trip is unavailable rather than rendering a control that cannot
- * tell the truth.
+ * Both controls are host-authoritative: they read state from the host's command
+ * registry and drive it through the host's session commands (`./control.ts` and
+ * `./global.ts` document why the command registry is the only live channel a
+ * third-party plugin can use). Each stays inert wherever that round-trip is
+ * unavailable rather than rendering a control that cannot tell the truth.
  * @module dsh-safe-stop/client
  */
 
@@ -25,12 +27,18 @@ import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-cli
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 // Type-only: pulls the ui-conversation SlotMap merge (header.actions).
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
+// Type-only: pulls the ui-layout SlotMap merge (the root-scoped shell.overlay).
+import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 // Type-only: pulls the renderer-owned slots service (ctx.slots).
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { SafeStopControl } from './control.js'
 import type { SafeStopState } from './control.js'
+import { SafeStopGlobalControl } from './global.js'
+import { PauseIcon, ResumeIcon } from './icons.js'
+import { SafeStopPill } from './pill.js'
+import type { SafeStopPillInjected } from './pill.js'
 import { safeStopView } from './view.js'
 import { en, zh, type SafeStopKey } from './locales.js'
 import styles from './button.module.css'
@@ -47,45 +55,6 @@ const NS = 'safe-stop'
 
 /** Required services: the slot registry, the locale registry, and the host round-trip. */
 export const inject = ['slots', 'locale', 'remote', 'remote.commands']
-
-/** 16px stroke icon (currentColor): the two bars of a pause. */
-function PauseIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      width={16}
-      height={16}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M9 5v14" />
-      <path d="M15 5v14" />
-    </svg>
-  )
-}
-
-/** 16px stroke icon (currentColor): the triangle of a resume. */
-function ResumeIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      width={16}
-      height={16}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M7 4.5v15l12-7.5z" />
-    </svg>
-  )
-}
 
 /** Browser state and operations injected into the Session-header contribution. */
 export interface SafeStopInjected {
@@ -139,9 +108,9 @@ export function SafeStopButton(props: SafeStopButtonProps): ReactNode {
 }
 
 /**
- * Client plugin body: register the locale dictionaries, own the control
- * controller, follow the host's registry changes, and contribute the control
- * into the session header's title-adjacent action group.
+ * Client plugin body: register the locale dictionaries, own both controllers,
+ * follow the host's registry changes, and contribute the session-header control
+ * and the frame-wide pill.
  * @param ctx - client context carrying slots, locale, and the Remote face.
  */
 export function apply(ctx: ClientContext): void {
@@ -149,10 +118,14 @@ export function apply(ctx: ClientContext): void {
   const lifetime = new AbortController()
   ctx.effect(() => () => { lifetime.abort(new Error('safe-stop: client unloaded')) }, 'safe-stop: lifetime')
   const control = new SafeStopControl(ctx.remote.commands, lifetime.signal)
+  const globalControl = new SafeStopGlobalControl(ctx.remote.commands, lifetime.signal)
   // The host publishes no push channel of its own, so the forwarded command
-  // registry change is what makes this control live: re-read after every one.
+  // registry change is what makes these controls live: re-read after every one.
   ctx.effect(
-    () => ctx.remote.$on('commands/change', () => { control.refreshAll() }),
+    () => ctx.remote.$on('commands/change', () => {
+      control.refreshAll()
+      globalControl.refreshAll()
+    }),
     'safe-stop: host command registry changes',
   )
   ctx.slots.inject('conversation.session.header.actions', () =>
@@ -169,6 +142,25 @@ export function apply(ctx: ClientContext): void {
         }),
       },
       SafeStopButton,
+    ),
+  )
+  // The whole-app control goes in the frame-wide overlay layer: it belongs to
+  // no session, and that layer is the shell's own additive seat for a
+  // frame-wide surface (a status pill is one of the things it names).
+  ctx.slots.inject('shell.overlay', () =>
+    ctx.slots.register(
+      {
+        name: 'shell.overlay',
+        id: 'safe-stop-all',
+        order: 60,
+        locale: NS,
+        inject: (): SafeStopPillInjected => ({
+          hooks: { safeStopGlobal: globalControl.store },
+          refresh: (sessionId) => { void globalControl.refresh(sessionId) },
+          toggle: (sessionId) => { void globalControl.toggle(sessionId) },
+        }),
+      },
+      SafeStopPill,
     ),
   )
 }

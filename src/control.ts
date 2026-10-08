@@ -38,13 +38,16 @@ import { CommandDefinitionId } from '@deepseek-ai/dsh-commands/brand'
 import type { CommandResult } from '@deepseek-ai/dsh-commands'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { PauseGate } from './gate.js'
+import { mountGlobalStop } from './global.js'
+import type { GlobalStop, LivePark } from './global.js'
 import type { ParkWatch } from './park.js'
 import type { ParkRegistry } from './registry.js'
 import { installResumePath } from './resume.js'
 import type { ResumeAttempt, ResumeOptions, ResumePath } from './resume.js'
 import {
   encodeParkStatus, PAUSE_COMMAND, PAUSE_DEFINITION_ID, RESUME_ALL_COMMAND, RESUME_ALL_DEFINITION_ID,
-  RESUME_COMMAND, RESUME_DEFINITION_ID, STATUS_COMMAND, STATUS_DEFINITION_ID,
+  RESUME_COMMAND, RESUME_DEFINITION_ID, STATE_ALL_COMMAND, STATE_ALL_DEFINITION_ID, STATUS_COMMAND,
+  STATUS_DEFINITION_ID, STOP_ALL_COMMAND, STOP_ALL_DEFINITION_ID,
 } from './shared.js'
 import type { ParkPhase, ParkStatus } from './shared.js'
 
@@ -296,6 +299,26 @@ export function installSessionControl(
     if (attempt !== undefined) void settle(sessionId, attempt)
   }
 
+  /**
+   * Press one session's pause and make it durable.
+   *
+   * The press IS a durable promise: a pause that cannot be recorded is taken
+   * back here rather than left as one a restart silently forgets. A session a
+   * pause already owns is left exactly where it is — including one adopted
+   * from an earlier process, whose outcome is not this process's to re-derive.
+   * @param sessionId - the session to pause.
+   * @returns whether the session is now paused, with a durable record behind it.
+   */
+  const press = async (sessionId: SessionId): Promise<boolean> => {
+    if (!gate.pause(sessionId)) return true
+    const mark: ParkMark = { phase: 'draining', generation: ++generation, origin: 'press' }
+    marks.set(sessionId, mark)
+    if (await commit(sessionId, mark, 'draining')) return true
+    drop(sessionId)
+    gate.resume(sessionId)
+    return false
+  }
+
   const sync = (sessionId: SessionId): void => {
     if (!gate.isPaused(sessionId)) {
       drop(sessionId)
@@ -332,6 +355,21 @@ export function installSessionControl(
     adopted: sessionId => marks.get(sessionId)?.origin === 'registry',
   })
 
+  // The whole-app park reads the marks through this one accessor, so the
+  // aggregate and the per-session control can never describe different states.
+  const globalStop: GlobalStop = mountGlobalStop(ctx, watch, registry, {
+    isPaused: sessionId => gate.isPaused(sessionId),
+    press,
+    look,
+    live: () => new Map<SessionId, LivePark>([...marks].map(([sessionId, mark]) => [sessionId, {
+      phase: mark.phase,
+      // An adopted mark reports the outcome of the episode that ended with the
+      // previous process, and a failed flush is already final: neither walks
+      // any further here.
+      moving: mark.origin === 'press' && mark.phase !== 'flush-failed',
+    }])),
+  })
+
   // One effect owns the whole surface: unloading removes the pause verb, the
   // resume verbs, the subscriptions, and every marker this plugin registered.
   ctx.effect(function* () {
@@ -341,17 +379,7 @@ export function installSessionControl(
       description: 'Pause this Session before its next model request',
       handler: async (invocation) => {
         const sessionId = invocation.agent.id
-        if (gate.pause(sessionId)) {
-          const mark: ParkMark = { phase: 'draining', generation: ++generation, origin: 'press' }
-          marks.set(sessionId, mark)
-          // The press IS a durable promise: a pause that cannot be recorded is
-          // taken back here rather than left as one a restart silently forgets.
-          if (!await commit(sessionId, mark, 'draining')) {
-            drop(sessionId)
-            gate.resume(sessionId)
-            return { kind: 'error', text: UNRECORDED_TEXT }
-          }
-        }
+        if (!await press(sessionId)) return { kind: 'error', text: UNRECORDED_TEXT }
         // The press returns now: the drain happens while the user stays free to
         // walk away or press again to cancel it.
         look(sessionId)
@@ -366,6 +394,23 @@ export function installSessionControl(
       name: RESUME_ALL_COMMAND,
       description: 'Resume every Session safe-stop parked',
       handler: async () => ({ kind: 'success', text: summarizeResume(await resumePath.resumeParked()) }),
+    })
+    // The one-press whole-app park. Registered globally for the same reason:
+    // the sessions it registers are the ones the user is not looking at.
+    yield ctx.commands.register({
+      definitionId: CommandDefinitionId(STOP_ALL_DEFINITION_ID),
+      name: STOP_ALL_COMMAND,
+      description: 'Pause every running Session and its subagents',
+      handler: async () => globalStop.pressAll(),
+    })
+    // The aggregate read behind the whole-app control. Its result carries the
+    // state as of this read, which is what makes a moving park observable at
+    // all — a descriptor cannot change after registration.
+    yield ctx.commands.register({
+      definitionId: CommandDefinitionId(STATE_ALL_DEFINITION_ID),
+      name: STATE_ALL_COMMAND,
+      description: 'Report whether every parked Session is safe to close',
+      handler: async () => globalStop.readStatus(),
     })
     yield gate.onChange(sessionId => { sync(sessionId) })
     // A request arriving at (or leaving) the gate is the moment a session can

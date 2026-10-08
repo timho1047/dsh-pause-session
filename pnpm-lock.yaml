@@ -42,9 +42,15 @@ importers:
       '@deepseek-ai/dsh-client-ui-conversation':
         specifier: link:../../deepseek-harness/packages/client/ui-conversation
         version: link:../../deepseek-harness/packages/client/ui-conversation
+      '@deepseek-ai/dsh-client-ui-layout':
+        specifier: link:../../deepseek-harness/packages/client/ui-layout
+        version: link:../../deepseek-harness/packages/client/ui-layout
       '@deepseek-ai/dsh-client-ui-renderer':
         specifier: link:../../deepseek-harness/packages/client/ui-renderer
         version: link:../../deepseek-harness/packages/client/ui-renderer
+      '@deepseek-ai/dsh-client-ui-session':
+        specifier: link:../../deepseek-harness/packages/client/ui-session
+        version: link:../../deepseek-harness/packages/client/ui-session
       '@deepseek-ai/dsh-client-ui-slots':
         specifier: link:../../deepseek-harness/packages/client/ui-slots
         version: link:../../deepseek-harness/packages/client/ui-slots
@@ -57,6 +63,12 @@ importers:
       '@deepseek-ai/dsh-goal-round-driver':
         specifier: link:../../deepseek-harness/packages/goal/goal-round-driver
         version: link:../../deepseek-harness/packages/goal/goal-round-driver
+      '@deepseek-ai/dsh-jobs':
+        specifier: link:../../deepseek-harness/packages/jobs/jobs
+        version: link:../../deepseek-harness/packages/jobs/jobs
+      '@deepseek-ai/dsh-jobs-local':
+        specifier: link:../../deepseek-harness/packages/jobs/jobs-local
+        version: link:../../deepseek-harness/packages/jobs/jobs-local
       '@deepseek-ai/dsh-llm':
         specifier: link:../../deepseek-harness/packages/llm/llm
         version: link:../../deepseek-harness/packages/llm/llm
@@ -78,6 +90,9 @@ importers:
       '@deepseek-ai/dsh-session-projection':
         specifier: link:../../deepseek-harness/packages/session/session-projection
         version: link:../../deepseek-harness/packages/session/session-projection
+      '@deepseek-ai/dsh-session-query-sqlite':
+        specifier: link:../../deepseek-harness/packages/session-query/session-query-sqlite
+        version: link:../../deepseek-harness/packages/session-query/session-query-sqlite
       '@deepseek-ai/dsh-storage':
         specifier: link:../../deepseek-harness/packages/storage/storage
         version: link:../../deepseek-harness/packages/storage/storage
@@ -87,6 +102,9 @@ importers:
       '@deepseek-ai/dsh-storage-json':
         specifier: link:../../deepseek-harness/packages/storage/storage-json
         version: link:../../deepseek-harness/packages/storage/storage-json
+      '@deepseek-ai/dsh-subagent':
+        specifier: link:../../deepseek-harness/packages/subagent/subagent
+        version: link:../../deepseek-harness/packages/subagent/subagent
       '@deepseek-ai/dsh-system-prompt':
         specifier: link:../../deepseek-harness/packages/core/system-prompt
         version: link:../../deepseek-harness/packages/core/system-prompt
