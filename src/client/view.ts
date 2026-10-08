@@ -1,16 +1,17 @@
 /**
  * The control's phase → view mapping.
  *
- * Kept a pure function of the published phase so the rendering decision — what
- * the button says, whether it accepts a press, and whether the visible "paused"
- * label is shown — is asserted without a browser renderer.
+ * Kept a pure function of the published reading so the rendering decision — what
+ * the button says, whether it accepts a press, and which state label is visible
+ * — is asserted without a browser renderer. The label is a KEY, not copy: the
+ * visible sentence is localized, and the host's own tool names join it as data.
  * @module dsh-safe-stop/client/view
  */
 
-import type { SafeStopPhase } from './control.js'
+import type { SafeStopReading } from './control.js'
 import type { SafeStopKey } from './locales.js'
 
-/** What one phase renders as. */
+/** What one reading renders as. */
 export interface SafeStopView {
   /** Whether the host reported this session paused. */
   readonly paused: boolean
@@ -18,32 +19,46 @@ export interface SafeStopView {
   readonly enabled: boolean
   /** Accessible name of the button. */
   readonly ariaKey: SafeStopKey
-  /** Hover copy, shown only when no visible state label replaces it. */
-  readonly tipKey: SafeStopKey
-  /** Whether the visible "paused" label is rendered beside the button. */
-  readonly stateLabel: boolean
+  /** Label shown beside the button while the control has something to say. */
+  readonly labelKey?: SafeStopKey
+  /** Tools in flight, taken verbatim from the host; rendered only with `labelKey`. */
+  readonly runningTools: readonly string[]
 }
 
 /**
- * Map one phase to its view.
- * @param phase - the host-reported phase, or `undefined` before the first answer.
- * @returns the view for that phase.
+ * Map one reading to its view.
+ * @param reading - the host-reported reading, or `undefined` before the first answer.
+ * @returns the view for that reading.
  */
-export function safeStopView(phase: SafeStopPhase | undefined): SafeStopView {
-  switch (phase) {
-    case 'paused':
-      return { paused: true, enabled: true, ariaKey: 'resume.aria', tipKey: 'resume.tip', stateLabel: true }
+export function safeStopView(reading: SafeStopReading | undefined): SafeStopView {
+  switch (reading?.phase) {
     case 'active':
-      return { paused: false, enabled: true, ariaKey: 'pause.aria', tipKey: 'pause.tip', stateLabel: false }
-    case 'unavailable':
+      return { paused: false, enabled: true, ariaKey: 'pause.aria', runningTools: [] }
+    case 'draining':
+      // Still working: pressing again is exactly how the user takes the pause
+      // back, so the control stays live.
       return {
-        paused: false,
-        enabled: false,
-        ariaKey: 'unavailable.aria',
-        tipKey: 'unavailable.tip',
-        stateLabel: false,
+        paused: true,
+        enabled: true,
+        ariaKey: 'draining.aria',
+        labelKey: 'state.draining',
+        runningTools: reading.runningTools,
       }
+    case 'parking':
+      return { paused: true, enabled: true, ariaKey: 'parking.aria', labelKey: 'state.parking', runningTools: [] }
+    case 'safe':
+      return { paused: true, enabled: true, ariaKey: 'safe.aria', labelKey: 'state.safe', runningTools: [] }
+    case 'flush-failed':
+      return {
+        paused: true,
+        enabled: true,
+        ariaKey: 'flushFailed.aria',
+        labelKey: 'state.flushFailed',
+        runningTools: [],
+      }
+    case 'unavailable':
+      return { paused: false, enabled: false, ariaKey: 'unavailable.aria', runningTools: [] }
     case undefined:
-      return { paused: false, enabled: false, ariaKey: 'checking.aria', tipKey: 'checking.tip', stateLabel: false }
+      return { paused: false, enabled: false, ariaKey: 'checking.aria', runningTools: [] }
   }
 }

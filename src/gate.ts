@@ -24,8 +24,16 @@ interface Latch {
 
 /** One paused session and the latch every request of that session waits on. */
 interface Pause {
+  readonly sessionId: SessionId
   readonly released: Promise<void>
   release(): void
+  /**
+   * Requests of this session waiting at the gate right now. Membership in
+   * `paused` says the session is marked; this count says a request has
+   * actually arrived and stopped, which is a different fact — the one the
+   * park state is built from.
+   */
+  holding: number
 }
 
 /** The abort signal's own error, or a stable one when the abort carried no reason. */
@@ -67,6 +75,7 @@ export class PauseGate {
   /** Paused sessions; membership IS the pause state. */
   private readonly paused = new Map<SessionId, Pause>()
   private readonly listeners = new Set<(sessionId: SessionId, paused: boolean) => void>()
+  private readonly heldListeners = new Set<(sessionId: SessionId, held: boolean) => void>()
 
   /**
    * @param options - the plugin-lifetime signal every held request races.
@@ -84,11 +93,50 @@ export class PauseGate {
   }
 
   /**
+   * Subscribe to "a request arrived at / left the gate" for a paused session.
+   *
+   * This is the moment a session can become parked, so it is also the moment a
+   * park observer has to look. Listeners run synchronously inside the request
+   * path: they must only record that a look is owed.
+   * @param listener - called with the session and whether it now holds a request.
+   * @returns the unsubscribe function.
+   */
+  onHeld(listener: (sessionId: SessionId, held: boolean) => void): () => void {
+    this.heldListeners.add(listener)
+    return () => { this.heldListeners.delete(listener) }
+  }
+
+  /**
    * @param sessionId - session to inspect.
    * @returns whether the session is currently paused.
    */
   isPaused(sessionId: SessionId): boolean {
     return this.paused.has(sessionId)
+  }
+
+  /**
+   * @param sessionId - session to inspect.
+   * @returns whether a model request of that session is waiting at the gate
+   * right now. False for a session that is paused but whose loop has not built
+   * its next request yet — a running tool, for instance, is still draining.
+   */
+  isHeld(sessionId: SessionId): boolean {
+    return (this.paused.get(sessionId)?.holding ?? 0) > 0
+  }
+
+  /**
+   * Enter one request that is about to wait. The count rises synchronously with
+   * {@link hold}, so an observer notified at that moment reads `isHeld` as true.
+   * @param pause - the session's pause record.
+   * @returns the exit that lowers the count again.
+   */
+  private enter(pause: Pause): () => void {
+    pause.holding += 1
+    this.notifyHeld(pause.sessionId, true)
+    return () => {
+      pause.holding -= 1
+      if (pause.holding === 0) this.notifyHeld(pause.sessionId, false)
+    }
   }
 
   /**
@@ -101,7 +149,7 @@ export class PauseGate {
   pause(sessionId: SessionId): boolean {
     if (this.paused.has(sessionId)) return false
     const release = latch()
-    this.paused.set(sessionId, { released: release.promise, release: release.open })
+    this.paused.set(sessionId, { sessionId, released: release.promise, release: release.open, holding: 0 })
     this.notify(sessionId, true)
     return true
   }
@@ -123,11 +171,13 @@ export class PauseGate {
   }
 
   /**
-   * The wait one model request must finish before it may delegate.
+   * The wait one model request must finish before it may delegate, and the exit
+   * that reports the request as no longer waiting.
    * @param request - the request reaching the waterfall.
-   * @returns the wait, or `undefined` when this gate does not hold that request.
+   * @returns the wait plus its release, or `undefined` when this gate does not
+   * hold that request.
    */
-  hold(request: GenerateOptions): Promise<void> | undefined {
+  hold(request: GenerateOptions): { readonly wait: Promise<void>; readonly left: () => void } | undefined {
     // Context compaction and session titling are background model work inside
     // the same session and carry a purpose; a session pause must never freeze
     // them. Only a request the loop built for its own turn is gateable.
@@ -136,10 +186,12 @@ export class PauseGate {
     if (sessionId === undefined) return undefined
     const pause = this.paused.get(sessionId)
     if (pause === undefined) return undefined
-    return raceRelease(
+    const left = this.enter(pause)
+    const wait = raceRelease(
       pause.released,
       request.signal === undefined ? [this.options.lifetime] : [request.signal, this.options.lifetime],
     )
+    return { wait, left }
   }
 
   /**
@@ -159,17 +211,27 @@ export class PauseGate {
     const gate = this
     return (async function* gated(): AsyncIterable<StreamChunk> {
       const held = gate.hold(request)
-      if (held !== undefined) await held
-      // The race decides when to stop waiting; the signals decide whether
-      // delegating is allowed at this exact moment. A request whose phase
-      // aborted, or whose plugin unloaded, must never reach the adapter.
-      if (request.signal?.aborted === true) throw abortError(request.signal)
-      if (gate.options.lifetime.aborted) throw new Error(PLUGIN_UNLOADED)
-      yield* next()
+      try {
+        if (held !== undefined) await held.wait
+        // The race decides when to stop waiting; the signals decide whether
+        // delegating is allowed at this exact moment. A request whose phase
+        // aborted, or whose plugin unloaded, must never reach the adapter.
+        if (request.signal?.aborted === true) throw abortError(request.signal)
+        if (gate.options.lifetime.aborted) throw new Error(PLUGIN_UNLOADED)
+        yield* next()
+      } finally {
+        // Leaving is what tells an observer the session stopped standing at
+        // the park point — whether it delegated or aborted.
+        held?.left()
+      }
     })()
   }
 
   private notify(sessionId: SessionId, paused: boolean): void {
     for (const listener of [...this.listeners]) listener(sessionId, paused)
+  }
+
+  private notifyHeld(sessionId: SessionId, held: boolean): void {
+    for (const listener of [...this.heldListeners]) listener(sessionId, held)
   }
 }

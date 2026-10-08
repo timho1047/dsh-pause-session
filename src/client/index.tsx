@@ -109,8 +109,8 @@ export type SafeStopButtonProps = PropsRuntime<'conversation.session.header.acti
  */
 export function SafeStopButton(props: SafeStopButtonProps): ReactNode {
   const { sessionId, refresh, toggle, t } = props
-  const phase = props.useSafeStop(state => state.bySession[String(sessionId)])
-  const view = safeStopView(phase)
+  const reading = props.useSafeStop(state => state.bySession[String(sessionId)])
+  const view = safeStopView(reading)
   // Read once per mounted control: the host is the source of truth, and the
   // forwarded registry change keeps it current afterwards.
   useEffect(() => { refresh(sessionId) }, [refresh, sessionId])
@@ -126,9 +126,14 @@ export function SafeStopButton(props: SafeStopButtonProps): ReactNode {
       >
         {view.paused ? <ResumeIcon /> : <PauseIcon />}
       </button>
-      {view.stateLabel
-        ? <span className={styles.dsssState}>{t('state.paused')}</span>
-        : <span className={styles.dsssTip} aria-hidden="true">{t(view.tipKey)}</span>}
+      {view.labelKey === undefined
+        ? null
+        : (
+          <span className={styles.dsssState}>
+            {t(view.labelKey)}
+            {view.runningTools.length === 0 ? null : `: ${view.runningTools.join(', ')}`}
+          </span>
+        )}
     </span>
   )
 }
