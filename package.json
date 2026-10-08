@@ -51,7 +51,9 @@
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-client-locale": "*",
     "@deepseek-ai/dsh-client-ui-conversation": "*",
-    "@deepseek-ai/dsh-client-ui-renderer": "*"
+    "@deepseek-ai/dsh-client-ui-renderer": "*",
+    "@deepseek-ai/dsh-commands": "*",
+    "@deepseek-ai/dsh-client-store": "*"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "link:../../deepseek-harness/vendor/cordis",
@@ -60,10 +62,13 @@
     "@deepseek-ai/dsh-agent": "link:../../deepseek-harness/packages/core/agent",
     "@deepseek-ai/dsh-agent-loop": "link:../../deepseek-harness/packages/core/agent-loop",
     "@deepseek-ai/dsh-agent-loop-testkit": "link:../../deepseek-harness/packages/test-support/agent-loop-testkit",
+    "@deepseek-ai/dsh-api-remotes": "link:../../deepseek-harness/packages/api/remotes",
     "@deepseek-ai/dsh-client-locale": "link:../../deepseek-harness/packages/client/locale",
+    "@deepseek-ai/dsh-client-store": "link:../../deepseek-harness/packages/client/store",
     "@deepseek-ai/dsh-client-ui-conversation": "link:../../deepseek-harness/packages/client/ui-conversation",
     "@deepseek-ai/dsh-client-ui-renderer": "link:../../deepseek-harness/packages/client/ui-renderer",
     "@deepseek-ai/dsh-client-ui-slots": "link:../../deepseek-harness/packages/client/ui-slots",
+    "@deepseek-ai/dsh-commands": "link:../../deepseek-harness/packages/interaction/commands",
     "@deepseek-ai/dsh-llm": "link:../../deepseek-harness/packages/llm/llm",
     "@deepseek-ai/dsh-llm-deepseek": "link:../../deepseek-harness/packages/llm/llm-deepseek",
     "@deepseek-ai/dsh-llm-pi-ai": "link:../../deepseek-harness/packages/llm/llm-pi-ai",

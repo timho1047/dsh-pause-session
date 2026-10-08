@@ -1,7 +1,8 @@
 /**
  * The client half's contract with the host page: which slot it contributes
- * to, under which id, and that it owns a locale namespace. Asserted through
- * the plugin's declared interface (`inject` + `apply`), not its internals.
+ * to, under which id, that it owns a locale namespace, and that it requires
+ * the host round-trip it cannot work without. Asserted through the plugin's
+ * declared interface (`inject` + `apply`), not its internals.
  * @module dsh-safe-stop/test/client-slot
  */
 
@@ -13,7 +14,10 @@ interface Recorded {
   options?: { name?: string; id?: string; locale?: string }
 }
 
-/** Minimal stand-in for the client Context: records what the plugin registers. */
+/**
+ * Minimal stand-in for the client Context: records what the plugin registers,
+ * and answers the two Client-callable calls the control makes.
+ */
 function fakeClientContext() {
   const recorded: Recorded[] = []
   const namespaces: string[] = []
@@ -26,6 +30,13 @@ function fakeClientContext() {
         namespaces.push(namespace)
         return () => {}
       },
+    },
+    remote: {
+      commands: {
+        list: () => Promise.resolve({ ok: true, value: [] }),
+        execute: () => Promise.resolve({ ok: true, value: undefined }),
+      },
+      $on: () => () => {},
     },
     slots: {
       inject(name: string, callback: () => unknown) {
@@ -61,7 +72,10 @@ describe('client slot contribution', () => {
     expect(namespaces).toEqual(['safe-stop'])
   })
 
-  it('requires the slot registry and the locale service', () => {
-    expect(inject).toEqual(['slots', 'locale'])
+  it('requires the slot registry, the locale service, and the host command round-trip', () => {
+    // A third-party client half reaches its host half only through a
+    // Client-callable command namespace; without it the control cannot know
+    // the host's state, so the plugin stays unloaded instead of guessing.
+    expect(inject).toEqual(['slots', 'locale', 'remote', 'remote.commands'])
   })
 })

@@ -31,6 +31,29 @@
   outline-offset: 1px;
 }
 
+.dsssBtn:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.dsssBtn:disabled:hover {
+  color: var(--dsw-alias-label-secondary);
+  background: transparent;
+  border-color: transparent;
+}
+
+/* The paused state is stated on screen, not only on hover: the harness keeps
+   reporting a held session as running, so this label is the only "paused" the
+   user sees. */
+.dsssState {
+  padding-left: 6px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
+  user-select: none;
+}
+
 .dsssTip {
   position: absolute;
   top: calc(100% + 6px);

@@ -26,9 +26,15 @@ importers:
       '@deepseek-ai/dsh-agent-loop-testkit':
         specifier: link:../../deepseek-harness/packages/test-support/agent-loop-testkit
         version: link:../../deepseek-harness/packages/test-support/agent-loop-testkit
+      '@deepseek-ai/dsh-api-remotes':
+        specifier: link:../../deepseek-harness/packages/api/remotes
+        version: link:../../deepseek-harness/packages/api/remotes
       '@deepseek-ai/dsh-client-locale':
         specifier: link:../../deepseek-harness/packages/client/locale
         version: link:../../deepseek-harness/packages/client/locale
+      '@deepseek-ai/dsh-client-store':
+        specifier: link:../../deepseek-harness/packages/client/store
+        version: link:../../deepseek-harness/packages/client/store
       '@deepseek-ai/dsh-client-ui-conversation':
         specifier: link:../../deepseek-harness/packages/client/ui-conversation
         version: link:../../deepseek-harness/packages/client/ui-conversation
@@ -38,6 +44,9 @@ importers:
       '@deepseek-ai/dsh-client-ui-slots':
         specifier: link:../../deepseek-harness/packages/client/ui-slots
         version: link:../../deepseek-harness/packages/client/ui-slots
+      '@deepseek-ai/dsh-commands':
+        specifier: link:../../deepseek-harness/packages/interaction/commands
+        version: link:../../deepseek-harness/packages/interaction/commands
       '@deepseek-ai/dsh-llm':
         specifier: link:../../deepseek-harness/packages/llm/llm
         version: link:../../deepseek-harness/packages/llm/llm
