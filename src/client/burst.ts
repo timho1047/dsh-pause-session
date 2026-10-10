@@ -90,8 +90,11 @@ export const DEFAULT_BURST_POLICY: BurstPolicy = {
  * that keeps arriving stays absorbed rather than leaking one read per change,
  * and it ends for good `ACTION_ABSORB_MS` after the last change: a change after
  * that is news, and so is the next user action, which reads on its own.
+ *
+ * The margin over the measured 2.04 s gap is deliberate: a transition's own
+ * storm has to fit inside the window for the whole storm to stay absorbed.
  */
-export const ACTION_ABSORB_MS = 2_000
+export const ACTION_ABSORB_MS = 2_500
 
 /**
  * The waits one burst uses when its first wait is `first`: four reads spread

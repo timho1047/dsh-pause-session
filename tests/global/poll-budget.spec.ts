@@ -818,20 +818,21 @@ describe('the read burst', () => {
     vi.useFakeTimers()
     const { burst, reads } = movingBurst()
     burst.absorb()
-    // The measured resume's unregistration storm — three changes the 400 ms
-    // trailing window cannot merge, the last of them about 2 s after the one
-    // before. Each one absorbed is another window, so the storm costs nothing
+    // The measured resume's unregistration storm, at the gaps it actually had:
+    // three changes the 400 ms trailing window cannot merge, the last of them
+    // 2.04 s after the one before — the case that leaked a read when the window
+    // was 2 s. Each one absorbed is another window, so the storm costs nothing
     // rather than one read per change.
     burst.trigger()
     await vi.advanceTimersByTimeAsync(640)
     burst.trigger()
     await vi.advanceTimersByTimeAsync(440)
     burst.trigger()
-    await vi.advanceTimersByTimeAsync(960)
+    await vi.advanceTimersByTimeAsync(2_040)
     expect(reads(), 'the storm the action caused was read back').toBe(0)
     expect(burst.absorbing).toBe(true)
 
-    // Two seconds after the storm's last change, the storm is over.
+    // The window after the storm's last change is the storm's end.
     await vi.advanceTimersByTimeAsync(ACTION_ABSORB_MS + 1)
     expect(burst.absorbing).toBe(false)
     burst.trigger()
