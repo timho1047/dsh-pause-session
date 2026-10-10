@@ -39,6 +39,7 @@ function status(overrides: Partial<GlobalStatus> = {}): GlobalStatus {
     registered: 2,
     safe: 1,
     draining: ['overnight'],
+    parking: 0,
     stalled: [],
     unresumable: [],
     unreadTrees: [],
@@ -147,9 +148,12 @@ describe('the whole-app control state', () => {
     expect(globalStopView(readingOf(control))).toMatchObject({ action: 'stop-all' })
   })
 
-  it('keeps reading while the park is moving, and stops once it settles', async () => {
+  it('keeps reading while the park is settling, and stops once it settles', async () => {
     vi.useFakeTimers()
     const { commands, host } = hostDouble()
+    // Standing at the park point with the flush pending: the state nothing
+    // announces, which is the one the burst watches.
+    host.answered = status({ safe: 1, draining: [], parking: 1 })
     const control = new SafeStopGlobalControl(commands, new AbortController().signal, 25)
     await control.refresh(ADDRESS)
     expect(readingOf(control)).toMatchObject({ kind: 'reported' })
@@ -304,6 +308,20 @@ describe('the whole-app view', () => {
       ariaKey: 'all.unclean.aria',
     })
     expect(view.caveats).toEqual([{ key: 'all.caveat.stalled', names: ['late'] }])
+  })
+
+  it('keeps the release pressable while a registered session holds the park point', () => {
+    // Stopped and standing still, flush pending: nothing is "still working", but
+    // this session is one the host can release, so it is not the unclean case
+    // either.
+    const view = globalStopView({ kind: 'reported', status: status({ safe: 0, draining: [], parking: 1, registered: 1 }) })
+    expect(view).toMatchObject({
+      visible: true,
+      enabled: true,
+      labelKey: 'all.finishing',
+      action: 'resume-all',
+      detail: '0/1',
+    })
   })
 
   it('runs no verb for a reading its own view does not turn into one', async () => {

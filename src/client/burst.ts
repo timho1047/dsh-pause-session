@@ -10,19 +10,27 @@
  * - the host announces a transition by registering or unregistering the paused
  *   session's marker commands, which emits `commands/change` — that event, and
  *   the user's own press or decision, is what starts a burst;
+ * - one transition announces itself several times: a park registers two or three
+ *   marker commands per session, and the host emits one `commands/change` per
+ *   registration. The burst therefore waits out a short `windowMs` before its
+ *   first read and any trigger inside that window postpones it, so the
+ *   registrations of one park start one burst rather than one each;
  * - a burst is a fixed short list of waits, so at most that many reads answer
  *   one transition, however long the page stays open;
- * - a read that finds nothing moving ends the burst at once, and the last
+ * - a read that finds the verdict settled ends the burst at once, and the last
  *   reading stays on screen — "the park is settled" is not a state change, so
  *   it must not be re-asked;
- * - the flush that settles a park emits no event of its own (the marker is
- *   registered when the pause is pressed, not when the flush resolves), which
- *   is the whole reason a transition buys a few reads over a few seconds
- *   rather than exactly one;
- * - the bound is a trade, taken knowingly: a drain that outlasts the burst
- *   leaves the last reading on screen until the next trigger instead of being
- *   watched to its end. A longer watch is a longer list of waits, at a linear
- *   price in the address session's log;
+ * - a read that finds work still in flight ends it just as fast. The park
+ *   announces the end of that work by registering or unregistering its markers,
+ *   which is the very event that starts the next burst, so watching the work
+ *   from here spends records on a transition that will announce itself;
+ * - the flush that settles a park is the one thing that emits no event of its
+ *   own, so a verdict that is merely settling — stopped, flush still pending —
+ *   keeps the rest of the burst. That is the whole reason a transition can buy
+ *   a few reads over a few seconds rather than exactly one;
+ * - the bound is a trade, taken knowingly: a flush that outlasts the burst
+ *   leaves the last reading on screen until the next trigger. A longer watch is
+ *   a longer list of waits, at a linear price in the address session's log;
  * - while the page is hidden no read is armed at all, and the wait a burst
  *   still owed is armed again when the page comes back: hidden time is neither
  *   charged to the burst nor lost from it.
@@ -44,6 +52,8 @@ export type PageVisibility = () => boolean
  * composition disables it without touching anything else.
  */
 export interface BurstPolicy {
+  /** How long the burst collects triggers before its first wait starts. */
+  readonly windowMs: number
   /** Waits between the reads of one burst, in order; the first follows a trigger. */
   readonly waitsMs: readonly number[]
   /** Whether the page is on screen now. */
@@ -52,6 +62,7 @@ export interface BurstPolicy {
 
 /** The policy every control uses unless a caller says otherwise. */
 export const DEFAULT_BURST_POLICY: BurstPolicy = {
+  windowMs: 400,
   waitsMs: [400, 1_000, 2_400, 4_800],
   visible: defaultVisibility,
 }
@@ -61,7 +72,7 @@ export const DEFAULT_BURST_POLICY: BurstPolicy = {
  * over roughly ten times that. Long enough to watch a park flush settle, short
  * enough that a state which never settles costs a handful of log records rather
  * than a night of them.
- * @param first - milliseconds before the burst's first read; `<= 0` disables bursting.
+ * @param first - milliseconds before the burst's first read, after its window; `<= 0` disables bursting.
  * @returns the waits, in order; empty when bursting is disabled.
  */
 export function burstWaits(first: number): readonly number[] {
@@ -107,19 +118,16 @@ const SYSTEM_CLOCK: BurstClock = {
 export class ReadBurst {
   /** The armed wait, when one is counting down. */
   private timer: ReturnType<typeof setTimeout> | undefined
-  /**
-   * The wait this burst owes. It stays set while the wait is counting down, so
-   * a page that goes off screen mid-wait keeps the read it was about to take.
-   */
-  private owed: number | undefined
+  /** Whether the burst is waiting out its collection window rather than a wait between reads. */
+  private window = false
   /** Waits this burst has not spent yet, front first. */
   private left: readonly number[] = []
-  /** Whether a burst is in progress: it may be waiting, reading, or reading again. */
+  /** Whether a burst is in progress: it may be collecting, waiting, reading, or reading again. */
   private running = false
 
   /**
    * @param onRead - one more read. Called only for a read the burst owes and the page can show.
-   * @param policy - the waits and the visibility source.
+   * @param policy - the collection window, the waits, and the visibility source.
    * @param clock - the timer implementation.
    */
   constructor(
@@ -144,14 +152,23 @@ export class ReadBurst {
   }
 
   /**
-   * Something moved — a registry change. A burst already running absorbs this:
-   * every read it still owes happens after the change.
+   * Something moved — a registry change. The burst first waits out its
+   * collection window, and every trigger that lands inside it restarts that
+   * window: the two or three registrations of one park start one burst rather
+   * than one each. A burst already past its window absorbs this — every read it
+   * still owes happens after the change.
    */
   trigger(): void {
-    if (this.running || !this.enabled) return
-    this.running = true
-    this.left = this.policy.waitsMs
-    this.owe()
+    if (!this.enabled) return
+    if (!this.running) {
+      this.running = true
+      this.left = this.policy.waitsMs
+      this.armWindow()
+      return
+    }
+    // Already running and still collecting: this change belongs to the burst
+    // being collected, so it postpones that burst's read rather than adding one.
+    if (this.window) this.armWindow()
   }
 
   /**
@@ -160,7 +177,7 @@ export class ReadBurst {
    * a user action that changes the park is worth watching settle.
    */
   next(): void {
-    if (this.timer !== undefined || this.owed !== undefined) return
+    if (this.armed || this.window) return
     if (!this.running) {
       this.running = true
       this.left = this.policy.waitsMs
@@ -175,11 +192,11 @@ export class ReadBurst {
   stop(): void {
     this.running = false
     this.left = []
-    this.owed = undefined
+    this.window = false
     this.cancel()
   }
 
-  /** Drop the armed wait. A wait the burst still owes survives it; see {@link checkVisibility}. */
+  /** Drop the armed wait. A burst that is still owed its read survives it; see {@link checkVisibility}. */
   cancel(): void {
     if (this.timer === undefined) return
     this.clock.clear(this.timer)
@@ -190,7 +207,9 @@ export class ReadBurst {
    * Re-evaluate one page-visibility change. Going off screen drops the armed
    * wait — a hidden page is not being read — and coming back arms it again, so
    * the burst resumes where it stopped instead of being spent while nobody was
-   * looking.
+   * looking. A burst still collecting resumes its window, restarted from the
+   * moment the page came back: a trigger that arrived while it was hidden still
+   * postpones the read.
    */
   checkVisibility(): void {
     if (this.visibleNow()) {
@@ -210,18 +229,49 @@ export class ReadBurst {
       this.running = false
       return
     }
-    this.left = this.left.slice(1)
-    this.owed = wait
-    this.arm()
+    this.armWait(wait)
   }
 
-  /** Arm the owed wait, when there is one and the page can show the read. */
-  private arm(): void {
-    const wait = this.owed
-    if (wait === undefined || this.timer !== undefined || !this.visibleNow()) return
+  /**
+   * (Re)start the collection window. While the page is hidden nothing is armed
+   * — hidden time is not charged to the burst — and a trigger that lands then
+   * is still collected, because coming back starts a whole window.
+   */
+  private armWindow(): void {
+    const wait = Math.max(this.policy.windowMs, 0)
+    if (!this.visibleNow()) {
+      this.window = true
+      return
+    }
+    this.cancel()
+    this.window = true
     this.timer = this.clock.set(() => {
       this.timer = undefined
-      this.owed = undefined
+      this.window = false
+      this.owe()
+    }, wait)
+  }
+
+  /** Put back whatever the burst still owed: its window, or the wait after a read. */
+  private arm(): void {
+    if (this.window) {
+      this.armWindow()
+      return
+    }
+    const wait = this.left[0]
+    if (wait !== undefined) this.armWait(wait)
+  }
+
+  /**
+   * Arm one wait, spending it when it fires. The wait stays in `left` until
+   * then, so a page hidden mid-wait takes the whole wait again: hidden time is
+   * neither charged to the burst nor lost from it.
+   */
+  private armWait(wait: number): void {
+    if (this.timer !== undefined || !this.visibleNow()) return
+    this.timer = this.clock.set(() => {
+      this.timer = undefined
+      this.left = this.left.slice(1)
       this.onRead()
     }, Math.max(wait, 0))
   }

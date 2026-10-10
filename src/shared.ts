@@ -340,8 +340,20 @@ export interface GlobalStatus {
   readonly registered: number
   /** How many of them reached the flushed park point. */
   readonly safe: number
-  /** Registered sessions still on their way to the park point. */
+  /**
+   * Registered sessions still working: a tool is in flight or a turn is between
+   * steps. Their park point is announced by the marker commands the park
+   * registers, so a reader has nothing to watch here.
+   */
   readonly draining: readonly string[]
+  /**
+   * How many registered sessions stand at the park point with their flush still
+   * pending — the host's `parking` phase. Nothing announces a flush resolving,
+   * so this is the one state a reader can only learn by asking again. A count
+   * rather than names: it says how long to keep watching, not which transcript
+   * a row belongs in, which is what `draining` is for.
+   */
+  readonly parking: number
   /**
    * Registered sessions that will not reach the park point in this process: a
    * flush that failed, a pause adopted from an earlier process, a press whose
@@ -377,13 +389,14 @@ function decodeNames(field: string | undefined): string[] {
  * Encode one whole-app status for a command result.
  * @param status - the state to publish.
  * @returns the result text, e.g.
- * `safe-stop all: waiting; registered: 3; safe: 1; draining: overnight; stalled: -; unresumable: -; unread-trees: -; jobs: bash-1; blind: -`.
+ * `safe-stop all: waiting; registered: 3; safe: 1; draining: overnight; parking: 1; stalled: -; unresumable: -; unread-trees: -; jobs: bash-1; blind: -`.
  */
 export function encodeGlobalStatus(status: GlobalStatus): string {
   return `${GLOBAL_STATUS_PREFIX}${status.verdict}`
     + `; registered: ${status.registered}`
     + `; safe: ${status.safe}`
     + `; draining: ${encodeNames(status.draining)}`
+    + `; parking: ${status.parking}`
     + `; stalled: ${encodeNames(status.stalled)}`
     + `; unresumable: ${encodeNames(status.unresumable)}`
     + `; unread-trees: ${encodeNames(status.unreadTrees)}`
@@ -416,6 +429,9 @@ export function decodeGlobalStatus(text: string): GlobalStatus | undefined {
     registered: count('registered'),
     safe: count('safe'),
     draining: decodeNames(byKey.get('draining')),
+    // An answer written before this field existed reports no session standing
+    // still: the oldest reading is the one with nothing known to watch.
+    parking: count('parking'),
     stalled: decodeNames(byKey.get('stalled')),
     unresumable: decodeNames(byKey.get('unresumable')),
     unreadTrees: decodeNames(byKey.get('unread-trees')),

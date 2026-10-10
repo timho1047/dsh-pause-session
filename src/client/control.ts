@@ -113,20 +113,21 @@ export class SafeStopControl {
   /**
    * @param commands - the Client-callable command namespace.
    * @param lifetime - aborts in-flight calls and the burst when the plugin unloads.
-   * @param firstWaitMs - how long after a transition the burst's first read runs.
-   * @param policy - the burst waits and visibility source; defaults to `firstWaitMs` and the real page.
+   * @param windowMs - how long the burst collects the registrations of one
+   * transition before its first read; also the wait after a press.
+   * @param policy - the burst waits and visibility source; defaults to the real page.
    * @param aggregate - the whole-app control's published answer; absent means it is never consulted.
    */
   constructor(
     private readonly commands: ClientRemote['commands'],
     private readonly lifetime: AbortSignal,
-    firstWaitMs = 400,
-    policy: Omit<BurstPolicy, 'waitsMs'> = DEFAULT_BURST_POLICY,
+    windowMs = 400,
+    policy: Omit<BurstPolicy, 'windowMs' | 'waitsMs'> = DEFAULT_BURST_POLICY,
     private readonly aggregate: AggregateSource = () => undefined,
   ) {
     this.burst = new ReadBurst(
       () => { void this.readAll() },
-      { ...policy, waitsMs: burstWaits(firstWaitMs) },
+      { ...policy, windowMs, waitsMs: burstWaits(windowMs) },
     )
   }
 

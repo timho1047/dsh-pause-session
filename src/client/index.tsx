@@ -167,23 +167,15 @@ export function apply(ctx: ClientContext): void {
   // transition worth looking at.
   //
   // The host announces a registration and an unregistration per command, so
-  // parking N sessions arrives as several events per session; a burst of reads
-  // per event would be several reads of the same state. One tick's worth of
-  // changes is one trigger, and a trigger that lands while a burst is already
-  // running is absorbed by it: every read that burst still owes happens after
-  // the change.
-  let scheduled = false
-  const reread = (): void => {
-    if (scheduled) return
-    scheduled = true
-    queueMicrotask(() => {
-      scheduled = false
+  // parking N sessions arrives as several events per session. Both controls
+  // coalesce that themselves, over the burst's own collection window
+  // (`./burst.ts`): a change that lands inside the window postpones the single
+  // burst it buys rather than starting one of its own.
+  ctx.effect(
+    () => ctx.remote.$on('commands/change', () => {
       control.refreshAll()
       globalControl.refreshAll()
-    })
-  }
-  ctx.effect(
-    () => ctx.remote.$on('commands/change', reread),
+    }),
     'safe-stop: host command registry changes',
   )
   // A page that is not on screen is not being read: the controls stop their

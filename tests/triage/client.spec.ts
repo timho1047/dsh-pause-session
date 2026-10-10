@@ -47,6 +47,7 @@ function status(overrides: Partial<GlobalStatus> = {}): GlobalStatus {
     registered: 2,
     safe: 1,
     draining: [],
+    parking: 0,
     stalled: ['overnight-tools'],
     unresumable: [],
     unreadTrees: [],

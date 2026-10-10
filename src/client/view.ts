@@ -292,8 +292,9 @@ export function globalStopView(reading: GlobalReading | undefined): GlobalStopVi
       // registered session is one this process will not wake — an adopted
       // pause, a failed flush, a record it cannot read — the release would be
       // an action the host refuses, so the pill states the fact and hands the
-      // user to the list instead of offering it.
-      return status.draining.length > 0
+      // user to the list instead of offering it. A session holding the park
+      // point with its flush pending is still releasable, so it keeps the verb.
+      return status.draining.length > 0 || status.parking > 0
         ? {
           ...base,
           ariaKey: 'all.resume.aria',

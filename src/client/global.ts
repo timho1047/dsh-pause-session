@@ -15,24 +15,27 @@
  * inventing an answer. Once the host's own answer names a session the park owns,
  * reads are addressed there instead: a read writes two records into the address
  * session's transcript, and they belong in the session being parked rather than
- * in whatever the user happens to be looking at. Failing that, the session a
- * read was last served through is remembered — an address change is the user
- * looking somewhere else, not news about the park, and a park that has emptied
- * out is no reason to start writing rows into every session the user opens
- * next. A remembered address that stops answering (its agent is gone) is
- * forgotten and the read falls back to the session the shell asks with, so a
- * stale address costs an honest answer rather than a control that can never
- * speak again.
+ * in whatever the user happens to be looking at. Failing that, the session the
+ * last answer reported as registered is remembered, then the one a read was last
+ * served through — an address change is the user looking somewhere else, not
+ * news about the park, and a park that has emptied out is no reason to start
+ * writing rows into every session the user opens next. A remembered address that
+ * stops answering (its agent is gone) is forgotten and the read falls back to
+ * the session the shell asks with, so a stale address costs an honest answer
+ * rather than a control that can never speak again.
  *
  * Nothing announces the flush that settles a park — the marker commands are
  * registered when the pause is pressed, not when the flush resolves — so a
  * transition buys a short bounded burst of reads and then stops (`./burst.ts`).
- * A settled answer is left on screen unread: the panel stays readable and the
- * pill keeps saying what it says, but the browser stops spending host
- * round-trips and log records on a state that has stopped moving. What owes a
- * read is the host's forwarded registry change, the user's own press or
- * decision, and the first read at mount; once an answer is on screen, the shell
- * handing this control another session to ask through is none of those.
+ * The burst is spent only while the park is settling: work still in flight
+ * announces its own end through the registry change that starts the next burst,
+ * so watching it from here would be reads spent on a transition that is going to
+ * speak for itself. A settled answer is left on screen unread: the panel stays
+ * readable and the pill keeps saying what it says, but the browser stops
+ * spending host round-trips and log records on a state that has stopped moving.
+ * What owes a read is the host's forwarded registry change, the user's own press
+ * or decision, and the first read at mount; once an answer is on screen, the
+ * shell handing this control another session to ask through is none of those.
  * @module dsh-safe-stop/client/global
  */
 
@@ -110,24 +113,38 @@ export function addressingSession(state: {
 }
 
 /**
- * The session a whole-app read is addressed to once the client knows one the
- * park owns.
+ * The registered sessions one whole-app answer names, best address first: the
+ * one still draining is the one this host is executing against right now, the
+ * rest is the host's own vocabulary for a registered session it is not going to
+ * move any further.
  *
- * Every execution is a durable `command/run`+`command/done` pair in the address
- * session's own log, so a read addressed at whatever the user is viewing writes
- * rows into an unrelated transcript. A draining session is the one the host has
- * just reported as live and on its way to the park point, which makes it both
- * the session the read is about and one a command can be executed on. A stalled
- * or unreadable record is deliberately not used: this host may not hold that
- * session at all, and a read that could not be delivered would report
- * "unavailable" for a transport reason rather than a state.
+ * A stalled or unreadable record is deliberately not an address for a read —
+ * this host may not hold that session at all, and a read that could not be
+ * delivered would report "unavailable" for a transport reason rather than a
+ * state — but it is still a registered session, which is all the remembered
+ * address is for. The host's own answer is JSON: the branded ids arrive as the
+ * strings they were encoded as, exactly like the ids the shell hands the pill.
  * @param status - the host's last whole-app answer.
- * @returns a registered session to address reads at, or `undefined` when the answer names none.
+ * @returns the registered sessions the answer names, best first.
+ */
+function registeredSessions(status: GlobalStatus): string[] {
+  return [
+    ...status.draining,
+    ...status.stalled,
+    ...status.unresumable,
+    ...status.unreadTrees,
+  ]
+}
+
+/**
+ * The session a registered park owns, when the host's answer names one that is
+ * still moving. This is how a read stops landing in whatever session the user
+ * happens to be looking at.
+ * @param status - the host's last whole-app answer.
+ * @returns a draining session, or `undefined` when the answer names none.
  */
 export function registeredAddress(status: GlobalStatus): SessionId | undefined {
   const draining = status.draining[0]
-  // The host's own answer is JSON: the branded id arrives as the string it was
-  // encoded as, exactly like the ids the shell hands the pill.
   return draining === undefined ? undefined : draining as SessionId
 }
 
@@ -138,6 +155,17 @@ export class SafeStopGlobalControl {
 
   /** The session the shell asked this control through; reads start here. */
   private address: SessionId | undefined
+  /**
+   * The last session an answer reported as registered — the park's own address.
+   *
+   * `draining` names only what is moving right now, so a park that stopped
+   * moving would stop naming the session it lives in, and the read would fall
+   * back to whatever the user happens to be looking at. Remembering the last
+   * registered session keeps the park's rows in the park's transcript for as
+   * long as the park exists. An empty registry does not clear it: a park whose
+   * sessions stopped moving has not moved out of its sessions.
+   */
+  private lastRegistered: SessionId | undefined
   /**
    * The session an aggregate read was last served through. Later reads keep
    * going there: every read is two records in the address session's log, and
@@ -155,18 +183,19 @@ export class SafeStopGlobalControl {
   /**
    * @param commands - the Client-callable command namespace.
    * @param lifetime - aborts in-flight calls and the burst when the plugin unloads.
-   * @param firstWaitMs - how long after a transition the burst's first read runs.
-   * @param policy - the burst waits and visibility source; defaults to `firstWaitMs` and the real page.
+   * @param windowMs - how long the burst collects the registrations of one
+   * transition before its first read; also the wait after a press.
+   * @param policy - the burst waits and visibility source; defaults to the real page.
    */
   constructor(
     private readonly commands: ClientRemote['commands'],
     private readonly lifetime: AbortSignal,
-    firstWaitMs = 400,
-    policy: Omit<BurstPolicy, 'waitsMs'> = DEFAULT_BURST_POLICY,
+    windowMs = 400,
+    policy: Omit<BurstPolicy, 'windowMs' | 'waitsMs'> = DEFAULT_BURST_POLICY,
   ) {
     this.burst = new ReadBurst(
       () => { void this.readAll() },
-      { ...policy, waitsMs: burstWaits(firstWaitMs) },
+      { ...policy, windowMs, waitsMs: burstWaits(windowMs) },
     )
   }
 
@@ -225,14 +254,16 @@ export class SafeStopGlobalControl {
   }
 
   /**
-   * The session a read goes through: the one the park owns when the last answer
-   * named one, else the session a read was last served through, else the
-   * session the shell is on now.
+   * The session a read goes through: the one the park lives in, else the one an
+   * aggregate read was last served through, else the session the shell is on
+   * now. The park's own address comes first because a read's rows land in the
+   * transcript it was taken through, and the park — not the reader — is what
+   * they are about.
    */
   private target(): SessionId | undefined {
     const current = this.store.getSnapshot().global
     const registered = current?.kind === 'reported' ? registeredAddress(current.status) : undefined
-    return registered ?? this.served ?? this.address
+    return registered ?? this.lastRegistered ?? this.served ?? this.address
   }
 
   /**
@@ -265,21 +296,32 @@ export class SafeStopGlobalControl {
     const sequence = ++this.latest
     const reading = await this.read(sessionId)
     if (this.latest !== sequence) return false
-    if (reading.kind === 'reported') this.served = sessionId
-    else if (this.served === sessionId) this.served = undefined
+    if (reading.kind === 'reported') {
+      this.served = sessionId
+      const registered = registeredSessions(reading.status)[0]
+      if (registered !== undefined) this.lastRegistered = registered as SessionId
+    } else if (this.served === sessionId) {
+      // The address that just failed is not the one to ask again; the target's
+      // next choice is what the retry uses.
+      this.served = undefined
+    }
     this.publish(reading)
     return reading.kind === 'unavailable'
   }
 
   /**
    * Open or close the decision list. Opening asks the host for the rows; there
-   * is no state to show without that answer.
+   * is no state to show without that answer. It also buys a burst of its own:
+   * whether anything on screen is worth watching was decided on the last
+   * aggregate read, and opening the panel changes that question rather than
+   * answering it — the rows are what the panel reads.
    * @param open - whether the panel should be showing.
    */
   setPanel(open: boolean): void {
     this.store.update((state) => { state.panelOpen = open })
     if (open) {
       void this.refreshTriage()
+      this.burst.trigger()
       return
     }
     this.follow()
@@ -393,18 +435,21 @@ export class SafeStopGlobalControl {
   }
 
   /**
-   * Decide what the burst owes after a read: another look while something on
-   * screen can still move, and nothing at all once it cannot.
+   * Decide what the burst owes after a read: another look while the park is
+   * settling, and nothing at all while it is working or once it has settled.
    *
-   * A registered session that stopped draining is the case this exists for. The
-   * host announces a pause through its command registry, but nothing announces
-   * the flush that settles it, so "every session is safe, and none is on its way
-   * anywhere" is a state the browser can only learn by reading — and once it has
-   * read it, there is nothing left to ask. The last answer stays published: the
-   * verdict, the pill and the rows are exactly what the host last reported.
+   * A verdict with work in flight is left alone. The park announces the end of
+   * that work by registering or unregistering its marker commands, and that is
+   * the very event that starts the next burst — so watching it from here would
+   * spend a read per wait on a transition that is going to announce itself.
+   * What this control does keep watching is the one transition nothing
+   * announces: a session that has stopped and whose flush has not resolved yet,
+   * where `safe to close` appears only in an answer the browser reads. Once
+   * that answer has arrived, the last reading stays published — the verdict, the
+   * pill and the rows are exactly what the host last reported.
    */
   private follow(): void {
-    if (this.lifetime.aborted || !this.moving()) {
+    if (this.lifetime.aborted || !this.settling()) {
       this.burst.stop()
       return
     }
@@ -412,21 +457,22 @@ export class SafeStopGlobalControl {
   }
 
   /**
-   * Whether anything on screen can still move: a registered session on its way
-   * to the park point, or a listed row still draining while the panel is open.
-   * A verdict that stays `waiting` because a record is stalled, unresumable or
-   * unread is not moving — nothing in this process will change it.
+   * Whether anything on screen is still settling: a registered session standing
+   * at the park point with its flush pending, or a listed row in that same
+   * state — or a list still being read — while the panel is open. A verdict that
+   * stays `waiting` because a record is stalled, unresumable or unread is not
+   * settling: nothing in this process will change it, and the park will announce
+   * any session that starts moving again by registering its markers.
    */
-  private moving(): boolean {
+  private settling(): boolean {
     const state = this.store.getSnapshot()
     const current = state.global
-    const draining = current?.kind === 'reported' && current.status.draining.length > 0
-    const listed = state.panelOpen && (
-      state.triage === undefined
-      || state.triage.kind === 'unavailable'
-      || state.triage.rows.some(row => row.phase === 'draining')
-    )
-    return draining || listed
+    const held = current?.kind === 'reported' && current.status.parking > 0
+    const listed = state.panelOpen
+      && (state.triage === undefined
+        || state.triage.kind === 'unavailable'
+        || state.triage.rows.some(row => row.phase === 'parking'))
+    return held || listed
   }
 
   /**

@@ -10,6 +10,15 @@
  *
  * What is asserted is what the user can see: the pill and the panel keep
  * showing the host's last answer at every point, and the asking stops.
+ *
+ * The numbers here are the product decision, so the cases state them: one park
+ * transition costs one burst however many `commands/change` events announce it
+ * (the registry emits up to three marker registrations per parked session, and
+ * one measured park cycle produced 21 reads in ~2 minutes, in ~5 burst
+ * sequences); a press followed by a long drain costs the press read and the
+ * burst read that finds the work in flight, and nothing more until the park
+ * announces its next transition; and a session the user merely views pays
+ * nothing once the park's own address is known.
  * @module dsh-safe-stop/test/global/poll-budget
  */
 
@@ -38,6 +47,7 @@ function status(overrides: Partial<GlobalStatus> = {}): GlobalStatus {
     registered: 1,
     safe: 0,
     draining: ['overnight'],
+    parking: 0,
     stalled: [],
     unresumable: [],
     unreadTrees: [],
@@ -47,7 +57,7 @@ function status(overrides: Partial<GlobalStatus> = {}): GlobalStatus {
   }
 }
 
-/** One listed row that is still draining, which is a state the panel keeps asking about. */
+/** One listed row, as the host would publish it, for the panel's own reads. */
 function drainingRow(): TriageRow {
   return {
     sessionId: 'overnight',
@@ -134,10 +144,27 @@ function hostDouble(): { commands: never; host: Host } {
 const sessionsOf = (host: Host, line: string): string[] =>
   host.calls.filter(call => call.line === `/${line}`).map(call => call.session)
 
-/** The burst waits a test uses: a first wait short enough to spend inside one case. */
-function policy(overrides: Partial<Omit<BurstPolicy, 'waitsMs'>> = {}): Omit<BurstPolicy, 'waitsMs'> {
+/** The burst a test drives: a coalescing window and a first wait short enough to spend inside one case. */
+const WINDOW_MS = 25
+const FIRST_WAIT_MS = 25
+
+/**
+ * The burst policy knobs a test overrides. The window and the waits are the
+ * controls' own named arguments, because they are the numbers this file is
+ * about; what is left here is the page.
+ */
+function policy(
+  overrides: Partial<Omit<BurstPolicy, 'windowMs' | 'waitsMs'>> = {},
+): Omit<BurstPolicy, 'windowMs' | 'waitsMs'> {
   return { visible: () => true, ...overrides }
 }
+
+/** A whole-app control on the test's burst timing. */
+const controls = (
+  commands: never,
+  overrides: Partial<Omit<BurstPolicy, 'windowMs' | 'waitsMs'>> = {},
+): SafeStopGlobalControl =>
+  new SafeStopGlobalControl(commands, new AbortController().signal, WINDOW_MS, policy(overrides))
 
 const readingOf = (control: SafeStopGlobalControl): GlobalReading | undefined =>
   control.store.getSnapshot().global
@@ -145,11 +172,11 @@ const readingOf = (control: SafeStopGlobalControl): GlobalReading | undefined =>
 describe('the park read budget', () => {
   afterEach(() => { vi.useRealTimers() })
 
-  it('costs one short burst for a whole park cycle, then nothing however long the page stays open', async () => {
+  it('costs one press read and one burst read for a press + long drain + park, then nothing, on the park transition', async () => {
     vi.useFakeTimers()
     const { commands, host } = hostDouble()
     host.answered = status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
-    const control = new SafeStopGlobalControl(commands, new AbortController().signal, 25, policy())
+    const control = controls(commands)
 
     // Mounting the control reads once. An idle park can change no further, so
     // that read buys nothing.
@@ -158,30 +185,85 @@ describe('the park read budget', () => {
     await vi.advanceTimersByTimeAsync(3_600_000)
     expect(host.reads, 'an idle park was read again').toBe(1)
 
-    // The press parks one session. The host reports it draining and never
-    // settles: the burst is what covers the flush, and it is the whole price.
+    // The press parks one session and the host reports it draining. That read is
+    // the last one: work in flight ends the burst, because the park announces
+    // the end of that work through its own marker registrations.
     await control.toggle(ADDRESS)
     expect(host.reads).toBe(2)
-    await vi.advanceTimersByTimeAsync(60_000)
-    // 1 mount + 1 press + the burst's 4 reads (waits 25, 62.5, 150, 300ms).
-    expect(host.reads, 'one park cycle cost more than its burst').toBe(6)
+    await vi.advanceTimersByTimeAsync(3_600_000)
+    expect(host.reads, 'a drain in flight was watched instead of announced').toBe(2)
 
     // A verdict that never settles is left alone: the bound is a bound, not a
-    // slower heartbeat.
-    await vi.advanceTimersByTimeAsync(3_600_000)
-    expect(host.reads, 'a permanently waiting verdict was read again').toBe(6)
-
-    // Stopping the asking is not stopping the answer: what is on screen is
-    // exactly what the host last reported.
+    // slower heartbeat. This is the 21-reads-in-2-minutes shape, measured.
     expect(readingOf(control)).toEqual({ kind: 'reported', status: status() })
     expect(globalStopView(readingOf(control))).toMatchObject({ visible: true, labelKey: 'all.finishing' })
+  })
+
+  it('answers the parked session rather than the session the user moved to', async () => {
+    vi.useFakeTimers()
+    const { commands, host } = hostDouble()
+    host.answered = status()
+    const control = controls(commands)
+
+    // The first read has no registered session to go through, so it goes
+    // through the session the shell asked with, and the host's answer names the
+    // session the park owns.
+    await control.refresh(ADDRESS)
+    expect(sessionsOf(host, STATE_ALL_COMMAND)).toEqual([String(ADDRESS)])
+
+    // The user moves to another session and the shell hands the pill that one.
+    // Nothing else moved: the next burst still addresses the park's own session,
+    // so the rows land in the transcript they are about.
+    await control.refresh(OTHER)
+    control.refreshAll()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(sessionsOf(host, STATE_ALL_COMMAND), 'the session the user moved to paid for a park row')
+      .toEqual([String(ADDRESS), 'overnight'])
+    expect(readingOf(control)).toEqual({ kind: 'reported', status: status() })
+    expect(registeredAddress(status())).toBe(SessionId('overnight'))
+    expect(registeredAddress(status({ verdict: 'safe', registered: 1, safe: 1, draining: [] }))).toBeUndefined()
+  })
+
+  it('reads nothing more until the park transition, then reads until safe and stops', async () => {
+    vi.useFakeTimers()
+    const { commands, host } = hostDouble()
+    // Standing at the park point with the flush pending: the one state nothing
+    // announces, so the burst is what covers it.
+    const holding = status({ verdict: 'waiting', registered: 1, safe: 0, draining: [], parking: 1 })
+    const parked = status({ verdict: 'safe', registered: 1, safe: 1, draining: [], parking: 0 })
+    host.answered = status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
+    const control = controls(commands)
+    await control.refresh(ADDRESS)
+    expect(host.reads).toBe(1)
+
+    // The flush resolves while the verdict is settling — no event of its own.
+    // That is the whole job of the burst: 1 mount read, then its four reads at
+    // 25ms of window plus 25, 62.5, 150 and 300ms of waits = 5 reads.
+    host.answered = holding
+    control.refreshAll()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(host.reads, 'a settling verdict was not watched').toBe(5)
+    expect(globalStopView(readingOf(control))).toMatchObject({ labelKey: 'all.finishing', action: 'resume-all' })
+
+    // The flush lands, the burst reads it, and there is nothing left to ask.
+    host.answered = parked
+    control.refreshAll()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(host.reads, 'the safe verdict was not read').toBe(6)
+    expect(readingOf(control)).toEqual({ kind: 'reported', status: parked })
+    expect(globalStopView(readingOf(control))).toMatchObject({ labelKey: 'all.safe' })
+
+    // And silence: a settled park is not read again, however long the page stays
+    // open and however many more changes the host announces.
+    await vi.advanceTimersByTimeAsync(3_600_000)
+    expect(host.reads, 'a settled park was read again').toBe(6)
   })
 
   it('reads nothing more once the verdict is safe and nothing is draining', async () => {
     vi.useFakeTimers()
     const { commands, host } = hostDouble()
     host.answered = status({ verdict: 'safe', registered: 2, safe: 2, draining: [] })
-    const control = new SafeStopGlobalControl(commands, new AbortController().signal, 25, policy())
+    const control = controls(commands)
 
     await control.refresh(ADDRESS)
     expect(readingOf(control)).toEqual({ kind: 'reported', status: status({ verdict: 'safe', registered: 2, safe: 2, draining: [] }) })
@@ -195,20 +277,22 @@ describe('the park read budget', () => {
     vi.useFakeTimers()
     const { commands, host } = hostDouble()
     host.answered = status({ verdict: 'safe', registered: 1, safe: 1, draining: [] })
-    const control = new SafeStopGlobalControl(commands, new AbortController().signal, 25, policy())
+    const control = controls(commands)
     await control.refresh(ADDRESS)
     const before = host.reads
 
     // The host announces a registration or an unregistration — a transition
-    // worth looking at, even from a settled state.
+    // worth looking at, even from a settled state. The read waits out the
+    // coalescing window first, so that several registrations of one transition
+    // are one burst.
     control.refreshAll()
-    await vi.advanceTimersByTimeAsync(25)
+    await vi.advanceTimersByTimeAsync(400)
     expect(host.reads - before).toBe(1)
     expect(host.triageReads, 'a closed panel spent a command call').toBe(0)
 
     // Coalescing is not dropping: the next change is read as well.
     control.refreshAll()
-    await vi.advanceTimersByTimeAsync(25)
+    await vi.advanceTimersByTimeAsync(400)
     expect(host.reads - before).toBe(2)
   })
 
@@ -216,7 +300,7 @@ describe('the park read budget', () => {
     vi.useFakeTimers()
     const { commands, host } = hostDouble()
     host.answered = status()
-    const control = new SafeStopGlobalControl(commands, new AbortController().signal, 25, policy())
+    const control = controls(commands)
 
     // The very first read has no registered session to go through yet, so it
     // goes through the session the shell asked with.
@@ -247,7 +331,7 @@ describe('the park read budget', () => {
     const { commands, host } = hostDouble()
     const idle = status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
     host.answered = idle
-    const control = new SafeStopGlobalControl(commands, new AbortController().signal, 25, policy())
+    const control = controls(commands)
 
     // The pill mounts on the session the user is on and reads the park once.
     await control.refresh(ADDRESS)
@@ -269,7 +353,7 @@ describe('the park read budget', () => {
     vi.useFakeTimers()
     const { commands, host } = hostDouble()
     host.answered = status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
-    const control = new SafeStopGlobalControl(commands, new AbortController().signal, 25, policy())
+    const control = controls(commands)
     await control.refresh(ADDRESS)
     await control.refresh(OTHER)
 
@@ -288,7 +372,7 @@ describe('the park read budget', () => {
     const { commands, host } = hostDouble()
     const idle = status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
     host.answered = idle
-    const control = new SafeStopGlobalControl(commands, new AbortController().signal, 25, policy())
+    const control = controls(commands)
     await control.refresh(ADDRESS)
     await control.refresh(OTHER)
 
@@ -314,7 +398,7 @@ describe('the park read budget', () => {
     vi.useFakeTimers()
     const { commands, host } = hostDouble()
     host.answered = status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
-    const control = new SafeStopGlobalControl(commands, new AbortController().signal, 25, policy())
+    const control = controls(commands)
     await control.refresh(ADDRESS)
     await control.refresh(OTHER)
 
@@ -333,7 +417,7 @@ describe('the park read budget', () => {
     vi.useFakeTimers()
     const { commands, host } = hostDouble()
     host.answered = status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
-    const control = new SafeStopGlobalControl(commands, new AbortController().signal, 25, policy())
+    const control = controls(commands)
 
     // The mount read fails: no answer, so nothing is known and nothing renders.
     host.fail = true
@@ -361,8 +445,11 @@ describe('the park read budget', () => {
   it('keeps the decision list on the session the user is on, whatever the aggregate is addressed to', async () => {
     vi.useFakeTimers()
     const { commands, host } = hostDouble()
-    host.answered = status()
-    const control = new SafeStopGlobalControl(commands, new AbortController().signal, 25, policy())
+    // A park whose burst is still live: one session draining, one at the park
+    // point with its flush pending. Opening the panel must not cost the
+    // aggregate its address.
+    host.answered = status({ parking: 1 })
+    const control = controls(commands)
     await control.refresh(OTHER)
 
     control.setPanel(true)
@@ -383,7 +470,7 @@ describe('the park read budget', () => {
     vi.useFakeTimers()
     const { commands, host } = hostDouble()
     host.answered = status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
-    const control = new SafeStopGlobalControl(commands, new AbortController().signal, 25, policy())
+    const control = controls(commands)
     await control.refresh(ADDRESS)
     await control.toggle(ADDRESS)
     await vi.advanceTimersByTimeAsync(60_000)
@@ -402,16 +489,14 @@ describe('the park read budget', () => {
   it('stops while the page is hidden and takes the read it owed when it comes back', async () => {
     vi.useFakeTimers()
     const { commands, host } = hostDouble()
-    host.answered = status()
+    // A park still settling, which is the one state the burst watches: its
+    // first read is counting down when the page goes away.
+    host.answered = status({ parking: 1 })
     let pageVisible = true
-    const control = new SafeStopGlobalControl(
-      commands,
-      new AbortController().signal,
-      25,
-      policy({ visible: () => pageVisible }),
-    )
+    const control = controls(commands, { visible: () => pageVisible })
     await control.refresh(ADDRESS)
     const base = host.reads
+    expect(base).toBe(1)
 
     // The burst is waiting out its first 25ms when the page goes away.
     pageVisible = false
@@ -423,7 +508,7 @@ describe('the park read budget', () => {
     // to it and does not lose it.
     pageVisible = true
     control.watchVisibility()
-    await vi.advanceTimersByTimeAsync(25)
+    await vi.advanceTimersByTimeAsync(FIRST_WAIT_MS)
     expect(host.reads - base, 'the read the burst owed was lost').toBe(1)
   })
 
@@ -431,7 +516,7 @@ describe('the park read budget', () => {
     vi.useFakeTimers()
     const { commands, host } = hostDouble()
     host.fail = true
-    const control = new SafeStopGlobalControl(commands, new AbortController().signal, 25, policy())
+    const control = controls(commands)
     await control.refresh(ADDRESS)
     expect(readingOf(control)).toEqual({ kind: 'unavailable' })
     expect(globalStopView(readingOf(control))).toMatchObject({ visible: false, enabled: false })
@@ -513,7 +598,7 @@ describe('the per-session read budget', () => {
   it('reads a registry change for every shown session once, then watches only what moves', async () => {
     vi.useFakeTimers()
     const { commands, calls } = sessionDouble({ a: 'draining', b: 'safe' })
-    const control = new SafeStopControl(commands, new AbortController().signal, 25, policy())
+    const control = new SafeStopControl(commands, new AbortController().signal, WINDOW_MS, policy())
     await control.refresh(SessionId('a'))
     await control.refresh(SessionId('b'))
 
@@ -532,7 +617,7 @@ describe('the per-session read budget', () => {
     const { commands, calls } = sessionDouble({ a: 'active' })
     const idle = status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
     let aggregate: GlobalReading = { kind: 'reported', status: idle }
-    const control = new SafeStopControl(commands, new AbortController().signal, 25, policy(), () => aggregate)
+    const control = new SafeStopControl(commands, new AbortController().signal, WINDOW_MS, policy(), () => aggregate)
     const lists = (): number => calls.filter(call => call.line === 'list').length
 
     // The mount read is kept: it is the first fact the host gives this header.
@@ -543,7 +628,7 @@ describe('the per-session read budget', () => {
     // that already says "running": the park holds no session that could be
     // paused, so the header would only pay a round-trip to hear it again.
     control.refreshAll()
-    await vi.advanceTimersByTimeAsync(60_000)
+    await vi.advanceTimersByTimeAsync(1_000)
     expect(lists(), 'a header was asked about a park that holds nothing').toBe(1)
     expect(control.store.getSnapshot().bySession['a']).toEqual({ phase: 'active', runningTools: [] })
 
@@ -552,7 +637,7 @@ describe('the per-session read budget', () => {
     // real rather than left claiming to be running.
     aggregate = { kind: 'reported', status: status() }
     control.reconsider()
-    await vi.advanceTimersByTimeAsync(60_000)
+    await vi.advanceTimersByTimeAsync(1_000)
     expect(lists(), 'the header was left on an answer the park had moved past').toBe(2)
   })
 })
@@ -711,28 +796,75 @@ describe('one change, one read', () => {
     // session — so one press arrives as several forwarded events.
     const events = 2 * 5
     for (let at = 0; at < events; at += 1) benchRun.listeners[0]?.()
-    // The trigger is coalesced, and the read it buys waits for the burst's own
-    // first wait rather than landing on top of the press that caused it.
+    // The trigger is coalesced, and the read it buys waits out the burst's own
+    // window and first wait rather than landing on top of the press that caused
+    // it: 400ms of collection, then 400ms before the read.
     await vi.advanceTimersByTimeAsync(0)
     expect(benchRun.host.reads - before, 'the trigger read before its burst was due').toBe(0)
-    await vi.advanceTimersByTimeAsync(400)
+    await vi.advanceTimersByTimeAsync(799)
+    expect(benchRun.host.reads - before, `${String(events)} registry changes read before their burst was due`).toBe(0)
+    await vi.advanceTimersByTimeAsync(1)
     expect(benchRun.host.reads - before, `${String(events)} registry changes became this many reads`).toBe(1)
     expect(benchRun.host.triageReads, 'a closed panel spent a command call').toBe(0)
 
     // A later change is read too: coalescing is not dropping.
     benchRun.listeners[0]?.()
-    await vi.advanceTimersByTimeAsync(400)
+    await vi.advanceTimersByTimeAsync(800)
     expect(benchRun.host.reads - before).toBe(2)
 
     // And a trigger that lands while a burst is still running costs nothing:
     // the reads that burst still owes happen after it.
     benchRun.host.answered = status()
     benchRun.listeners[0]?.()
-    await vi.advanceTimersByTimeAsync(400)
+    await vi.advanceTimersByTimeAsync(800)
     const afterFirst = benchRun.host.reads
     benchRun.listeners[0]?.()
     await vi.advanceTimersByTimeAsync(0)
     expect(benchRun.host.reads).toBe(afterFirst)
+  })
+
+  it('turns three registry changes spread across the coalescing window into one burst, not three', async () => {
+    vi.useFakeTimers()
+    const benchRun = bench()
+    benchRun.host.answered = status({ verdict: 'safe', registered: 1, safe: 1, draining: [] })
+    benchRun.injected.refresh(ADDRESS)
+    await vi.advanceTimersByTimeAsync(0)
+    const before = benchRun.host.reads
+    expect(before).toBe(1)
+
+    // One park transition registers up to three marker commands per session —
+    // `/safe-resume`, `/safe-state`, `/safe-goal` — and the host announces each
+    // one with its own forwarded event (measured: 21 reads in ~2 minutes across
+    // ~5 burst sequences per park cycle). Read at 0, 200 and 400ms of the 400ms
+    // window: one burst, not one each.
+    benchRun.listeners[0]?.()
+    await vi.advanceTimersByTimeAsync(200)
+    benchRun.listeners[0]?.()
+    await vi.advanceTimersByTimeAsync(200)
+    benchRun.listeners[0]?.()
+    await vi.advanceTimersByTimeAsync(200)
+    expect(benchRun.host.reads - before, 'a change inside the window bought its own burst').toBe(0)
+    await vi.advanceTimersByTimeAsync(400)
+    expect(benchRun.host.reads - before, 'the burst read before its first wait was due').toBe(0)
+    await vi.advanceTimersByTimeAsync(400)
+    expect(benchRun.host.reads - before, 'three registrations became this many bursts').toBe(1)
+
+    // The next transition is still read: coalescing is not dropping. The host
+    // announces a registration and an unregistration per command, so one press
+    // arrives as several events in a row.
+    const settled = benchRun.host.reads
+    benchRun.listeners[0]?.()
+    benchRun.listeners[0]?.()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(benchRun.host.reads - settled, 'the next transition was dropped').toBe(1)
+
+    // A change that lands while a burst is still running costs nothing: the read
+    // the burst already owes happens after it.
+    const spent = benchRun.host.reads
+    benchRun.listeners[0]?.()
+    benchRun.listeners[0]?.()
+    await vi.advanceTimersByTimeAsync(200)
+    expect(benchRun.host.reads - spent, 'a running burst read itself again for a later change').toBe(0)
   })
 
   it('answers a mounted header from the whole-app verdict while nothing is registered', async () => {
@@ -756,10 +888,12 @@ describe('one change, one read', () => {
     expect(listed(), 'a header was read for a park that holds nothing').toBe(1)
 
     // The park takes a session in another window: the aggregate voids the
-    // derivation, and the header is read for real.
+    // derivation, and the header is read for real. The header's own burst pays
+    // its window twice — once for the forwarded change, once more when the
+    // pill's answer voids the derivation.
     benchRun.host.answered = status()
     benchRun.listeners[0]?.()
-    await vi.advanceTimersByTimeAsync(1_000)
+    await vi.advanceTimersByTimeAsync(2_000)
     expect(listed(), 'the header was left on an answer the park had moved past').toBe(2)
   })
 })

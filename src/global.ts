@@ -251,6 +251,7 @@ export function mountGlobalStop(
     for (const sessionId of [...walks.keys()]) if (!phases.has(sessionId)) walks.delete(sessionId)
 
     let safe = 0
+    let parking = 0
     const draining: string[] = []
     const stalled: string[] = []
     for (const [sessionId, park] of phases) {
@@ -267,6 +268,10 @@ export function mountGlobalStop(
       }
       const bucket = park.moving ? draining : stalled
       bucket.push(String(sessionId))
+      // Standing at the park point with the flush still pending: the one part of
+      // the wait nothing announces, so the browser is told how much of it is
+      // left to watch.
+      if (park.moving && park.phase === 'parking') parking += 1
     }
 
     const unresumable: string[] = []
@@ -299,6 +304,7 @@ export function mountGlobalStop(
       registered,
       safe,
       draining: draining.sort(),
+      parking,
       stalled: stalled.sort(),
       unresumable: unresumable.sort(),
       unreadTrees: unreadTrees.sort(),
