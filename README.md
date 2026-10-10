@@ -42,3 +42,7 @@ The load-bearing findings behind the design — where a safe point actually is,
 what a pause costs the surrounding app, and what a restart does to a parked
 session — are recorded in the spec's evidence section. Read it before changing
 the pause or resume path.
+
+[REHEARSAL.md](REHEARSAL.md) is the end-to-end acceptance run: precedence for
+what the automated suite already proves, how to install, the steps to walk, and
+the rollback if the profile will not start.
