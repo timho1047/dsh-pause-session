@@ -404,7 +404,7 @@ describe('the whole-app contribution', () => {
     expect(benchRun.options).toMatchObject({ name: 'shell.overlay', id: 'safe-stop-all', locale: 'safe-stop' })
   })
 
-  it('reads the host once per address and re-reads on a forwarded registry change', async () => {
+  it('reads the host once at mount and re-reads on a forwarded registry change', async () => {
     const benchRun = bench()
     const face = (benchRun.options as { inject?: () => SafeStopPillInjected }).inject
     if (face === undefined) throw new Error('safe-stop: the pill registered no inject face')

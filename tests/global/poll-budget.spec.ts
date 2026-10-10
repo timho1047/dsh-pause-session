@@ -70,10 +70,15 @@ interface Call {
 /** Host-side truth a test drives, plus the calls the browser made. */
 interface Host {
   answered: GlobalStatus | undefined
+  /** Every execution fails, as a host that cannot be reached at all. */
   fail: boolean
+  /** Sessions whose executions fail, as one whose agent is gone does. */
+  readonly unreachable: Set<string>
   readonly calls: Call[]
   reads: number
   triageReads: number
+  /** Sessions the per-session control asked for its command registry through. */
+  readonly listed: string[]
 }
 
 /**
@@ -82,12 +87,19 @@ interface Host {
  * the host's state the way the real commands do.
  */
 function hostDouble(): { commands: never; host: Host } {
-  const host: Host = { answered: undefined, fail: false, calls: [], reads: 0, triageReads: 0 }
+  const host: Host = {
+    answered: undefined, fail: false, unreachable: new Set(), calls: [], reads: 0, triageReads: 0, listed: [],
+  }
   const commands = {
-    list: () => Promise.resolve({ ok: true, value: [] }),
+    list: (sessionId: SessionId) => {
+      host.listed.push(String(sessionId))
+      return Promise.resolve({ ok: true, value: [] })
+    },
     execute: (sessionId: SessionId, line: string) => {
       host.calls.push({ session: String(sessionId), line })
-      if (host.fail) return Promise.resolve({ ok: false, error: { code: 'gateway/internal' } })
+      if (host.fail || host.unreachable.has(String(sessionId))) {
+        return Promise.resolve({ ok: false, error: { code: 'gateway/internal' } })
+      }
       if (line === `/${STATE_ALL_COMMAND}`) {
         host.reads += 1
         const answered = host.answered
@@ -228,6 +240,122 @@ describe('the park read budget', () => {
     // A verdict that names no registered session has no better address to offer.
     expect(registeredAddress(status())).toBe(SessionId('overnight'))
     expect(registeredAddress(status({ verdict: 'safe', registered: 1, safe: 1, draining: [] }))).toBeUndefined()
+  })
+
+  it('spends nothing when the user opens another session after the park has emptied', async () => {
+    vi.useFakeTimers()
+    const { commands, host } = hostDouble()
+    const idle = status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
+    host.answered = idle
+    const control = new SafeStopGlobalControl(commands, new AbortController().signal, 25, policy())
+
+    // The pill mounts on the session the user is on and reads the park once.
+    await control.refresh(ADDRESS)
+    expect(host.reads).toBe(1)
+
+    // They resumed their parked session earlier, so the registry is empty. Now
+    // they open another session, and the shell hands the pill that one: the
+    // view moved, the park did not.
+    await control.refresh(OTHER)
+    await vi.advanceTimersByTimeAsync(3_600_000)
+    expect(host.reads, 'opening a session cost a read').toBe(1)
+    expect(sessionsOf(host, STATE_ALL_COMMAND), 'a row landed in the session that was opened')
+      .toEqual([String(ADDRESS)])
+    // What stays on screen is still the host's own answer.
+    expect(readingOf(control)).toEqual({ kind: 'reported', status: idle })
+  })
+
+  it('keeps reading through the address a read was served by, not the session on screen', async () => {
+    vi.useFakeTimers()
+    const { commands, host } = hostDouble()
+    host.answered = status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
+    const control = new SafeStopGlobalControl(commands, new AbortController().signal, 25, policy())
+    await control.refresh(ADDRESS)
+    await control.refresh(OTHER)
+
+    // A park made in another window announces itself through the registry
+    // change it causes, and an empty registry is exactly what such a park
+    // changes: the change is read, and it is read through the address this
+    // control already has rather than through the session now on screen.
+    control.refreshAll()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(host.reads, 'a forwarded change with an empty registry was not read').toBe(2)
+    expect(sessionsOf(host, STATE_ALL_COMMAND)).toEqual([String(ADDRESS), String(ADDRESS)])
+  })
+
+  it('forgets an address that stopped answering, falls back to the session on screen, and reports honestly', async () => {
+    vi.useFakeTimers()
+    const { commands, host } = hostDouble()
+    const idle = status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
+    host.answered = idle
+    const control = new SafeStopGlobalControl(commands, new AbortController().signal, 25, policy())
+    await control.refresh(ADDRESS)
+    await control.refresh(OTHER)
+
+    // The session the first read went through was released with the park it
+    // served, so the read through it fails now. The control asks the session
+    // the shell is on instead of going mute, and shows that answer.
+    host.unreachable.add(String(ADDRESS))
+    control.refreshAll()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(sessionsOf(host, STATE_ALL_COMMAND)).toEqual([String(ADDRESS), String(ADDRESS), String(OTHER)])
+    expect(readingOf(control), 'the fallback answer was not the host\'s own')
+      .toEqual({ kind: 'reported', status: idle })
+
+    // The fallback is the address from then on: the dead one is not asked again.
+    control.refreshAll()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(sessionsOf(host, STATE_ALL_COMMAND), 'the forgotten address was asked again').toEqual(
+      [String(ADDRESS), String(ADDRESS), String(OTHER), String(OTHER)],
+    )
+  })
+
+  it('claims nothing when neither the address it remembers nor the session on screen can answer', async () => {
+    vi.useFakeTimers()
+    const { commands, host } = hostDouble()
+    host.answered = status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
+    const control = new SafeStopGlobalControl(commands, new AbortController().signal, 25, policy())
+    await control.refresh(ADDRESS)
+    await control.refresh(OTHER)
+
+    host.unreachable.add(String(ADDRESS))
+    host.unreachable.add(String(OTHER))
+    control.refreshAll()
+    await vi.advanceTimersByTimeAsync(60_000)
+    // One honest attempt per address and no third; the last host answer is not
+    // kept on screen in place of an answer nobody gave.
+    expect(sessionsOf(host, STATE_ALL_COMMAND)).toEqual([String(ADDRESS), String(ADDRESS), String(OTHER)])
+    expect(readingOf(control)).toEqual({ kind: 'unavailable' })
+    expect(globalStopView(readingOf(control))).toMatchObject({ visible: false, enabled: false })
+  })
+
+  it('takes the session the user moves to as another chance while no answer has arrived', async () => {
+    vi.useFakeTimers()
+    const { commands, host } = hostDouble()
+    host.answered = status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
+    const control = new SafeStopGlobalControl(commands, new AbortController().signal, 25, policy())
+
+    // The mount read fails: no answer, so nothing is known and nothing renders.
+    host.fail = true
+    await control.refresh(ADDRESS)
+    expect(readingOf(control)).toEqual({ kind: 'unavailable' })
+
+    // The host was only briefly away. Moving to another session is a chance to
+    // reach it; the answer that comes back ends the retrying, so the session
+    // after that one costs nothing.
+    host.fail = false
+    await control.refresh(OTHER)
+    expect(readingOf(control)).toEqual({
+      kind: 'reported',
+      status: status({ verdict: 'idle', registered: 0, safe: 0, draining: [] }),
+    })
+    expect(sessionsOf(host, STATE_ALL_COMMAND)).toEqual([String(ADDRESS), String(OTHER)])
+
+    await control.refresh(ADDRESS)
+    await vi.advanceTimersByTimeAsync(3_600_000)
+    expect(sessionsOf(host, STATE_ALL_COMMAND), 'an answered control read on an address change').toEqual(
+      [String(ADDRESS), String(OTHER)],
+    )
   })
 
   it('keeps the decision list on the session the user is on, whatever the aggregate is addressed to', async () => {
@@ -398,6 +526,35 @@ describe('the per-session read budget', () => {
     expect(status.filter(call => call.session === 'a'), 'the draining session was not watched settle').toHaveLength(5)
     expect(status.filter(call => call.session === 'b'), 'a settled session was read again').toHaveLength(2)
   })
+
+  it("answers a header from the park's own verdict while nothing is registered, and reads it for real once something is", async () => {
+    vi.useFakeTimers()
+    const { commands, calls } = sessionDouble({ a: 'active' })
+    const idle = status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
+    let aggregate: GlobalReading = { kind: 'reported', status: idle }
+    const control = new SafeStopControl(commands, new AbortController().signal, 25, policy(), () => aggregate)
+    const lists = (): number => calls.filter(call => call.line === 'list').length
+
+    // The mount read is kept: it is the first fact the host gives this header.
+    await control.refresh(SessionId('a'))
+    expect(lists()).toBe(1)
+
+    // A registry change with nothing registered teaches nothing about a header
+    // that already says "running": the park holds no session that could be
+    // paused, so the header would only pay a round-trip to hear it again.
+    control.refreshAll()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(lists(), 'a header was asked about a park that holds nothing').toBe(1)
+    expect(control.store.getSnapshot().bySession['a']).toEqual({ phase: 'active', runningTools: [] })
+
+    // The park takes a session in another window — the change this browser saw.
+    // The aggregate is what voids the derivation, and the header is read for
+    // real rather than left claiming to be running.
+    aggregate = { kind: 'reported', status: status() }
+    control.reconsider()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(lists(), 'the header was left on an answer the park had moved past').toBe(2)
+  })
 })
 
 describe('the read burst', () => {
@@ -516,11 +673,24 @@ describe('one change, one read', () => {
       },
     }
     apply(ctx as never)
-    const entry = registrations.find(registration => registration.options['name'] === 'shell.overlay')
-    if (entry === undefined) throw new Error('safe-stop: the whole-app pill registered no slot entry')
-    const face = (entry.options as { inject?: () => { refresh: (id: SessionId) => void } }).inject
-    if (face === undefined) throw new Error('safe-stop: the pill registered no inject face')
-    return { host, listeners, injected: face() }
+    return {
+      host,
+      listeners,
+      injected: faceOf(registrations, 'shell.overlay'),
+      header: faceOf(registrations, 'conversation.session.header.actions'),
+    }
+  }
+
+  /** One registered slot's inject face, with the operations the controls call. */
+  function faceOf(
+    registrations: { options: Record<string, unknown> }[],
+    name: string,
+  ): { refresh: (id: SessionId) => void; toggle: (id: SessionId) => void; setPanel: (open: boolean) => void } {
+    const entry = registrations.find(registration => registration.options['name'] === name)
+    if (entry === undefined) throw new Error(`safe-stop: no slot entry registered for ${name}`)
+    const face = (entry.options as { inject?: () => never }).inject
+    if (face === undefined) throw new Error(`safe-stop: the ${name} control registered no inject face`)
+    return face()
   }
 
   it('coalesces a tick of registry changes into one read, and reads the next one too', async () => {
@@ -563,5 +733,33 @@ describe('one change, one read', () => {
     benchRun.listeners[0]?.()
     await vi.advanceTimersByTimeAsync(0)
     expect(benchRun.host.reads).toBe(afterFirst)
+  })
+
+  it('answers a mounted header from the whole-app verdict while nothing is registered', async () => {
+    vi.useFakeTimers()
+    const benchRun = bench()
+    const header = SessionId('header-session')
+    benchRun.host.answered = status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
+    // The pill's own mount read is what gives the header control an aggregate
+    // to answer from.
+    benchRun.injected.refresh(ADDRESS)
+    await vi.advanceTimersByTimeAsync(0)
+    benchRun.header.refresh(header)
+    await vi.advanceTimersByTimeAsync(0)
+    const listed = (): number => benchRun.host.listed.filter(id => id === String(header)).length
+    expect(listed(), 'the mount read was dropped').toBe(1)
+
+    // A forwarded change with nothing registered teaches nothing about a header
+    // that already says "running".
+    benchRun.listeners[0]?.()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(listed(), 'a header was read for a park that holds nothing').toBe(1)
+
+    // The park takes a session in another window: the aggregate voids the
+    // derivation, and the header is read for real.
+    benchRun.host.answered = status()
+    benchRun.listeners[0]?.()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(listed(), 'the header was left on an answer the park had moved past').toBe(2)
   })
 })

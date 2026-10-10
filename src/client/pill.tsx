@@ -37,7 +37,7 @@ import styles from './button.module.css'
 /** Browser state and operations injected into the whole-app pill. */
 export interface SafeStopPillInjected {
   hooks: { safeStopGlobal: ObservableSnapshot<GlobalStopState> }
-  /** Read the host's whole-app state through one session. */
+  /** Hand the control the session the shell is on; it reads there until it has an answer. */
   refresh: (sessionId: SessionId) => void
   /** Press the pill for one session. */
   toggle: (sessionId: SessionId) => void
@@ -121,12 +121,14 @@ export function SafeStopPill(props: SafeStopPillProps): ReactNode {
   const triage = props.useSafeStopGlobal(state => state.triage)
   const open = props.useSafeStopGlobal(state => state.panelOpen)
   // The command channel is session-addressed: one user session is the address
-  // every whole-app read and press goes through.
+  // every whole-app press goes through, and the one the control's very first
+  // read goes through.
   const address = useSessions(addressingSession)
   const view = globalStopView(reading)
   const list = triageView(triage)
-  // Read once per address: the host is the source of truth, and the forwarded
-  // registry change keeps it current afterwards.
+  // Hand the control the session the shell is on. It reads there once, when it
+  // has no answer yet; afterwards the address follows the view while the reads
+  // follow the park (see `./global.ts`).
   useEffect(() => {
     if (address !== undefined) refresh(address)
   }, [refresh, address])

@@ -13,7 +13,9 @@
  * registry and drive it through the host's session commands (`./control.ts` and
  * `./global.ts` document why the command registry is the only live channel a
  * third-party plugin can use). Each stays inert wherever that round-trip is
- * unavailable rather than rendering a control that cannot tell the truth.
+ * unavailable rather than rendering a control that cannot tell the truth. The
+ * header control also reads the whole-app answer the pill publishes, so a park
+ * that holds nothing does not cost a host round-trip per header.
  * @module dsh-safe-stop/client
  */
 
@@ -139,8 +141,21 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'safe-stop: dictionaries')
   const lifetime = new AbortController()
   ctx.effect(() => () => { lifetime.abort(new Error('safe-stop: client unloaded')) }, 'safe-stop: lifetime')
-  const control = new SafeStopControl(ctx.remote.commands, lifetime.signal)
   const globalControl = new SafeStopGlobalControl(ctx.remote.commands, lifetime.signal)
+  const control = new SafeStopControl(
+    ctx.remote.commands,
+    lifetime.signal,
+    undefined,
+    undefined,
+    () => globalControl.store.getSnapshot().global,
+  )
+  // A header answered from the whole-app "nothing is registered" is read for
+  // real the moment that stops holding: the session it stood in for may be the
+  // one the park just took.
+  ctx.effect(
+    () => globalControl.store.subscribe(() => { control.reconsider() }),
+    'safe-stop: the whole-app answer serves the session headers',
+  )
   // The host publishes no push channel of its own, so the forwarded command
   // registry change is what makes these controls live: every one of them is a
   // transition worth looking at.

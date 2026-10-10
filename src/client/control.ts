@@ -20,6 +20,15 @@
  * forever. Registry changes start that burst, and one tick's worth of them —
  * parking a session registers three commands, and the host announces each of
  * them — is one burst.
+ *
+ * The whole-app control reads the same park and publishes what it found
+ * (`./global.ts`), and a header consults that answer before spending a read of
+ * its own: with nothing registered, no session can be paused, so a header that
+ * already says "running" is left saying it rather than paying a round-trip to
+ * hear it again. A header the host last showed on its way to a park is never
+ * answered that way — that reading is the newer fact — and the derivation is
+ * voided by the next whole-app answer that names a registered session, which
+ * the forwarded change a park causes is what brings in.
  * @module dsh-safe-stop/client/control
  */
 
@@ -33,6 +42,14 @@ import {
 } from '../shared.js'
 import { burstWaits, DEFAULT_BURST_POLICY, ReadBurst } from './burst.js'
 import type { BurstPolicy } from './burst.js'
+import type { GlobalReading } from './global.js'
+
+/**
+ * The whole-app answer as the session headers read it, or `undefined` before
+ * that control has heard from the host. Reading it costs nothing: it is the
+ * published snapshot, not a host round-trip.
+ */
+export type AggregateSource = () => GlobalReading | undefined
 
 /**
  * What the Session-header control knows about one session: what the host
@@ -83,6 +100,12 @@ export class SafeStopControl {
   private readonly transient = new Set<SessionId>()
   /** Sessions a registry change has put back on the list of ones to read once. */
   private readonly owed = new Set<SessionId>()
+  /**
+   * Sessions whose header was answered from the whole-app "nothing is
+   * registered" instead of a read of their own, and which therefore have to be
+   * read for real if that answer stops holding.
+   */
+  private readonly derived = new Set<SessionId>()
   /** The bounded burst of reads one transition buys; see `./burst.ts`. */
   private readonly burst: ReadBurst
   private reads = 0
@@ -92,12 +115,14 @@ export class SafeStopControl {
    * @param lifetime - aborts in-flight calls and the burst when the plugin unloads.
    * @param firstWaitMs - how long after a transition the burst's first read runs.
    * @param policy - the burst waits and visibility source; defaults to `firstWaitMs` and the real page.
+   * @param aggregate - the whole-app control's published answer; absent means it is never consulted.
    */
   constructor(
     private readonly commands: ClientRemote['commands'],
     private readonly lifetime: AbortSignal,
     firstWaitMs = 400,
     policy: Omit<BurstPolicy, 'waitsMs'> = DEFAULT_BURST_POLICY,
+    private readonly aggregate: AggregateSource = () => undefined,
   ) {
     this.burst = new ReadBurst(
       () => { void this.readAll() },
@@ -131,7 +156,9 @@ export class SafeStopControl {
   /**
    * One pass of the burst. A pass a trigger still owes reads every session that
    * change may have touched; a later pass watches only the sessions that are
-   * still moving, because a settled phase is not what the burst is for.
+   * still moving, because a settled phase is not what the burst is for. A
+   * session the whole-app answer has already spoken for is answered from it
+   * instead of being asked about; see {@link answerIsKnown}.
    */
   private async readAll(): Promise<void> {
     if (this.lifetime.aborted) {
@@ -140,13 +167,21 @@ export class SafeStopControl {
     }
     const pass = this.owed.size > 0 ? [...this.owed] : [...this.transient]
     this.owed.clear()
-    for (const sessionId of pass) await this.readOne(sessionId)
+    for (const sessionId of pass) {
+      if (this.answerIsKnown(sessionId)) {
+        this.deriveActive(sessionId)
+        continue
+      }
+      await this.readOne(sessionId)
+    }
     this.follow()
   }
 
   /** One session's read, published unless a newer read of that session supersedes it. */
   private async readOne(sessionId: SessionId): Promise<void> {
     this.shown.add(sessionId)
+    // A host answer replaces whatever the aggregate said about this header.
+    this.derived.delete(sessionId)
     const sequence = ++this.reads
     this.latest.set(sessionId, sequence)
     const reading = await this.read(sessionId)
@@ -229,6 +264,56 @@ export class SafeStopControl {
   }
 
   /**
+   * Whether the park has already answered for this header: with nothing
+   * registered, no session can be paused, so a header that says this session is
+   * running carries the whole fact and the read that would confirm it is a host
+   * round-trip plus two records in that session's log for nothing.
+   *
+   * A header the host last showed on its way to a park is never answered this
+   * way: that reading is newer than the aggregate the derivation rests on, and
+   * only a fresh host answer may replace it.
+   */
+  private answerIsKnown(sessionId: SessionId): boolean {
+    const phase = this.store.getSnapshot().bySession[String(sessionId)]?.phase
+    if (phase !== undefined && phase !== 'active') return false
+    return this.nothingParked()
+  }
+
+  /**
+   * Whether the whole-app answer says the park holds nothing at all: the one
+   * predicate the derivation below and its revocation share.
+   */
+  private nothingParked(): boolean {
+    const aggregate = this.aggregate()
+    return aggregate?.kind === 'reported' && aggregate.status.registered === 0
+  }
+
+  /**
+   * Answer one header from the whole-app verdict, and remember that it was that
+   * kind of answer: the sessions to read for real are exactly the ones the
+   * aggregate may have been wrong about.
+   */
+  private deriveActive(sessionId: SessionId): void {
+    this.derived.add(sessionId)
+    this.publish(sessionId, { phase: 'active', runningTools: [] })
+  }
+
+  /**
+   * The whole-app answer moved. Whatever was answered from "nothing is
+   * registered" is read for real the moment that stops holding — the session a
+   * header stood in for may be the one the park just took, possibly parked from
+   * another window whose change this browser only sees as the forwarded event.
+   * Called on every published aggregate, so it must do nothing while the
+   * derivation still holds.
+   */
+  reconsider(): void {
+    if (this.derived.size === 0 || this.lifetime.aborted || this.nothingParked()) return
+    for (const sessionId of this.derived) this.owed.add(sessionId)
+    this.derived.clear()
+    this.burst.trigger()
+  }
+
+  /**
    * Decide what the burst owes after a read: another look while any shown
    * session is still moving, and nothing once none is.
    *
@@ -236,10 +321,11 @@ export class SafeStopControl {
    * announces the drain finishing, so `draining` can end only in an answer the
    * browser reads. Once every shown session has settled — `safe`, `active`, or
    * a phase the host will not move again — there is nothing left to ask, and
-   * the last reading stays on screen.
+   * the last reading stays on screen. A read a change still owes counts as
+   * something left to ask: it may be about a session this pass did not touch.
    */
   private follow(): void {
-    if (this.lifetime.aborted || this.transient.size === 0) {
+    if (this.lifetime.aborted || (this.transient.size === 0 && this.owed.size === 0)) {
       this.burst.stop()
       return
     }

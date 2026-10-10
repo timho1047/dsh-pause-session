@@ -15,14 +15,24 @@
  * inventing an answer. Once the host's own answer names a session the park owns,
  * reads are addressed there instead: a read writes two records into the address
  * session's transcript, and they belong in the session being parked rather than
- * in whatever the user happens to be looking at.
+ * in whatever the user happens to be looking at. Failing that, the session a
+ * read was last served through is remembered — an address change is the user
+ * looking somewhere else, not news about the park, and a park that has emptied
+ * out is no reason to start writing rows into every session the user opens
+ * next. A remembered address that stops answering (its agent is gone) is
+ * forgotten and the read falls back to the session the shell asks with, so a
+ * stale address costs an honest answer rather than a control that can never
+ * speak again.
  *
  * Nothing announces the flush that settles a park — the marker commands are
  * registered when the pause is pressed, not when the flush resolves — so a
  * transition buys a short bounded burst of reads and then stops (`./burst.ts`).
  * A settled answer is left on screen unread: the panel stays readable and the
  * pill keeps saying what it says, but the browser stops spending host
- * round-trips and log records on a state that has stopped moving.
+ * round-trips and log records on a state that has stopped moving. What owes a
+ * read is the host's forwarded registry change, the user's own press or
+ * decision, and the first read at mount; once an answer is on screen, the shell
+ * handing this control another session to ask through is none of those.
  * @module dsh-safe-stop/client/global
  */
 
@@ -128,6 +138,13 @@ export class SafeStopGlobalControl {
 
   /** The session the shell asked this control through; reads start here. */
   private address: SessionId | undefined
+  /**
+   * The session an aggregate read was last served through. Later reads keep
+   * going there: every read is two records in the address session's log, and
+   * the shell's address follows whatever the user is looking at, which is not
+   * where a row about the park belongs.
+   */
+  private served: SessionId | undefined
   /** Highest decision-list read requested: an answer older than it is dropped. */
   private latestTriage = 0
   /** Highest read sequence requested: an answer older than it is dropped. */
@@ -154,14 +171,28 @@ export class SafeStopGlobalControl {
   }
 
   /**
-   * Ask the host for the aggregate, reading through one session.
+   * The shell handed this control a session: the one the pill mounted on, or
+   * the one the user has just moved to. Only a control with no answer yet reads
+   * here — the view moving is not the park moving, and after the first answer
+   * the forwarded registry change and the user's own press are what ask again.
+   * A read that came back with nothing is not an answer, so moving to another
+   * session is one more chance to reach the host rather than a control that
+   * stays mute until something else happens to change. The address is kept
+   * either way: it is where this control's presses and its decision list go, and
+   * the fallback a remembered address falls back to.
    * @param sessionId - the session the shell asks through.
    * @returns after this read's answer is published or superseded by a newer one.
    */
   async refresh(sessionId: SessionId): Promise<void> {
     this.address = sessionId
-    await this.readAt(this.target() ?? sessionId)
+    if (this.answered()) return
+    await this.readAggregate()
     this.follow()
+  }
+
+  /** Whether the host has answered: a state, not the absence of one it never sent. */
+  private answered(): boolean {
+    return this.store.getSnapshot().global?.kind === 'reported'
   }
 
   /**
@@ -181,12 +212,11 @@ export class SafeStopGlobalControl {
    * is reading.
    */
   private async readAll(): Promise<void> {
-    const address = this.target()
-    if (address === undefined || this.lifetime.aborted) {
+    if (this.target() === undefined || this.lifetime.aborted) {
       this.burst.stop()
       return
     }
-    await this.readAt(address)
+    await this.readAggregate()
     if (this.store.getSnapshot().panelOpen) await this.readTriage()
     // One burst decision per pass: taken per read, two reads that disagree
     // about what is moving would end the burst and start it again, which is a
@@ -195,25 +225,50 @@ export class SafeStopGlobalControl {
   }
 
   /**
-   * The session a read goes through: the one the park owns when the client
-   * knows one, else the session the shell asked through.
+   * The session a read goes through: the one the park owns when the last answer
+   * named one, else the session a read was last served through, else the
+   * session the shell is on now.
    */
   private target(): SessionId | undefined {
     const current = this.store.getSnapshot().global
     const registered = current?.kind === 'reported' ? registeredAddress(current.status) : undefined
-    return registered ?? this.address
+    return registered ?? this.served ?? this.address
+  }
+
+  /**
+   * Ask the host for the aggregate through the session a read goes through,
+   * with the one fallback an address that stopped answering is worth: the
+   * remembered address is forgotten, and the read is taken again through the
+   * session the shell is on. A memory of a session this host no longer holds
+   * would otherwise leave the control unable to say anything at all, and a
+   * single retry is the whole price of keeping it honest.
+   */
+  private async readAggregate(): Promise<void> {
+    const address = this.target()
+    if (address === undefined) return
+    if (!await this.readAt(address)) return
+    const fallback = this.target()
+    if (fallback === undefined || fallback === address) return
+    await this.readAt(fallback)
   }
 
   /**
    * Publish one aggregate answer, unless a newer read was requested while this
    * one was in flight: that answer would show a state the host has moved past.
+   * A served address is remembered, and one that did not answer is forgotten —
+   * that is what makes the next read fall back rather than ask it again.
    * @param sessionId - the session this read goes through.
+   * @returns whether this read came back without an answer; a superseded read is
+   * not one, because the newer read already owns the outcome.
    */
-  private async readAt(sessionId: SessionId): Promise<void> {
+  private async readAt(sessionId: SessionId): Promise<boolean> {
     const sequence = ++this.latest
     const reading = await this.read(sessionId)
-    if (this.latest !== sequence) return
+    if (this.latest !== sequence) return false
+    if (reading.kind === 'reported') this.served = sessionId
+    else if (this.served === sessionId) this.served = undefined
     this.publish(reading)
+    return reading.kind === 'unavailable'
   }
 
   /**
@@ -238,6 +293,19 @@ export class SafeStopGlobalControl {
    */
   async refreshTriage(): Promise<void> {
     await this.readTriage()
+    this.follow()
+  }
+
+  /**
+   * Read the aggregate again because the user asked this control to act: the
+   * address is the session the shell is on, since a press is a user action on
+   * the session the user is looking at, and the host's answer is what the
+   * control shows next.
+   * @param sessionId - the session the shell is on.
+   */
+  private async reread(sessionId: SessionId): Promise<void> {
+    this.address = sessionId
+    await this.readAggregate()
     this.follow()
   }
 
@@ -270,7 +338,7 @@ export class SafeStopGlobalControl {
     await this.commands.execute(address, `/${TRIAGE_DECISION_COMMAND[action]} ${sessionId}`, [], this.lifetime)
     await this.refreshTriage()
     // A decision can release a session, which the whole-app verdict reports.
-    await this.refresh(address)
+    await this.reread(address)
   }
 
   /**
@@ -296,7 +364,7 @@ export class SafeStopGlobalControl {
       this.follow()
       return
     }
-    await this.refresh(sessionId)
+    await this.reread(sessionId)
   }
 
   /** Ask the host for the decision list, in the browser's vocabulary. */
