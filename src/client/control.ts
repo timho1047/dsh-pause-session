@@ -14,11 +14,12 @@
  * the control renders no switch at all.
  *
  * A phase that is still moving (`draining`, `parking`) has no registry change
- * to announce it, so this control re-reads on its own while one is on screen —
- * under `./poll.ts`'s budget, so a phase that never settles stops being asked
- * about instead of being asked about forever. Registry changes are coalesced
- * into one read per browser tick: parking a session registers two commands,
- * and the host announces each of them.
+ * to announce it reaching its end, so a transition buys a short bounded burst of
+ * reads over the next few seconds (`./burst.ts`) rather than a heartbeat; a
+ * phase that never settles stops being asked about instead of being asked about
+ * forever. Registry changes start that burst, and one tick's worth of them —
+ * parking a session registers three commands, and the host announces each of
+ * them — is one burst.
  * @module dsh-safe-stop/client/control
  */
 
@@ -30,8 +31,8 @@ import {
   decodeParkStatus, GOAL_COMMAND, PAUSE_COMMAND, RESUME_COMMAND, RESUME_DEFINITION_ID, STATUS_COMMAND,
   STATUS_DEFINITION_ID,
 } from '../shared.js'
-import { DEFAULT_POLL_POLICY, Poller } from './poll.js'
-import type { PollPolicy } from './poll.js'
+import { burstWaits, DEFAULT_BURST_POLICY, ReadBurst } from './burst.js'
+import type { BurstPolicy } from './burst.js'
 
 /**
  * What the Session-header control knows about one session: what the host
@@ -74,35 +75,33 @@ export class SafeStopControl {
   /** State source the Session-header contribution binds its selector hook to. */
   readonly store: SnapshotStore<SafeStopState> = createSnapshotStore(INITIAL)
 
-  /** Sessions this control has shown; every host registry change re-reads them. */
+  /** Sessions this control has shown; a host registry change re-reads every one of them. */
   private readonly shown = new Set<SessionId>()
   /** Highest read sequence requested per session: an answer older than it is dropped. */
   private readonly latest = new Map<SessionId, number>()
   /** Sessions whose phase is still moving and therefore need another look. */
   private readonly transient = new Set<SessionId>()
-  /** Sessions a re-read asked for while one was already running. */
-  private readonly dirty = new Set<SessionId>()
-  /** Whether a re-read pass is in flight; changes landing in one are read by the next. */
-  private reading = false
-  /** The budgeted re-read timer; see `./poll.ts`. */
-  private readonly poller: Poller
+  /** Sessions a registry change has put back on the list of ones to read once. */
+  private readonly owed = new Set<SessionId>()
+  /** The bounded burst of reads one transition buys; see `./burst.ts`. */
+  private readonly burst: ReadBurst
   private reads = 0
 
   /**
    * @param commands - the Client-callable command namespace.
-   * @param lifetime - aborts in-flight calls and the re-read loop when the plugin unloads.
-   * @param pollMs - how long to wait before the first re-read of a transient phase.
-   * @param policy - the polling budget and visibility source; defaults to `pollMs` and the real page.
+   * @param lifetime - aborts in-flight calls and the burst when the plugin unloads.
+   * @param firstWaitMs - how long after a transition the burst's first read runs.
+   * @param policy - the burst waits and visibility source; defaults to `firstWaitMs` and the real page.
    */
   constructor(
     private readonly commands: ClientRemote['commands'],
     private readonly lifetime: AbortSignal,
-    private readonly pollMs = 400,
-    policy: Omit<PollPolicy, 'initialMs'> = DEFAULT_POLL_POLICY,
+    firstWaitMs = 400,
+    policy: Omit<BurstPolicy, 'waitsMs'> = DEFAULT_BURST_POLICY,
   ) {
-    this.poller = new Poller(
-      () => { this.refreshAll() },
-      { ...policy, initialMs: pollMs },
+    this.burst = new ReadBurst(
+      () => { void this.readAll() },
+      { ...policy, waitsMs: burstWaits(firstWaitMs) },
     )
   }
 
@@ -112,6 +111,41 @@ export class SafeStopControl {
    * @returns after this read's answer is published or superseded by a newer one.
    */
   async refresh(sessionId: SessionId): Promise<void> {
+    await this.readOne(sessionId)
+    this.follow()
+  }
+
+  /**
+   * The host's command registry changed, so every session this control has
+   * shown may have moved — the forwarded event carries no payload, so the only
+   * honest answer is to look at all of them once. The reads run on the burst's
+   * own schedule rather than here, which is what makes a tick's worth of changes
+   * — parking a session registers three commands — one burst instead of three.
+   */
+  refreshAll(): void {
+    if (this.shown.size === 0 || this.lifetime.aborted) return
+    for (const sessionId of this.shown) this.owed.add(sessionId)
+    this.burst.trigger()
+  }
+
+  /**
+   * One pass of the burst. A pass a trigger still owes reads every session that
+   * change may have touched; a later pass watches only the sessions that are
+   * still moving, because a settled phase is not what the burst is for.
+   */
+  private async readAll(): Promise<void> {
+    if (this.lifetime.aborted) {
+      this.burst.stop()
+      return
+    }
+    const pass = this.owed.size > 0 ? [...this.owed] : [...this.transient]
+    this.owed.clear()
+    for (const sessionId of pass) await this.readOne(sessionId)
+    this.follow()
+  }
+
+  /** One session's read, published unless a newer read of that session supersedes it. */
+  private async readOne(sessionId: SessionId): Promise<void> {
     this.shown.add(sessionId)
     const sequence = ++this.reads
     this.latest.set(sessionId, sequence)
@@ -121,35 +155,6 @@ export class SafeStopControl {
     // state the host has already moved past.
     if (this.latest.get(sessionId) !== sequence) return
     this.publish(sessionId, reading)
-  }
-
-  /**
-   * Re-read every session this control has shown, after the host's registry
-   * changed. Reads are coalesced: a burst of registry changes asks for one
-   * pass, and a change that lands while a pass is running is read by the one
-   * that follows rather than starting another read of every session.
-   */
-  refreshAll(): void {
-    for (const sessionId of this.shown) this.dirty.add(sessionId)
-    if (this.reading) return
-    this.reading = true
-    void this.drain()
-  }
-
-  /** Read every session one pending pass asked for, until none is left. */
-  private async drain(): Promise<void> {
-    try {
-      do {
-        const batch = [...this.dirty]
-        this.dirty.clear()
-        for (const sessionId of batch) await this.refresh(sessionId)
-      } while (this.dirty.size > 0)
-    } catch {
-      // A registry read that rejected is not a reason to stop following the
-      // host: the next change — or the next poll — reads again.
-    } finally {
-      this.reading = false
-    }
   }
 
   /**
@@ -167,6 +172,7 @@ export class SafeStopControl {
     const executed = await this.commands.execute(sessionId, line, [], this.lifetime)
     if (!executed.ok) {
       this.publish(sessionId, { phase: 'unavailable', runningTools: [] })
+      this.follow()
       return
     }
     // `undefined` means the host resolved no such command, i.e. this reading
@@ -220,30 +226,32 @@ export class SafeStopControl {
     this.store.update((state) => {
       state.bySession = { ...state.bySession, [String(sessionId)]: reading }
     })
-    this.schedulePoll()
   }
 
   /**
-   * Keep looking while any shown session is still moving. The host announces a
-   * settled phase through no registry change of its own, so waiting for one
-   * would leave "draining" on screen forever — but a phase that never settles
-   * must not be asked about forever either, which is the budget `./poll.ts`
-   * enforces.
+   * Decide what the burst owes after a read: another look while any shown
+   * session is still moving, and nothing once none is.
+   *
+   * The host announces a pause through its command registry, but nothing
+   * announces the drain finishing, so `draining` can end only in an answer the
+   * browser reads. Once every shown session has settled — `safe`, `active`, or
+   * a phase the host will not move again — there is nothing left to ask, and
+   * the last reading stays on screen.
    */
-  private schedulePoll(): void {
-    if (this.transient.size === 0 || this.lifetime.aborted) {
-      this.poller.stop()
+  private follow(): void {
+    if (this.lifetime.aborted || this.transient.size === 0) {
+      this.burst.stop()
       return
     }
-    this.poller.start()
+    this.burst.next()
   }
 
   /**
-   * Follow the page in and out of view. Hidden time is not polling time, and
-   * a page that comes back continues the episode rather than buying a new
-   * budget: showing the page again is not a user action on the park.
+   * Follow the page in and out of view. A hidden page is not being read — and
+   * the read the burst was about to take is not lost, it waits for the page to
+   * come back.
    */
   watchVisibility(): void {
-    this.poller.checkVisibility()
+    this.burst.checkVisibility()
   }
 }

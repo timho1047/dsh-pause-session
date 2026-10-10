@@ -12,15 +12,17 @@
  * to talk through. It picks a user session the host can serve (never a
  * subagent's own session), preferring the one on screen; with no session at
  * all there is nothing to ask, and the control claims nothing rather than
- * inventing an answer.
+ * inventing an answer. Once the host's own answer names a session the park owns,
+ * reads are addressed there instead: a read writes two records into the address
+ * session's transcript, and they belong in the session being parked rather than
+ * in whatever the user happens to be looking at.
  *
- * A park that is still moving has no registry change to announce it, so this
- * control re-reads on its own while the verdict is `waiting` and stops as soon
- * as it settles. A verdict that never settles — a stalled session is permanent
- * — is read under `./poll.ts`'s budget and then left on screen unread: the
- * panel stays readable and the pill keeps saying what it says, but the browser
- * stops spending a host round-trip and two log records on a state that has
- * stopped moving. Registry changes are coalesced into one read per tick.
+ * Nothing announces the flush that settles a park — the marker commands are
+ * registered when the pause is pressed, not when the flush resolves — so a
+ * transition buys a short bounded burst of reads and then stops (`./burst.ts`).
+ * A settled answer is left on screen unread: the panel stays readable and the
+ * pill keeps saying what it says, but the browser stops spending host
+ * round-trips and log records on a state that has stopped moving.
  * @module dsh-safe-stop/client/global
  */
 
@@ -34,8 +36,8 @@ import {
   TRIAGE_REVIEW_COMMAND,
 } from '../shared.js'
 import type { GlobalStatus, TriageAction, TriageRow } from '../shared.js'
-import { DEFAULT_POLL_POLICY, Poller } from './poll.js'
-import type { PollPolicy } from './poll.js'
+import { burstWaits, DEFAULT_BURST_POLICY, ReadBurst } from './burst.js'
+import type { BurstPolicy } from './burst.js'
 import { globalStopView } from './view.js'
 
 /** What the whole-app control knows: the host's answer, or that it could not ask. */
@@ -97,89 +99,121 @@ export function addressingSession(state: {
     ?? usable[0]
 }
 
+/**
+ * The session a whole-app read is addressed to once the client knows one the
+ * park owns.
+ *
+ * Every execution is a durable `command/run`+`command/done` pair in the address
+ * session's own log, so a read addressed at whatever the user is viewing writes
+ * rows into an unrelated transcript. A draining session is the one the host has
+ * just reported as live and on its way to the park point, which makes it both
+ * the session the read is about and one a command can be executed on. A stalled
+ * or unreadable record is deliberately not used: this host may not hold that
+ * session at all, and a read that could not be delivered would report
+ * "unavailable" for a transport reason rather than a state.
+ * @param status - the host's last whole-app answer.
+ * @returns a registered session to address reads at, or `undefined` when the answer names none.
+ */
+export function registeredAddress(status: GlobalStatus): SessionId | undefined {
+  const draining = status.draining[0]
+  // The host's own answer is JSON: the branded id arrives as the string it was
+  // encoded as, exactly like the ids the shell hands the pill.
+  return draining === undefined ? undefined : draining as SessionId
+}
+
 /** Owns the published whole-app reading; nothing else writes that state. */
 export class SafeStopGlobalControl {
   /** State source the whole-app contribution binds its selector hook to. */
   readonly store: SnapshotStore<GlobalStopState> = createSnapshotStore(INITIAL)
 
-  /** The last session this control asked through; every later re-read uses it. */
+  /** The session the shell asked this control through; reads start here. */
   private address: SessionId | undefined
   /** Highest decision-list read requested: an answer older than it is dropped. */
   private latestTriage = 0
   /** Highest read sequence requested: an answer older than it is dropped. */
   private latest = 0
-  /** A read this control asked for while one was already running. */
-  private pendingRead = false
-  /** Whether a read pass is in flight; changes landing in one are read by the next. */
-  private reading = false
-  /** The budgeted re-read timer; see `./poll.ts`. */
-  private readonly poller: Poller
+  /** The bounded burst of reads one transition buys; see `./burst.ts`. */
+  private readonly burst: ReadBurst
 
   /**
    * @param commands - the Client-callable command namespace.
-   * @param lifetime - aborts in-flight calls and the re-read loop when the plugin unloads.
-   * @param pollMs - how long to wait before the first re-read of a moving park.
-   * @param policy - the polling budget and visibility source; defaults to `pollMs` and the real page.
+   * @param lifetime - aborts in-flight calls and the burst when the plugin unloads.
+   * @param firstWaitMs - how long after a transition the burst's first read runs.
+   * @param policy - the burst waits and visibility source; defaults to `firstWaitMs` and the real page.
    */
   constructor(
     private readonly commands: ClientRemote['commands'],
     private readonly lifetime: AbortSignal,
-    private readonly pollMs = 400,
-    policy: Omit<PollPolicy, 'initialMs'> = DEFAULT_POLL_POLICY,
+    firstWaitMs = 400,
+    policy: Omit<BurstPolicy, 'waitsMs'> = DEFAULT_BURST_POLICY,
   ) {
-    this.poller = new Poller(
-      () => { this.refreshAll() },
-      { ...policy, initialMs: pollMs },
+    this.burst = new ReadBurst(
+      () => { void this.readAll() },
+      { ...policy, waitsMs: burstWaits(firstWaitMs) },
     )
   }
 
   /**
-   * Ask the host for the aggregate through one session.
-   * @param sessionId - the session to address the global command to.
+   * Ask the host for the aggregate, reading through one session.
+   * @param sessionId - the session the shell asks through.
    * @returns after this read's answer is published or superseded by a newer one.
    */
   async refresh(sessionId: SessionId): Promise<void> {
     this.address = sessionId
-    const sequence = ++this.latest
-    const reading = await this.read(sessionId)
-    // A newer read was requested while this one was in flight; publishing this
-    // stale one would show a state the host has already moved past.
-    if (this.latest !== sequence) return
-    this.publish(reading)
-  }
-
-  /** Re-read through the session this control last asked through. */
-  refreshAll(): void {
-    const address = this.address
-    if (address === undefined) return
-    this.pendingRead = true
-    if (this.reading) return
-    this.reading = true
-    void this.drain(address)
+    await this.readAt(this.target() ?? sessionId)
+    this.follow()
   }
 
   /**
-   * Carry out one re-read pass, then one more if the host changed again while
-   * it ran. A burst of registry changes therefore costs one read, and a change
-   * that lands mid-read is still read rather than dropped.
-   * @param address - the session this control talks through.
+   * The host's command registry changed: something may have moved, so a burst
+   * is owed. The reads run on the burst's own schedule rather than here, which
+   * is what coalesces a tick's worth of changes — parking N sessions announces
+   * three registrations each — into one burst.
    */
-  private async drain(address: SessionId): Promise<void> {
-    try {
-      do {
-        this.pendingRead = false
-        await this.refresh(address)
-        // The list is the same question asked of the same host, so a registry
-        // change refreshes it too — but only while the user has it open: a
-        // closed panel must not spend command calls on state nobody is reading.
-        if (this.store.getSnapshot().panelOpen) await this.refreshTriage()
-      } while (this.pendingRead)
-    } catch {
-      // A read that rejected is not a reason to stop following the host: the
-      // next change — or the next poll — reads again.
-    } finally {
-      this.reading = false
+  refreshAll(): void {
+    if (this.address === undefined || this.lifetime.aborted) return
+    this.burst.trigger()
+  }
+
+  /**
+   * One read of the whole screen: the aggregate, plus the decision list while
+   * the user has it open. A closed panel spends no command calls on rows nobody
+   * is reading.
+   */
+  private async readAll(): Promise<void> {
+    const address = this.target()
+    if (address === undefined || this.lifetime.aborted) {
+      this.burst.stop()
+      return
     }
+    await this.readAt(address)
+    if (this.store.getSnapshot().panelOpen) await this.readTriage()
+    // One burst decision per pass: taken per read, two reads that disagree
+    // about what is moving would end the burst and start it again, which is a
+    // heartbeat with extra steps.
+    this.follow()
+  }
+
+  /**
+   * The session a read goes through: the one the park owns when the client
+   * knows one, else the session the shell asked through.
+   */
+  private target(): SessionId | undefined {
+    const current = this.store.getSnapshot().global
+    const registered = current?.kind === 'reported' ? registeredAddress(current.status) : undefined
+    return registered ?? this.address
+  }
+
+  /**
+   * Publish one aggregate answer, unless a newer read was requested while this
+   * one was in flight: that answer would show a state the host has moved past.
+   * @param sessionId - the session this read goes through.
+   */
+  private async readAt(sessionId: SessionId): Promise<void> {
+    const sequence = ++this.latest
+    const reading = await this.read(sessionId)
+    if (this.latest !== sequence) return
+    this.publish(reading)
   }
 
   /**
@@ -189,27 +223,34 @@ export class SafeStopGlobalControl {
    */
   setPanel(open: boolean): void {
     this.store.update((state) => { state.panelOpen = open })
-    // Opening the list is a user action on the park, so it starts the re-read
-    // budget over: the rows it shows are about to be acted on.
     if (open) {
-      this.poller.reset()
       void this.refreshTriage()
       return
     }
-    this.schedulePoll()
+    this.follow()
   }
 
-  /** Ask the host for the decision list through the session this control talks through. */
+  /**
+   * Ask the host for the decision list through the session the user is on. The
+   * list is recorded per calling session and the decisions act only on rows
+   * that session was shown, so this read — unlike the aggregate — stays on the
+   * shell's own address.
+   */
   async refreshTriage(): Promise<void> {
+    await this.readTriage()
+    this.follow()
+  }
+
+  /** One decision-list read, addressed at the session the user is on. */
+  private async readTriage(): Promise<void> {
     const address = this.address
     if (address === undefined) return
     const sequence = ++this.latestTriage
-    const reading = await this.readTriage(address)
+    const reading = await this.readTriageRows(address)
     // A newer read was requested while this one was in flight; its answer is
     // the current one.
     if (this.latestTriage !== sequence) return
     this.store.update((state) => { state.triage = reading })
-    this.schedulePoll()
   }
 
   /**
@@ -225,9 +266,6 @@ export class SafeStopGlobalControl {
   async decide(sessionId: string, action: TriageAction): Promise<void> {
     const address = this.address
     if (address === undefined) return
-    // A decision acts on the park, so the re-read budget starts over: what it
-    // released is moving again.
-    this.poller.reset()
     await this.refreshTriage()
     await this.commands.execute(address, `/${TRIAGE_DECISION_COMMAND[action]} ${sessionId}`, [], this.lifetime)
     await this.refreshTriage()
@@ -251,21 +289,18 @@ export class SafeStopGlobalControl {
     if (current === undefined || current.kind !== 'reported') return
     const action = globalStopView(current).action
     if (action === 'none') return
-    // A press is a user action on the park: the session it addresses is about
-    // to be parked or released, which is exactly the state worth watching
-    // again from the start of the budget.
-    this.poller.reset()
     const line = action === 'stop-all' ? `/${STOP_ALL_COMMAND}` : `/${RESUME_ALL_COMMAND}`
     const executed = await this.commands.execute(sessionId, line, [], this.lifetime)
     if (!executed.ok) {
       this.publish({ kind: 'unavailable' })
+      this.follow()
       return
     }
     await this.refresh(sessionId)
   }
 
   /** Ask the host for the decision list, in the browser's vocabulary. */
-  private async readTriage(sessionId: SessionId): Promise<TriageReading> {
+  private async readTriageRows(sessionId: SessionId): Promise<TriageReading> {
     const answered = await this.commands.execute(sessionId, `/${TRIAGE_COMMAND}`, [], this.lifetime)
     if (!answered.ok || answered.value === undefined) return { kind: 'unavailable' }
     const text = answered.value.result.kind === 'success' ? answered.value.result.text : undefined
@@ -287,46 +322,51 @@ export class SafeStopGlobalControl {
 
   private publish(reading: GlobalReading): void {
     this.store.update((state) => { state.global = reading })
-    this.schedulePoll()
   }
 
   /**
-   * Keep looking while there is something on screen that can still move.
-   * Nothing announces the last session reaching the park point, so waiting for
-   * a notification would leave "finishing" on screen forever; and a row still
-   * draining can join or leave the list while the panel is open. A settled
-   * screen stops asking — every re-read is two command records in the address
-   * session's log, which is worth paying only while the answer can change.
+   * Decide what the burst owes after a read: another look while something on
+   * screen can still move, and nothing at all once it cannot.
    *
-   * A screen that keeps moving is asked about under `./poll.ts`'s budget and
-   * then left alone. That is not a state change: the last answer stays
-   * published — the verdict, the pill and the rows are exactly as the host
-   * last reported them — and pressing the pill still reads again. What stops
-   * is the unpaid re-reading of a question whose answer has stopped moving.
+   * A registered session that stopped draining is the case this exists for. The
+   * host announces a pause through its command registry, but nothing announces
+   * the flush that settles it, so "every session is safe, and none is on its way
+   * anywhere" is a state the browser can only learn by reading — and once it has
+   * read it, there is nothing left to ask. The last answer stays published: the
+   * verdict, the pill and the rows are exactly what the host last reported.
    */
-  private schedulePoll(): void {
-    const state = this.store.getSnapshot()
-    const current = state.global
-    const moving =
-      (current?.kind === 'reported' && current.status.verdict === 'waiting')
-      || (state.panelOpen && (
-        state.triage === undefined
-        || state.triage.kind === 'unavailable'
-        || state.triage.rows.some(row => row.phase === 'draining')
-      ))
-    if (!moving || this.lifetime.aborted) {
-      this.poller.stop()
+  private follow(): void {
+    if (this.lifetime.aborted || !this.moving()) {
+      this.burst.stop()
       return
     }
-    this.poller.start()
+    this.burst.next()
   }
 
   /**
-   * Follow the page in and out of view. Hidden time is not polling time, and
-   * a page that comes back continues the episode rather than buying a new
-   * budget: showing the page again is not a user action on the park.
+   * Whether anything on screen can still move: a registered session on its way
+   * to the park point, or a listed row still draining while the panel is open.
+   * A verdict that stays `waiting` because a record is stalled, unresumable or
+   * unread is not moving — nothing in this process will change it.
+   */
+  private moving(): boolean {
+    const state = this.store.getSnapshot()
+    const current = state.global
+    const draining = current?.kind === 'reported' && current.status.draining.length > 0
+    const listed = state.panelOpen && (
+      state.triage === undefined
+      || state.triage.kind === 'unavailable'
+      || state.triage.rows.some(row => row.phase === 'draining')
+    )
+    return draining || listed
+  }
+
+  /**
+   * Follow the page in and out of view. A hidden page is not being read — and
+   * the read the burst was about to take is not lost, it waits for the page to
+   * come back.
    */
   watchVisibility(): void {
-    this.poller.checkVisibility()
+    this.burst.checkVisibility()
   }
 }

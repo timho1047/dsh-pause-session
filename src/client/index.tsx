@@ -142,13 +142,15 @@ export function apply(ctx: ClientContext): void {
   const control = new SafeStopControl(ctx.remote.commands, lifetime.signal)
   const globalControl = new SafeStopGlobalControl(ctx.remote.commands, lifetime.signal)
   // The host publishes no push channel of its own, so the forwarded command
-  // registry change is what makes these controls live: re-read after every one.
+  // registry change is what makes these controls live: every one of them is a
+  // transition worth looking at.
   //
   // The host announces a registration and an unregistration per command, so
-  // parking N sessions arrives as 2N events; reading on each of them would be
-  // 2N aggregate reads of the same state. One tick's worth of changes is one
-  // read: the first event schedules the pass, and everything the host had
-  // already queued joins it.
+  // parking N sessions arrives as several events per session; a burst of reads
+  // per event would be several reads of the same state. One tick's worth of
+  // changes is one trigger, and a trigger that lands while a burst is already
+  // running is absorbed by it: every read that burst still owes happens after
+  // the change.
   let scheduled = false
   const reread = (): void => {
     if (scheduled) return
