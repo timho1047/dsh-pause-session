@@ -42,9 +42,6 @@ importers:
       '@deepseek-ai/dsh-client-ui-conversation':
         specifier: link:../../deepseek-harness/packages/client/ui-conversation
         version: link:../../deepseek-harness/packages/client/ui-conversation
-      '@deepseek-ai/dsh-client-ui-layout':
-        specifier: link:../../deepseek-harness/packages/client/ui-layout
-        version: link:../../deepseek-harness/packages/client/ui-layout
       '@deepseek-ai/dsh-client-ui-renderer':
         specifier: link:../../deepseek-harness/packages/client/ui-renderer
         version: link:../../deepseek-harness/packages/client/ui-renderer
