@@ -104,10 +104,19 @@ async function settleAt(caseRoot: string, expected: Readonly<Record<string, stri
   }, `the registry to hold ${JSON.stringify(expected)}`)
 }
 
-/** Whether every member of a tree holds the flushed park point. */
-async function allSafe(caseRoot: string, ids: readonly string[]): Promise<boolean> {
-  const now = await phases(caseRoot)
-  return ids.every(id => now[id] === 'safe')
+/**
+ * Whether every member of a tree holds the flushed park point, read until the
+ * answer settles.
+ *
+ * A single read is not enough to act on: under load the registry can be caught
+ * mid-walk, and a phase the plugin is still passing through would then be
+ * mistaken for the one it lands on — which is exactly the mistake `settleAt`
+ * exists to avoid below.
+ * @param caseRoot - the case's storage root.
+ * @param expected - every member of the tree, with the phase it must settle at.
+ */
+async function allSafe(caseRoot: string, expected: Readonly<Record<string, string>>): Promise<void> {
+  await settleAt(caseRoot, expected)
 }
 
 describe('the session-header press covers the tree it owns', () => {
@@ -141,10 +150,7 @@ describe('the session-header press covers the tree it owns', () => {
       // tool, so nothing was sent after the press.
       const sent = home.provider.requests.length
       home.blocking.releaseAll()
-      await untilAsync(
-        async () => allSafe(caseRoot, ['tree-root', 'tree-child', 'tree-grandchild']),
-        'the whole tree to park',
-      )
+      await allSafe(caseRoot, { 'tree-root': 'safe', 'tree-child': 'safe', 'tree-grandchild': 'safe' })
       expect(home.provider.requests).toHaveLength(sent)
     } finally {
       home.blocking.releaseAll()
@@ -168,10 +174,7 @@ describe('the session-header press covers the tree it owns', () => {
 
       expect((await home.stop(root)).kind).toBe('success')
       home.blocking.releaseAll()
-      await untilAsync(
-        async () => allSafe(caseRoot, ['release-root', 'release-child', 'release-grandchild']),
-        'the whole tree to park',
-      )
+      await allSafe(caseRoot, { 'release-root': 'safe', 'release-child': 'safe', 'release-grandchild': 'safe' })
       const sent = home.provider.requests.length
 
       // One press on the same control, and the whole tree comes back: nothing
@@ -240,10 +243,7 @@ describe('the session-header press covers the tree it owns', () => {
       // The ones that stayed parked finish on their own once their work lands.
       home.blocking.releaseId('unclean-root')
       home.blocking.releaseId('unclean-child')
-      await untilAsync(
-        async () => allSafe(caseRoot, ['unclean-root', 'unclean-child']),
-        'the remaining members to park',
-      )
+      await allSafe(caseRoot, { 'unclean-root': 'safe', 'unclean-child': 'safe' })
     } finally {
       home.blocking.releaseAll()
       await home.ctx.fiber.dispose()
