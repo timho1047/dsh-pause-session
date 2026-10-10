@@ -4,6 +4,11 @@
  * session is parked AND the session-level flush has resolved, and can be taken
  * back at any point before that.
  *
+ * The same read also carries the record's goal opt-out, and the session's own
+ * verb switches it: a session that stopped CLEANLY has no row on the morning
+ * decision list, so this is the only place its next resume can be told not to
+ * re-open its goal — the very case where a silent resume spends its rounds.
+ *
  * Every spec drives the plugin through the same host entry points the browser
  * half uses — `ctx.commands.execute` on the real registry, plus `commands.list`
  * to see what the host published.
@@ -13,13 +18,15 @@
 import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { CommandResult } from '@deepseek-ai/dsh-commands'
 import { createUserMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
+import { UNATTENDED_TEXT } from '../../src/control.ts'
 import {
-  decodeGlobalStatus, decodeParkStatus, PAUSE_COMMAND, RESUME_COMMAND, RESUME_DEFINITION_ID, STATUS_COMMAND,
-  STATUS_DEFINITION_ID,
+  decodeGlobalStatus, decodeParkStatus, GOAL_COMMAND, PAUSE_COMMAND, RESUME_COMMAND, RESUME_DEFINITION_ID,
+  STATUS_COMMAND, STATUS_DEFINITION_ID,
 } from '../../src/shared.ts'
 import type { ParkStatus } from '../../src/shared.ts'
 import { textResponse } from '../assumptions/fake-provider.ts'
@@ -57,6 +64,13 @@ async function published(ctx: Context, agent: Agent): Promise<ParkStatus | undef
   const decoded = text === undefined ? undefined : decodeParkStatus(text)
   if (decoded === undefined) throw new Error(`safe-stop: status read answered in an unknown vocabulary: ${String(text)}`)
   return decoded
+}
+
+/** Run one control command and hand back its answer, refusals included. */
+async function answer(ctx: Context, agent: Agent, command: string): Promise<CommandResult> {
+  const execution = await ctx.commands.execute(agent, `/${command}`, [], new AbortController().signal)
+  if (execution === undefined) throw new Error(`safe-stop: /${command} is not registered for "${agent.id}"`)
+  return execution.result
 }
 
 /**
@@ -143,7 +157,7 @@ describe('park state: what the control reports between the press and the park', 
       await until(() => blocking.started())
 
       await control(ctx, agent, PAUSE_COMMAND)
-      expect(await published(ctx, agent)).toEqual({ phase: 'draining', safe: false, runningTools: ['gated'] })
+      expect(await published(ctx, agent)).toEqual({ phase: 'draining', safe: false, runningTools: ['gated'], rearmGoal: true })
       // Only the response that asked for the tool has been sent; the request
       // that follows the tool is not built yet, let alone sent.
       expect(provider.requests).toHaveLength(1)
@@ -153,7 +167,7 @@ describe('park state: what the control reports between the press and the park', 
       blocking.release()
       await loop.requestSeen(1)
       await until(() => flush.calls() === 1)
-      expect(await published(ctx, agent)).toEqual({ phase: 'parking', safe: false, runningTools: [] })
+      expect(await published(ctx, agent)).toEqual({ phase: 'parking', safe: false, runningTools: [], rearmGoal: true })
       // Nothing was sent while the session was on its way to the park.
       expect(provider.requests).toHaveLength(1)
 
@@ -216,7 +230,7 @@ describe('park state: what the control reports between the press and the park', 
       // nothing to wait for, and the only remaining gate is the flush.
       await control(ctx, agent, PAUSE_COMMAND)
       await until(() => flush.calls() === 1)
-      expect(await published(ctx, agent)).toEqual({ phase: 'parking', safe: false, runningTools: [] })
+      expect(await published(ctx, agent)).toEqual({ phase: 'parking', safe: false, runningTools: [], rearmGoal: true })
 
       flush.release()
       await phaseBecomes(ctx, agent, 'safe')
@@ -236,7 +250,7 @@ describe('park state: what the control reports between the press and the park', 
 
       // Parked, and the checkpoint is still open: the durable promise is not
       // kept yet, so neither phase nor `safe` may say otherwise.
-      expect(await published(ctx, agent)).toEqual({ phase: 'parking', safe: false, runningTools: [] })
+      expect(await published(ctx, agent)).toEqual({ phase: 'parking', safe: false, runningTools: [], rearmGoal: true })
       expect(statusDescriptor(ctx, agent)).toBeDefined()
 
       flush.release()
@@ -267,7 +281,7 @@ describe('park state: what the control reports between the press and the park', 
       // flight. What the browser can read is the last phase the registry
       // confirmed: an answer that ran ahead of the record would claim a park
       // that a crash at this instant erases.
-      expect(await published(ctx, agent)).toEqual({ phase: 'draining', safe: false, runningTools: [] })
+      expect(await published(ctx, agent)).toEqual({ phase: 'draining', safe: false, runningTools: [], rearmGoal: true })
 
       held.release(1)
       await phaseBecomes(ctx, agent, 'parking')
@@ -341,7 +355,7 @@ describe('park state: what the control reports between the press and the park', 
     try {
       await control(ctx, agent, PAUSE_COMMAND)
       await phaseBecomes(ctx, agent, 'flush-failed')
-      expect(await published(ctx, agent)).toEqual({ phase: 'flush-failed', safe: false, runningTools: [] })
+      expect(await published(ctx, agent)).toEqual({ phase: 'flush-failed', safe: false, runningTools: [], rearmGoal: true })
     } finally {
       await ctx.fiber.dispose()
     }
@@ -403,6 +417,95 @@ describe('park state: what the control reports between the press and the park', 
       expect(await published(ctx, agent)).toBeUndefined()
     } finally {
       flush.release()
+      await ctx.fiber.dispose()
+    }
+  })
+})
+
+describe('the goal opt-out on a session\'s own record', () => {
+  it('reports the record\'s opt-out and switches it through the session\'s own verb', async () => {
+    const loop = await mountGatedLoop('park-goal', [])
+    const { ctx, agent } = loop
+    liveSession(loop, agent)
+    try {
+      await control(ctx, agent, PAUSE_COMMAND)
+      await phaseBecomes(ctx, agent, 'safe')
+      // The default is the product default: a goal session comes back running
+      // its rounds unless its own record says otherwise.
+      expect(await published(ctx, agent))
+        .toEqual({ phase: 'safe', safe: true, runningTools: [], rearmGoal: true })
+
+      // The switch is the session's own: it names no other session, which is
+      // what makes it reachable on a session that stopped CLEANLY — the case
+      // the decision list never shows, and the one a silent resume would
+      // otherwise spend.
+      const switched = await answer(ctx, agent, GOAL_COMMAND)
+      expect(switched.kind, switched.text).toBe('success')
+      // The control shows the host's new answer, and that answer is the
+      // record's: the same read that reports the phase reports the switch.
+      expect(await published(ctx, agent)).toMatchObject({ rearmGoal: false })
+
+      // A second press reads before it flips, so the button cannot drift from
+      // the record it describes.
+      await control(ctx, agent, GOAL_COMMAND)
+      expect(await published(ctx, agent)).toMatchObject({ rearmGoal: true })
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('keeps the opt-out through every phase the record walks afterwards', async () => {
+    const loop = await mountGatedLoop('park-goal-phases', [
+      toolCallResponse('call-1', 'gated', { id: '1' }),
+      textResponse('after the tool'),
+    ])
+    const { ctx, agent } = loop
+    const blocking = blockingTool()
+    ctx.tools.register(blocking.tool)
+    liveSession(loop, agent)
+    try {
+      agent.followup(ask('run the tool'))
+      await until(() => blocking.started())
+      await control(ctx, agent, PAUSE_COMMAND)
+      // The park is still draining, and the record already exists: a user who
+      // switches the goal off now must not have it silently reset by the
+      // `parking` and `safe` writes that follow.
+      expect((await published(ctx, agent))?.phase).toBe('draining')
+      await control(ctx, agent, GOAL_COMMAND)
+      expect(await published(ctx, agent)).toMatchObject({ phase: 'draining', rearmGoal: false })
+
+      blocking.release()
+      await phaseBecomes(ctx, agent, 'safe')
+      expect(await published(ctx, agent))
+        .toEqual({ phase: 'safe', safe: true, runningTools: [], rearmGoal: false })
+    } finally {
+      blocking.release()
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('refuses the goal switch issued from inside a model turn', async () => {
+    const loop = await mountGatedLoop('park-goal-unattended', [])
+    const { ctx, agent } = loop
+    liveSession(loop, agent)
+    try {
+      await control(ctx, agent, PAUSE_COMMAND)
+      await phaseBecomes(ctx, agent, 'safe')
+
+      // The switch changes durable state, and the record it changes decides
+      // what the next resume spends; a model must not be able to flip it, even
+      // though the verb names no session but its own.
+      const refused = await ctx.agents.withInitiator(agent, () => answer(ctx, agent, GOAL_COMMAND))
+      expect(refused.kind).toBe('error')
+      expect(refused.text).toBe(UNATTENDED_TEXT)
+      expect(await published(ctx, agent)).toMatchObject({ rearmGoal: true })
+
+      // A person's channel is what it is for, and it still works after the
+      // refusal.
+      const allowed = await answer(ctx, agent, GOAL_COMMAND)
+      expect(allowed.kind, allowed.text).toBe('success')
+      expect(await published(ctx, agent)).toMatchObject({ rearmGoal: false })
+    } finally {
       await ctx.fiber.dispose()
     }
   })

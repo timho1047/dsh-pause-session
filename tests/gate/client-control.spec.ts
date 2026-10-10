@@ -16,10 +16,11 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { apply, inject } from '../../src/client/index.tsx'
 import type { SafeStopInjected } from '../../src/client/index.tsx'
 import { SafeStopControl } from '../../src/client/control.ts'
+import type { SafeStopReading } from '../../src/client/control.ts'
 import { safeStopView } from '../../src/client/view.ts'
 import {
-  encodeParkStatus, PAUSE_COMMAND, PAUSE_DEFINITION_ID, RESUME_COMMAND, RESUME_DEFINITION_ID,
-  STATUS_COMMAND, STATUS_DEFINITION_ID,
+  encodeParkStatus, GOAL_COMMAND, GOAL_DEFINITION_ID, PAUSE_COMMAND, PAUSE_DEFINITION_ID, RESUME_COMMAND,
+  RESUME_DEFINITION_ID, STATUS_COMMAND, STATUS_DEFINITION_ID,
 } from '../../src/shared.ts'
 import type { ParkPhase } from '../../src/shared.ts'
 import { until } from './loop.ts'
@@ -32,6 +33,8 @@ interface HostDouble {
   phase: ParkPhase
   runningTools: string[]
   failList: boolean
+  /** The record's goal opt-out; `undefined` is a host whose answer carries no such field. */
+  rearmGoal: boolean | undefined
   /** Resolves the next status read; unset means "answer immediately". */
   holdStatus: (() => void) | undefined
   readonly lists: string[]
@@ -45,6 +48,7 @@ function hostDouble(): { commands: never; host: HostDouble; readsDone: (count: n
     phase: 'draining',
     runningTools: [],
     failList: false,
+    rearmGoal: true,
     holdStatus: undefined,
     lists: [],
     lines: [],
@@ -68,6 +72,7 @@ function hostDouble(): { commands: never; host: HostDouble; readsDone: (count: n
             ? [
               { name: RESUME_COMMAND, description: 'resume', definitionId: RESUME_DEFINITION_ID },
               { name: STATUS_COMMAND, description: 'status', definitionId: STATUS_DEFINITION_ID },
+              { name: GOAL_COMMAND, description: 'goal', definitionId: GOAL_DEFINITION_ID },
             ]
             : [],
         ],
@@ -83,6 +88,10 @@ function hostDouble(): { commands: never; host: HostDouble; readsDone: (count: n
         host.paused = false
         return Promise.resolve({ ok: true, value: { commandId: 'command-1', result: { kind: 'success' } } })
       }
+      if (line === `/${GOAL_COMMAND}`) {
+        host.rearmGoal = !(host.rearmGoal ?? true)
+        return Promise.resolve({ ok: true, value: { commandId: 'command-1', result: { kind: 'success' } } })
+      }
       const answer = () => ({
         ok: true as const,
         value: {
@@ -93,6 +102,7 @@ function hostDouble(): { commands: never; host: HostDouble; readsDone: (count: n
               phase: host.phase,
               safe: host.phase === 'safe',
               runningTools: host.runningTools,
+              ...host.rearmGoal === undefined ? {} : { rearmGoal: host.rearmGoal },
             }),
           },
         },
@@ -136,7 +146,7 @@ describe('browser control state', () => {
     // status read, which is a command call like any other.
     expect(host.lines).toEqual([`/${PAUSE_COMMAND}`, `/${STATUS_COMMAND}`])
     // The paused state comes from the host's registry, and it is visible.
-    expect(readingOf(control)).toEqual({ phase: 'draining', runningTools: [] })
+    expect(readingOf(control)).toEqual({ phase: 'draining', runningTools: [], rearmGoal: true })
     expect(safeStopView({ phase: 'draining', runningTools: [] }))
       .toMatchObject({ paused: true, enabled: true, labelKey: 'state.draining' })
 
@@ -157,6 +167,49 @@ describe('browser control state', () => {
     // A failed flush is a pause the host will not call clean.
     expect(safeStopView({ phase: 'flush-failed', runningTools: [] }))
       .toMatchObject({ paused: true, enabled: true, labelKey: 'state.flushFailed' })
+  })
+
+  it("carries the record's goal opt-out, and switches it through the session's own verb", async () => {
+    const { commands, host } = hostDouble()
+    const control = new SafeStopControl(commands, new AbortController().signal)
+    host.paused = true
+    host.phase = 'safe'
+    await control.refresh(SID)
+    expect(readingOf(control)).toEqual({ phase: 'safe', runningTools: [], rearmGoal: true })
+    expect(safeStopView(readingOf(control) as SafeStopReading)).toMatchObject({ rearmGoal: true })
+
+    await control.toggleGoal(SID)
+    // One verb, addressed to the session whose record it changes — the switch
+    // needs no listed row, which is what puts it on the header of a session
+    // that stopped cleanly. What it shows afterwards is the host's next answer,
+    // never this control's own flip.
+    expect(host.lines).toEqual([`/${STATUS_COMMAND}`, `/${GOAL_COMMAND}`, `/${STATUS_COMMAND}`])
+    expect(readingOf(control)).toEqual({ phase: 'safe', runningTools: [], rearmGoal: false })
+    expect(safeStopView(readingOf(control) as SafeStopReading)).toMatchObject({ rearmGoal: false })
+  })
+
+  it('shows no goal state when the host did not answer one', async () => {
+    const { commands, host } = hostDouble()
+    const control = new SafeStopControl(commands, new AbortController().signal)
+    // A host whose status text carries the phase but no goal field: the control
+    // reports exactly what it was told and renders no switch, rather than
+    // falling back to the product default and calling it an answer.
+    host.paused = true
+    host.phase = 'safe'
+    host.rearmGoal = undefined
+    await control.refresh(SID)
+    expect(readingOf(control)).toEqual({ phase: 'safe', runningTools: [] })
+    expect(safeStopView(readingOf(control) as SafeStopReading).rearmGoal).toBeUndefined()
+    // The mapping cannot invent it either: only an answered flag becomes a view
+    // field, so a reading without one renders no switch at all.
+    expect(safeStopView({ phase: 'safe', runningTools: [] }).rearmGoal).toBeUndefined()
+
+    // A host that cannot be reached claims nothing about the goal, like the
+    // rest of the control.
+    host.failList = true
+    const unreachable = new SafeStopControl(commands, new AbortController().signal)
+    await unreachable.refresh(SID)
+    expect(safeStopView(readingOf(unreachable) as SafeStopReading).rearmGoal).toBeUndefined()
   })
 
   it('follows a state the host changed on its own', async () => {
@@ -189,7 +242,7 @@ describe('browser control state', () => {
     host.phase = 'safe'
     host.runningTools = []
     await vi.advanceTimersByTimeAsync(30)
-    expect(readingOf(control)).toEqual({ phase: 'safe', runningTools: [] })
+    expect(readingOf(control)).toEqual({ phase: 'safe', runningTools: [], rearmGoal: true })
 
     // A settled phase is not polled: no further host round-trip is issued.
     const readsWhenSettled = host.lists.length
@@ -222,7 +275,7 @@ describe('browser control state', () => {
 
     host.holdStatus?.()
     await until(() => readingOf(control) !== undefined)
-    expect(readingOf(control)).toEqual({ phase: 'safe', runningTools: [] })
+    expect(readingOf(control)).toEqual({ phase: 'safe', runningTools: [], rearmGoal: true })
   })
 
   it('drops an answer the host has already moved past', async () => {
@@ -240,7 +293,7 @@ describe('browser control state', () => {
     await current
     pending[0]?.({ ok: true, value: [{ name: PAUSE_COMMAND, description: '', definitionId: PAUSE_DEFINITION_ID }] })
     await stale
-    expect(readingOf(control)).toMatchObject({ phase: 'parking' })
+    expect(readingOf(control)).toEqual({ phase: 'parking', runningTools: [] })
   })
 })
 
@@ -331,6 +384,15 @@ describe('browser control wiring', () => {
     injected.toggle(SID)
     await until(() => benchRun.host.lines.includes(`/${RESUME_COMMAND}`))
     await until(() => phaseAt(injected, SID) === 'active')
+
+    // The goal switch rides the same face: pressing it runs the session's own
+    // goal verb, and the switch's next state is the host's answer again.
+    benchRun.host.paused = true
+    injected.refresh(SID)
+    await until(() => injected.hooks.safeStop.getSnapshot().bySession[String(SID)]?.rearmGoal === true)
+    injected.toggleGoal(SID)
+    await until(() => benchRun.host.lines.includes(`/${GOAL_COMMAND}`))
+    await until(() => injected.hooks.safeStop.getSnapshot().bySession[String(SID)]?.rearmGoal === false)
   })
 
   it('unsubscribes from the host when the plugin unloads', () => {

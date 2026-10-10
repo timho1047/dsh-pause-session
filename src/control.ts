@@ -15,7 +15,11 @@
  * "paused" from that registration rather than inventing it. A descriptor cannot
  * change after registration, so the park state rides a companion status
  * definition (registered beside the marker, answered by calling it) whose
- * description is re-derived on every read — see `./shared.ts`.
+ * description is re-derived on every read — see `./shared.ts`. That one read
+ * carries the record's goal opt-out too, so the session-header control can show
+ * and switch it while the session is parked and clean — the state in which a
+ * silent morning resume would otherwise spend the user's rounds unasked. The
+ * switch is addressed to the session it changes, so it needs no listed row.
  *
  * A mark is not a park. A session is parked only once nothing is left to drain:
  * no call in flight AND either its next model request is held at the gate or no
@@ -49,19 +53,20 @@ import { mountGlobalStop } from './global.js'
 import type { GlobalStop, LivePark } from './global.js'
 import type { ParkWatch } from './park.js'
 import type { ParkRegistry } from './registry.js'
-import { installResumePath } from './resume.js'
+import { installResumePath, NOT_PARKED_TEXT } from './resume.js'
 import type { ResumeAttempt, ResumeOptions, ResumePath } from './resume.js'
 import { mountTriageList } from './triage.js'
 import type { TriageListService } from './triage.js'
 import { TRIAGE_NOT_LISTED_TEXT } from './triage.js'
 import type { TriageAction } from './shared.js'
 import {
-  describeError, encodeParkStatus, encodeTriageList, PAUSE_COMMAND, PAUSE_DEFINITION_ID, RESUME_ALL_COMMAND,
-  RESUME_ALL_DEFINITION_ID, RESUME_COMMAND, RESUME_DEFINITION_ID, STATE_ALL_COMMAND, STATE_ALL_DEFINITION_ID,
-  STATUS_COMMAND, STATUS_DEFINITION_ID, STOP_ALL_COMMAND, STOP_ALL_DEFINITION_ID, TRIAGE_COMMAND,
-  TRIAGE_CONTINUE_COMMAND, TRIAGE_CONTINUE_DEFINITION_ID, TRIAGE_DEFINITION_ID, TRIAGE_GOAL_COMMAND,
-  TRIAGE_GOAL_DEFINITION_ID, TRIAGE_LEAVE_COMMAND, TRIAGE_LEAVE_DEFINITION_ID, TRIAGE_NOTE_COMMAND,
-  TRIAGE_NOTE_DEFINITION_ID, TRIAGE_REVIEW_COMMAND, TRIAGE_REVIEW_DEFINITION_ID,
+  describeError, encodeParkStatus, encodeTriageList, GOAL_COMMAND, GOAL_DEFINITION_ID, PAUSE_COMMAND,
+  PAUSE_DEFINITION_ID, RESUME_ALL_COMMAND, RESUME_ALL_DEFINITION_ID, RESUME_COMMAND, RESUME_DEFINITION_ID,
+  STATE_ALL_COMMAND, STATE_ALL_DEFINITION_ID, STATUS_COMMAND, STATUS_DEFINITION_ID, STOP_ALL_COMMAND,
+  STOP_ALL_DEFINITION_ID, TRIAGE_COMMAND, TRIAGE_CONTINUE_COMMAND, TRIAGE_CONTINUE_DEFINITION_ID,
+  TRIAGE_DEFINITION_ID, TRIAGE_GOAL_COMMAND, TRIAGE_GOAL_DEFINITION_ID, TRIAGE_LEAVE_COMMAND,
+  TRIAGE_LEAVE_DEFINITION_ID, TRIAGE_NOTE_COMMAND, TRIAGE_NOTE_DEFINITION_ID, TRIAGE_REVIEW_COMMAND,
+  TRIAGE_REVIEW_DEFINITION_ID,
 } from './shared.js'
 import type { ParkPhase, ParkStatus } from './shared.js'
 
@@ -298,7 +303,15 @@ export function installSessionControl(
     if (mark === undefined || markers.has(sessionId)) return
     const agent = ctx.agents.get(sessionId)
     if (agent === undefined) return
-    const status = (): string => encodeParkStatus(statusOf(mark, watch.activity(sessionId).runningTools))
+    // The record is read per status call rather than frozen into the mark: the
+    // goal opt-out is durable state beside the phase, not part of this mark.
+    const status = (): string => {
+      const record = registry.get(sessionId)
+      return encodeParkStatus({
+        ...statusOf(mark, watch.activity(sessionId).runningTools),
+        ...record === undefined ? {} : { rearmGoal: record.rearmGoal },
+      })
+    }
     // The registry keys scoped definitions off the context a call is made
     // through, and Cordis refuses an undeclared service access, so the marker
     // goes through a `commands`-injected child of THIS agent's context: the
@@ -318,6 +331,22 @@ export function installSessionControl(
         name: STATUS_COMMAND,
         description: status(),
         handler: () => ({ kind: 'success', text: status() }),
+      })
+      // This session's own goal opt-out. It is the one goal switch that needs no
+      // cross-session target — the caller IS the session whose record changes —
+      // so the decision list's "only a row you were shown" binding has nothing
+      // to bind here. It changes durable state, so a model turn is refused
+      // exactly as for every other park verb.
+      scope.commands.register({
+        definitionId: CommandDefinitionId(GOAL_DEFINITION_ID),
+        name: GOAL_COMMAND,
+        description: 'Turn this paused Session\'s goal re-arm on or off',
+        handler: async () => {
+          if (modelIssued(ctx)) return { kind: 'error', text: UNATTENDED_TEXT }
+          const record = registry.get(sessionId)
+          if (record === undefined) return { kind: 'error', text: NOT_PARKED_TEXT }
+          return await resumePath.setRearmGoal(sessionId, !record.rearmGoal)
+        },
       })
     })
     markers.set(sessionId, fiber)

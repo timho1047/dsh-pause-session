@@ -113,7 +113,7 @@ describe('the durable park registry', () => {
     try {
       await control(ctx, agent, PAUSE_COMMAND)
       await phaseBecomes(loop, agent, 'flush-failed')
-      expect(await published(ctx, agent)).toEqual({ phase: 'flush-failed', safe: false, runningTools: [] })
+      expect(await published(ctx, agent)).toEqual({ phase: 'flush-failed', safe: false, runningTools: [], rearmGoal: true })
       expect(await readParkRegistry(loop.storageRoot)).toEqual([
         { sessionId: SessionId('registry-flush-failed'), phase: 'flush-failed', rearmGoal: true, updatedAt: expect.any(Number) },
       ])
@@ -122,7 +122,7 @@ describe('the durable park registry', () => {
       // it clean: only `safe` is clean, and this is not it.
       await loop.plugin.dispose()
       await ctx.plugin({ name, inject, apply })
-      expect(await published(ctx, agent)).toEqual({ phase: 'flush-failed', safe: false, runningTools: [] })
+      expect(await published(ctx, agent)).toEqual({ phase: 'flush-failed', safe: false, runningTools: [], rearmGoal: true })
     } finally {
       await ctx.fiber.dispose()
     }
@@ -144,7 +144,7 @@ describe('the durable park registry', () => {
       // a fresh process finds nothing live and publishes it when the session
       // wakes instead (the restart spec covers that).
       expect(definitionIds(ctx, agent)).toContain(RESUME_DEFINITION_ID)
-      expect(await published(ctx, agent)).toEqual({ phase: 'safe', safe: true, runningTools: [] })
+      expect(await published(ctx, agent)).toEqual({ phase: 'safe', safe: true, runningTools: [], rearmGoal: true })
 
       // The request the loop builds for the next message stops at the gate.
       agent.followup(ask('still parked'))
@@ -220,7 +220,7 @@ describe('the durable park registry', () => {
       // A replacement agent is published as paused again, from the registry.
       const revived = await ctx.agents.create({ sessionId, agentOptions: { provider: 'fake', model: 'fake' } })
       expect(definitionIds(ctx, revived.agent)).toContain(RESUME_DEFINITION_ID)
-      expect(await published(ctx, revived.agent)).toEqual({ phase: 'safe', safe: true, runningTools: [] })
+      expect(await published(ctx, revived.agent)).toEqual({ phase: 'safe', safe: true, runningTools: [], rearmGoal: true })
     } finally {
       await ctx.fiber.dispose()
     }

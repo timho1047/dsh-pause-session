@@ -36,7 +36,7 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { SafeStopControl } from './control.js'
 import type { SafeStopState } from './control.js'
 import { SafeStopGlobalControl } from './global.js'
-import { PauseIcon, ResumeIcon } from './icons.js'
+import { GoalIcon, PauseIcon, ResumeIcon } from './icons.js'
 import { SafeStopPill } from './pill.js'
 import type { SafeStopPillInjected } from './pill.js'
 import { safeStopView } from './view.js'
@@ -63,6 +63,8 @@ export interface SafeStopInjected {
   refresh: (sessionId: SessionId) => void
   /** Press the control for one session. */
   toggle: (sessionId: SessionId) => void
+  /** Flip one session's own goal opt-out. */
+  toggleGoal: (sessionId: SessionId) => void
 }
 
 /** Full props of the Session-header safe-stop control. */
@@ -72,12 +74,16 @@ export type SafeStopButtonProps = PropsRuntime<'conversation.session.header.acti
 
 /**
  * The session's safe-stop control: pause the session before its next model
- * request, or resume it, with the host's own state on screen.
+ * request, or resume it, with the host's own state on screen. Once the host
+ * reports the park's goal opt-out, a second switch sits beside it — the only
+ * place a session that stopped CLEANLY can be told not to re-open its goal on
+ * the next resume, because the decision list shows only the sessions that did
+ * not stop cleanly.
  * @param props - session runtime, host operations, and localized copy.
  * @returns the header action.
  */
 export function SafeStopButton(props: SafeStopButtonProps): ReactNode {
-  const { sessionId, refresh, toggle, t } = props
+  const { sessionId, refresh, toggle, toggleGoal, t } = props
   const reading = props.useSafeStop(state => state.bySession[String(sessionId)])
   const view = safeStopView(reading)
   // Read once per mounted control: the host is the source of truth, and the
@@ -95,6 +101,22 @@ export function SafeStopButton(props: SafeStopButtonProps): ReactNode {
       >
         {view.paused ? <ResumeIcon /> : <PauseIcon />}
       </button>
+      {/* No host answer, no switch: the state has to come from the record, and
+          a switch sitting in the default state would claim its own answer. */}
+      {view.rearmGoal === undefined
+        ? null
+        : (
+          <button
+            type="button"
+            className={styles.dsssGoal}
+            aria-label={t('goal.aria')}
+            aria-pressed={view.rearmGoal}
+            title={t(view.rearmGoal ? 'goal.on.tip' : 'goal.off.tip')}
+            onClick={() => { toggleGoal(sessionId) }}
+          >
+            <GoalIcon />
+          </button>
+        )}
       {view.labelKey === undefined
         ? null
         : (
@@ -163,6 +185,7 @@ export function apply(ctx: ClientContext): void {
           hooks: { safeStop: control.store },
           refresh: (sessionId) => { void control.refresh(sessionId) },
           toggle: (sessionId) => { void control.toggle(sessionId) },
+          toggleGoal: (sessionId) => { void control.toggleGoal(sessionId) },
         }),
       },
       SafeStopButton,

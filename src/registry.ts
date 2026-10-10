@@ -32,13 +32,17 @@ export const PARK_REGISTRY_DOMAIN = 'safe_stop_registry'
 export const parkRecord = z.object({
   /** How far that session got before its process ended; only `safe` is clean. */
   phase: z.enum(PARK_PHASES),
-  /** When the phase was last written, for the morning list. */
+  /** When this record was last written — a phase change, or a goal opt-out flip. */
   updatedAt: z.number().int().nonnegative(),
   /**
    * Whether resuming this session may re-arm its goal. Re-arming is opt-OUT
    * because a re-armed goal continues on its own and spends the owner's money;
    * a record written before this field existed reads as `true`, which is the
    * product default (a goal session comes back running its rounds).
+   *
+   * Every phase write of one park episode folds through the stored record, so
+   * the opt-out a user sets while the session is still draining survives the
+   * `parking` and `safe` writes that follow it.
    */
   rearmGoal: z.boolean().default(true),
 })

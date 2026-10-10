@@ -1,5 +1,5 @@
 /**
- * The two glyphs both safe-stop controls are drawn with, so the session-header
+ * The glyphs both safe-stop controls are drawn with, so the session-header
  * control and the whole-app pill cannot drift apart.
  * @module dsh-safe-stop/client/icons
  */
@@ -41,6 +41,30 @@ export function ResumeIcon(): ReactNode {
       strokeLinejoin="round"
     >
       <path d="M7 4.5v15l12-7.5z" />
+    </svg>
+  )
+}
+
+/**
+ * 16px stroke icon (currentColor): the rings of a target, for the goal switch
+ * on the session header. Drawn at 16px like the pause and resume glyphs it sits
+ * beside rather than the 14px marks the two reports use.
+ */
+export function GoalIcon(): ReactNode {
+  return (
+    <svg
+      aria-hidden="true"
+      width={16}
+      height={16}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="12" cy="12" r="8" />
+      <circle cx="12" cy="12" r="3" />
     </svg>
   )
 }

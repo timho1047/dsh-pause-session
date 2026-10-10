@@ -26,6 +26,23 @@ export interface SafeStopView {
   readonly labelKey?: SafeStopKey
   /** Tools in flight, taken verbatim from the host; rendered only with `labelKey`. */
   readonly runningTools: readonly string[]
+  /**
+   * The host-reported goal opt-out, or `undefined` when the host did not answer
+   * it. Absent means the goal switch is not rendered at all: a switch has to
+   * state a fact, and the only fact available is the one the record holds.
+   */
+  readonly rearmGoal?: boolean
+}
+
+/**
+ * One reading's goal opt-out, as the view carries it. Only an answered flag
+ * becomes a field: a missing one must stay missing through the mapping, or the
+ * renderer would show the product default as if the host had said it.
+ * @param reading - the host's answer.
+ * @returns the field to spread into the view, empty when the host said nothing.
+ */
+function goalOf(reading: SafeStopReading): { rearmGoal?: boolean } {
+  return reading.rearmGoal === undefined ? {} : { rearmGoal: reading.rearmGoal }
 }
 
 /**
@@ -36,6 +53,8 @@ export interface SafeStopView {
 export function safeStopView(reading: SafeStopReading | undefined): SafeStopView {
   switch (reading?.phase) {
     case 'active':
+      // Not parked, so no record exists for a resume to obey: there is nothing
+      // to switch, and saying "on" would describe a park that is not there.
       return { paused: false, enabled: true, ariaKey: 'pause.aria', runningTools: [] }
     case 'draining':
       // Still working: pressing again is exactly how the user takes the pause
@@ -46,11 +65,26 @@ export function safeStopView(reading: SafeStopReading | undefined): SafeStopView
         ariaKey: 'draining.aria',
         labelKey: 'state.draining',
         runningTools: reading.runningTools,
+        ...goalOf(reading),
       }
     case 'parking':
-      return { paused: true, enabled: true, ariaKey: 'parking.aria', labelKey: 'state.parking', runningTools: [] }
+      return {
+        paused: true,
+        enabled: true,
+        ariaKey: 'parking.aria',
+        labelKey: 'state.parking',
+        runningTools: [],
+        ...goalOf(reading),
+      }
     case 'safe':
-      return { paused: true, enabled: true, ariaKey: 'safe.aria', labelKey: 'state.safe', runningTools: [] }
+      return {
+        paused: true,
+        enabled: true,
+        ariaKey: 'safe.aria',
+        labelKey: 'state.safe',
+        runningTools: [],
+        ...goalOf(reading),
+      }
     case 'flush-failed':
       return {
         paused: true,
@@ -58,6 +92,7 @@ export function safeStopView(reading: SafeStopReading | undefined): SafeStopView
         ariaKey: 'flushFailed.aria',
         labelKey: 'state.flushFailed',
         runningTools: [],
+        ...goalOf(reading),
       }
     case 'unavailable':
       return { paused: false, enabled: false, ariaKey: 'unavailable.aria', runningTools: [] }

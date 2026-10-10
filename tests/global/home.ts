@@ -21,6 +21,8 @@ import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import CommandRuntime from '@deepseek-ai/dsh-commands'
 import type { CommandResult } from '@deepseek-ai/dsh-commands'
+import GoalService from '@deepseek-ai/dsh-goal'
+import * as GoalRoundDriver from '@deepseek-ai/dsh-goal-round-driver'
 import type { JobId } from '@deepseek-ai/dsh-jobs'
 import LocalJobRegistry from '@deepseek-ai/dsh-jobs-local'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
@@ -159,6 +161,19 @@ export interface GlobalHomeOptions {
   readonly jobs?: boolean
   /** Make every session-level flush fail, for the "could not flush" outcome. */
   readonly failingFlush?: boolean
+  /**
+   * Mount the goal service, so a case can put a goal on a session. Mounted
+   * before any agent exists on purpose: the goal projection has to be
+   * registered while the session that will carry the goal is created.
+   */
+  readonly goals?: boolean
+  /**
+   * Whether a mounted goal service comes with its round driver (default true).
+   * A process that must not advance a goal on its own — the evening half of a
+   * park-then-resume case, where rounds would otherwise start the moment the
+   * goal exists — mounts the service alone.
+   */
+  readonly goalRounds?: boolean
 }
 
 /**
@@ -175,6 +190,12 @@ export async function mountGlobalHome(caseRoot: string, options: GlobalHomeOptio
   await ctx.plugin(JsonlSessionPersistence, { root: sessionRootOf(caseRoot), compression: 'none' })
   await ctx.plugin(CommandRuntime)
   await mountParkStorage(ctx, storageOf(caseRoot))
+  // Registered while no session exists yet: the goal projection has to be in
+  // place when the session that will carry the goal is created.
+  if (options.goals === true) {
+    await ctx.plugin(GoalService)
+    if (options.goalRounds !== false) await ctx.plugin(GoalRoundDriver)
+  }
   // The catalog read observes a session through the query service. Exact reads
   // need no search index — a live session, or one prepared from its own JSONL
   // log, is enough — so the memory backend is never opened.

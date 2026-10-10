@@ -41,6 +41,9 @@ export const STATE_ALL_COMMAND = 'safe-state-all'
 /** Command that reports the receiving session's park state; registered only while it is paused. */
 export const STATUS_COMMAND = 'safe-state'
 
+/** Command that turns the receiving session's own goal re-arm on or off; registered only while it is paused. */
+export const GOAL_COMMAND = 'safe-goal'
+
 /** Command that reports every session that did not stop cleanly. */
 export const TRIAGE_COMMAND = 'safe-triage'
 
@@ -76,6 +79,9 @@ export const STATE_ALL_DEFINITION_ID = 'dsh-safe-stop/state-all'
 
 /** Stable definition id of the status read, matched by identity rather than by copy. */
 export const STATUS_DEFINITION_ID = 'dsh-safe-stop/status'
+
+/** Stable definition id of the paused session's own goal re-arm toggle. */
+export const GOAL_DEFINITION_ID = 'dsh-safe-stop/goal'
 
 /** Stable definition id of the decision-list read. */
 export const TRIAGE_DEFINITION_ID = 'dsh-safe-stop/triage'
@@ -203,6 +209,13 @@ const PHASE_WORD: Record<ParkPhase, string> = {
   'flush-failed': 'could not flush',
 }
 
+/**
+ * The two states of one record's goal re-arm field, in the one spelling both
+ * the per-session status and the decision list publish it with.
+ */
+const GOAL_ON = 'on'
+const GOAL_OFF = 'off'
+
 /** Everything the browser is told about one paused session. */
 export interface ParkStatus {
   readonly phase: ParkPhase
@@ -210,18 +223,29 @@ export interface ParkStatus {
   readonly safe: boolean
   /** Tools in flight when the status was published; empty once parked. */
   readonly runningTools: readonly string[]
+  /**
+   * Whether the resume that takes this pause back may re-open the session's
+   * goal — the durable record's own opt-out, which outlives this process. It is
+   * absent when this host could not read the record that holds it; a browser
+   * that is not told shows no switch rather than a state it would have to
+   * guess, and a guess here would tell the user their money is safe when
+   * nobody knows whether it is.
+   */
+  readonly rearmGoal?: boolean
 }
 
 /**
  * Encode one status for a command descriptor.
  * @param status - the state to publish.
- * @returns the descriptor text, e.g. `safe-stop: draining; tools: edit, bash`.
+ * @returns the descriptor text, e.g. `safe-stop: draining; tools: edit, bash; goal: on`.
  */
 export function encodeParkStatus(status: ParkStatus): string {
   const head = `${STATUS_PREFIX}${PHASE_WORD[status.phase]}`
-  return status.runningTools.length === 0
-    ? head
-    : `${head}; tools: ${status.runningTools.map(escapeField).join(', ')}`
+  const tools = status.runningTools.length === 0
+    ? ''
+    : `; tools: ${status.runningTools.map(escapeField).join(', ')}`
+  const goal = status.rearmGoal === undefined ? '' : `; goal: ${status.rearmGoal ? GOAL_ON : GOAL_OFF}`
+  return `${head}${tools}${goal}`
 }
 
 /**
@@ -236,7 +260,15 @@ export function decodeParkStatus(text: string): ParkStatus | undefined {
   const word = head.trim()
   const phase = (Object.keys(PHASE_WORD) as ParkPhase[]).find(candidate => PHASE_WORD[candidate] === word)
   if (phase === undefined) return undefined
-  return { phase, safe: phase === 'safe', runningTools: decodeNames(fieldOf(rest, 'tools')) }
+  const goal = fieldOf(rest, 'goal')
+  return {
+    phase,
+    safe: phase === 'safe',
+    runningTools: decodeNames(fieldOf(rest, 'tools')),
+    // A text without the field reports no goal state at all, rather than the
+    // product default: only the host's own record may say what it says.
+    ...goal === GOAL_ON ? { rearmGoal: true } : goal === GOAL_OFF ? { rearmGoal: false } : {},
+  }
 }
 
 /**
@@ -436,10 +468,6 @@ export type TriageAction = (typeof TRIAGE_ACTIONS)[number]
 
 /** How one row is spelled in the published list; the wake field's state when the host can hand over the owed request. */
 const WAKE_YES = 'yes'
-
-/** The two states of one row's goal re-arm field. */
-const GOAL_ON = 'on'
-const GOAL_OFF = 'off'
 
 /** One row's traces, as a list of `tool/callId` items. */
 function encodeTraces(traces: readonly TriageTrace[]): string {

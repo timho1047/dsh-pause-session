@@ -42,6 +42,48 @@
   border-color: transparent;
 }
 
+/* The goal switch: the same chip as the pause button, one size down and set
+   apart from it, because it does not act on the park — it decides what the next
+   resume of this session may spend. Pressed (re-arm on) is the state that costs
+   money, so it is also the one that is drawn. */
+.dsssGoal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-left: 2px;
+  padding: 0;
+  color: var(--dsw-alias-label-tertiary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+
+.dsssGoal[aria-pressed='true'] {
+  color: var(--dsw-alias-label-secondary);
+}
+
+.dsssGoal:hover {
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-2);
+  border-color: var(--dsw-alias-border-l1);
+}
+
+.dsssGoal:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dsssGoal {
+    transition: none;
+  }
+}
+
 /* The paused state is stated on screen, not only on hover: the harness keeps
    reporting a held session as running, so this label is the only "paused" the
    user sees. */

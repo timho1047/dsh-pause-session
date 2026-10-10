@@ -8,7 +8,10 @@
  * forwarded `commands/change` event says when to read it again. The resume
  * definition's presence in that list IS the host's "this session is paused"
  * fact, and the companion status definition answers with the park state as of
- * the read; this module never derives either from its own press.
+ * the read; this module never derives either from its own press. That one
+ * answer carries the record's goal opt-out as well, so the switch beside the
+ * pause button can show it without a second host round-trip — and without it,
+ * the control renders no switch at all.
  *
  * A phase that is still moving (`draining`, `parking`) has no registry change
  * to announce it, so this control re-reads on its own while one is on screen —
@@ -24,7 +27,8 @@ import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import {
-  decodeParkStatus, PAUSE_COMMAND, RESUME_COMMAND, RESUME_DEFINITION_ID, STATUS_COMMAND, STATUS_DEFINITION_ID,
+  decodeParkStatus, GOAL_COMMAND, PAUSE_COMMAND, RESUME_COMMAND, RESUME_DEFINITION_ID, STATUS_COMMAND,
+  STATUS_DEFINITION_ID,
 } from '../shared.js'
 import { DEFAULT_POLL_POLICY, Poller } from './poll.js'
 import type { PollPolicy } from './poll.js'
@@ -45,6 +49,13 @@ export interface SafeStopReading {
   readonly phase: SafeStopPhase
   /** Tools the host reported in flight; empty unless the phase is `draining`. */
   readonly runningTools: readonly string[]
+  /**
+   * Whether the host's own record lets the next resume re-open this session's
+   * goal. Absent — not `true` — when the host did not say: the control shows no
+   * switch rather than the product default, because a default here would tell
+   * the user their rounds are safe when nobody has answered.
+   */
+  readonly rearmGoal?: boolean
 }
 
 /** Per-session control state, keyed by Session id so a slot selector can watch one session. */
@@ -163,6 +174,20 @@ export class SafeStopControl {
     await this.refresh(sessionId)
   }
 
+  /**
+   * Flip this session's goal opt-out. The verb belongs to the session it
+   * changes — the host registers it there, and it takes no other target — so
+   * this press needs no listed row. What the switch shows afterwards is the
+   * host's next answer, never a local flip: a refused switch leaves the record
+   * exactly as it was, and the re-read is what says so.
+   * @param sessionId - session whose switch was pressed.
+   * @returns after the control re-reads the host.
+   */
+  async toggleGoal(sessionId: SessionId): Promise<void> {
+    await this.commands.execute(sessionId, `/${GOAL_COMMAND}`, [], this.lifetime)
+    await this.refresh(sessionId)
+  }
+
   /** Ask the host what this session's park state is, in the browser's vocabulary. */
   private async read(sessionId: SessionId): Promise<SafeStopReading> {
     const listed = await this.commands.list(sessionId)
@@ -179,10 +204,14 @@ export class SafeStopControl {
     const decoded = text === undefined ? undefined : decodeParkStatus(text)
     if (decoded === undefined) {
       // The marker says paused but the status read did not answer in the shared
-      // vocabulary: report the pause without inventing a phase.
+      // vocabulary: report the pause without inventing a phase or a goal state.
       return { phase: 'parking', runningTools: [] }
     }
-    return { phase: decoded.phase, runningTools: decoded.runningTools }
+    return {
+      phase: decoded.phase,
+      runningTools: decoded.runningTools,
+      ...decoded.rearmGoal === undefined ? {} : { rearmGoal: decoded.rearmGoal },
+    }
   }
 
   private publish(sessionId: SessionId, reading: SafeStopReading): void {
