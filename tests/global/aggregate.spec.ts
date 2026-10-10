@@ -5,7 +5,9 @@
  * It turns `safe` only when the last registered session reaches the park point,
  * never before. And a session that cannot get there is named: one still draining
  * behind a tool that never finishes, one whose session-level flush failed, and
- * one whose subagent tree this process cannot read at all.
+ * one whose subagent tree this process cannot read at all. The park also names
+ * the session it belongs to whatever phase it reached — the clean case included
+ * — which is the address a window showing something else reads it through.
  * @module dsh-safe-stop/test/global/aggregate
  */
 
@@ -36,6 +38,12 @@ interface EyeReads {
   readonly status: number
   /** `safe-state-all` executions: the aggregate the pill reads. */
   readonly aggregate: number
+  /**
+   * The session each aggregate read was addressed at, in order: a read leaves
+   * its two durable rows in the transcript it was taken through, so this is
+   * where those rows landed.
+   */
+  readonly aggregateAt: readonly string[]
 }
 
 /**
@@ -48,7 +56,7 @@ interface EyeReads {
  * @returns the Remote face the controls take, and a running count of the reads it served.
  */
 function clientEye(home: GlobalHome): { readonly commands: never; readonly reads: () => EyeReads } {
-  const reads = { lists: 0, status: 0, aggregate: 0 }
+  const reads = { lists: 0, status: 0, aggregate: 0, aggregateAt: [] as string[] }
   const commands = {
     list: (sessionId: SessionId) => {
       reads.lists += 1
@@ -57,8 +65,10 @@ function clientEye(home: GlobalHome): { readonly commands: never; readonly reads
       return Promise.resolve({ ok: true, value: home.ctx.commands.list(agent) })
     },
     execute: async (sessionId: SessionId, line: string, _attachments: unknown, signal: AbortSignal) => {
-      if (line === `/${STATE_ALL_COMMAND}`) reads.aggregate += 1
-      else if (line === `/${STATUS_COMMAND}`) reads.status += 1
+      if (line === `/${STATE_ALL_COMMAND}`) {
+        reads.aggregate += 1
+        reads.aggregateAt.push(String(sessionId))
+      } else if (line === `/${STATUS_COMMAND}`) reads.status += 1
       const agent = home.ctx.agents.get(sessionId)
       if (agent === undefined) return { ok: false, error: { code: 'gateway/internal' } }
       const execution = await home.ctx.commands.execute(agent, line, [], signal)
@@ -67,7 +77,27 @@ function clientEye(home: GlobalHome): { readonly commands: never; readonly reads
         : { ok: true, value: execution }
     },
   }
-  return { commands: commands as never, reads: () => ({ ...reads }) }
+  return { commands: commands as never, reads: () => ({ ...reads, aggregateAt: [...reads.aggregateAt] }) }
+}
+
+/**
+ * How many command executions one session's own durable log holds — the rows a
+ * browser read leaves in the transcript it was addressed at.
+ * @param home - the mounted process whose session persistence is read.
+ * @param sessionId - the session whose log is counted.
+ * @returns the number of `command/run` events in that log.
+ */
+async function commandRuns(home: GlobalHome, sessionId: SessionId): Promise<number> {
+  const live = home.ctx.sessions.get(sessionId)
+  if (live !== undefined) await home.ctx.sessions.flush(live)
+  const persistence = home.ctx.get('sessionPersistence')
+  if (persistence === undefined) throw new Error('safe-stop: this home mounts no session persistence')
+  const handle = await persistence.open(sessionId, 'read')
+  try {
+    return (await handle.read(0, undefined)).events.filter(event => event.type === 'command/run').length
+  } finally {
+    await handle.close()
+  }
 }
 
 describe('the aggregate answer', () => {
@@ -139,7 +169,7 @@ describe('the aggregate answer', () => {
         .toBeLessThanOrEqual(2)
       expect(followed.aggregate - afterPress.aggregate, 'the pill never read the park it was told about')
         .toBeGreaterThanOrEqual(1)
-      expect(await home.status(evening)).toMatchObject({ verdict: 'safe', registered: 1, safe: 1, draining: [], parking: 0 })
+      expect(await home.status(evening)).toMatchObject({ verdict: 'safe', registered: 1, safe: 1, parkedAt: 'evening-job', draining: [], parking: 0 })
 
       // And silence: nothing about a settled park is asked again.
       const settled = eye.reads()
@@ -295,10 +325,90 @@ describe('the aggregate answer', () => {
       expect(status.safe).toBe(0)
       expect(status.stalled).toEqual(['gone-session'])
       expect(status.verdict).toBe('waiting')
+      // The only registered session is the one this host cannot hold, and it is
+      // still the park's own name: a fact about the park, not an address that
+      // has to work.
+      expect(status.parkedAt).toBe('gone-session')
       // Reported, not dropped: the durable record is exactly where it was.
       expect((await readParkRegistry(storageOf(caseRoot))).map(entry => [String(entry.sessionId), entry.phase]))
         .toEqual([['gone-session', 'safe']])
     } finally {
+      home.blocking.releaseAll()
+      await home.ctx.fiber.dispose()
+    }
+  })
+
+  it('names a parked session a read can reach rather than only a record it cannot hold', async () => {
+    const caseRoot = temporaryRoot('dsh-safe-stop-agg-name-', temporaryRoots)
+    // A record this host cannot hold is registered before the live park exists,
+    // so it is the first session the aggregate walks. It is named in `stalled`
+    // like every other record the process cannot hold, and the parked session a
+    // client could actually read through is the better address for the park.
+    await writeParkRecord(storageOf(caseRoot), 'gone-session', 'safe')
+
+    const home = await mountGlobalHome(caseRoot, { script: blockingScript() })
+    try {
+      const parked = await home.create('reader')
+      parked.followup(ask('run the tool'))
+      await untilAsync(async () => home.blocking.started() === 1, 'the tool in flight')
+
+      await home.run(parked, 'safe-stop-all')
+      home.blocking.release(0)
+      await untilAsync(async () => (await home.status(parked)).safe === 1, 'the session to park')
+
+      const status = await home.status(parked)
+      expect(status.registered).toBe(2)
+      expect(status.safe).toBe(1)
+      expect(status.stalled).toEqual(['gone-session'])
+      expect(status.parkedAt).toBe('reader')
+    } finally {
+      home.blocking.releaseAll()
+      await home.ctx.fiber.dispose()
+    }
+  })
+
+  it('keeps a clean park\'s rows in the parked session, not in the window that reads them', async () => {
+    const caseRoot = temporaryRoot('dsh-safe-stop-agg-window-', temporaryRoots)
+    const home = await mountGlobalHome(caseRoot, { script: blockingScript() })
+    const lifetime = new AbortController()
+    const eye = clientEye(home)
+    const pill = new SafeStopGlobalControl(eye.commands, lifetime.signal, 25, { visible: () => true })
+    home.ctx.on('commands/change', () => { pill.refreshAll() })
+    try {
+      const parked = await home.create('parked-job')
+      const bystander = await home.create('bystander-job')
+      parked.followup(ask('run the tool'))
+      await untilAsync(async () => home.blocking.started() === 1, 'the tool in flight')
+
+      // The other window parks everything, and the park reaches `safe`: nothing
+      // is draining, stalled, unresumable or unread, so the park's own name is
+      // the only thing in the answer that says which session it belongs to.
+      await home.run(bystander, 'safe-stop-all')
+      home.blocking.release(0)
+      await untilAsync(async () => (await home.status(bystander)).verdict === 'safe', 'the park to finish cleanly')
+
+      // This window opens on a session of its own, with the park already clean,
+      // and reads once. That first read cannot know where the park is — the
+      // answer it gets is what tells it — and it is the only aggregate read the
+      // uninvolved session pays for.
+      await pill.refresh(bystander.id)
+      expect(eye.reads().aggregateAt).toEqual([String(bystander.id)])
+      const paidByBystander = await commandRuns(home, bystander.id)
+      expect(paidByBystander, 'the uninvolved session paid for nothing at all').toBeGreaterThan(0)
+
+      // The other window resumes the park. The forwarded change reaches this
+      // window, and the read it buys goes through the session the park belonged
+      // to — the transcript the rows are about — while the session this window
+      // is showing gains nothing.
+      await home.run(parked, 'safe-resume-all')
+      await untilAsync(async () => eye.reads().aggregateAt.length > 1, 'the forwarded change to be read')
+      const addresses = eye.reads().aggregateAt
+      expect(new Set(addresses.slice(1)), 'a row about the park landed in the session on screen')
+        .toEqual(new Set([String(parked.id)]))
+      expect(await commandRuns(home, bystander.id), 'the uninvolved transcript gained a row')
+        .toBe(paidByBystander)
+    } finally {
+      lifetime.abort(new Error('spec over'))
       home.blocking.releaseAll()
       await home.ctx.fiber.dispose()
     }

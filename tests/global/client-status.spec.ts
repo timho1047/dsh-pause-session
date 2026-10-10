@@ -15,7 +15,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { apply, inject } from '../../src/client/index.tsx'
 import type { SafeStopPillInjected } from '../../src/client/pill.tsx'
-import { SafeStopGlobalControl, addressingSession } from '../../src/client/global.ts'
+import { SafeStopGlobalControl, addressingSession, parkedAddress } from '../../src/client/global.ts'
 import type { GlobalReading } from '../../src/client/global.ts'
 import { globalStopView, showsPauseControl } from '../../src/client/view.ts'
 import {
@@ -232,6 +232,9 @@ describe('the whole-app status encoding', () => {
       verdict: 'waiting',
       registered: 4,
       safe: 1,
+      // A session id is the host's own data too: the park's own name comes back
+      // exactly, separators and all.
+      parkedAt: 'evening; job',
       draining: ['overnight'],
       // A name is the host's own data: whatever it holds comes back exactly, so
       // a row is never looked up under a name that was folded into another.
@@ -244,6 +247,7 @@ describe('the whole-app status encoding', () => {
     const text = encodeGlobalStatus(spelled)
     const decoded = decodeGlobalStatus(text)
     expect(decoded).toBeDefined()
+    expect(decoded?.parkedAt).toBe('evening; job')
     expect(decoded?.stalled).toEqual(['late; session', 'tab\tand\nnewline', '-'])
     expect(decoded?.unresumable).toEqual(['a, b'])
     expect(decoded?.draining).toEqual(['overnight'])
@@ -279,6 +283,50 @@ describe('the whole-app status encoding', () => {
       safe: 0,
       blind: [],
     })
+  })
+
+  it('names the park in the line even when every phase bucket is empty', () => {
+    // The clean, ordinary park: one session, flushed, with nothing draining,
+    // stalled, unresumable or unread. Every list that used to name a session is
+    // empty here, and the park's own name is the only thing left that says
+    // which transcript its rows belong in.
+    const text = encodeGlobalStatus(status({
+      verdict: 'safe',
+      registered: 1,
+      safe: 1,
+      parkedAt: 'overnight',
+      draining: [],
+    }))
+    expect(text).toContain('parked-at: overnight')
+    const decoded = decodeGlobalStatus(text)
+    expect(decoded?.verdict).toBe('safe')
+    expect(decoded?.safe).toBe(1)
+    expect(decoded?.draining).toEqual([])
+    expect(decoded?.stalled).toEqual([])
+    expect(decoded === undefined ? undefined : parkedAddress(decoded)).toBe(SessionId('overnight'))
+  })
+
+  it('reads an older text with no park name as no address at all', () => {
+    // A reading written before the field existed: it must still decode, and the
+    // absence must not be turned into a session to look up.
+    const older = 'safe-stop all: safe; registered: 1; safe: 1; draining: -; parking: 0'
+      + '; stalled: -; unresumable: -; unread-trees: -; jobs: -; blind: -'
+    const decoded = decodeGlobalStatus(older)
+    expect(decoded?.verdict).toBe('safe')
+    expect(decoded?.safe).toBe(1)
+    expect(decoded?.parkedAt).toBeUndefined()
+    expect(decoded === undefined ? undefined : parkedAddress(decoded)).toBeUndefined()
+
+    // The empty marker a park that owns nothing is written with reads the same
+    // way: no address, rather than a session named "-".
+    const empty = decodeGlobalStatus(encodeGlobalStatus(status({
+      verdict: 'idle',
+      registered: 0,
+      safe: 0,
+      draining: [],
+    })))
+    expect(empty?.parkedAt).toBeUndefined()
+    expect(empty === undefined ? undefined : parkedAddress(empty)).toBeUndefined()
   })
 })
 

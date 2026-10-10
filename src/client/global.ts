@@ -12,17 +12,19 @@
  * to talk through. It picks a user session the host can serve (never a
  * subagent's own session), preferring the one on screen; with no session at
  * all there is nothing to ask, and the control claims nothing rather than
- * inventing an answer. Once the host's own answer names a session the park owns,
- * reads are addressed there instead: a read writes two records into the address
- * session's transcript, and they belong in the session being parked rather than
- * in whatever the user happens to be looking at. Failing that, the session the
+ * inventing an answer. Once the host's own answer names the session the park
+ * belongs to, reads are addressed there instead: a read writes two records into
+ * the address session's transcript, and they belong in the session being parked
+ * rather than in whatever the user happens to be looking at. That name outlives
+ * the phases — a session that drained and parked cleanly names nothing else — so
+ * a clean park is addressed like a moving one. Failing that, the session the
  * last answer reported as registered is remembered, then the one a read was last
  * served through — an address change is the user looking somewhere else, not
  * news about the park, and a park that has emptied out is no reason to start
- * writing rows into every session the user opens next. A remembered address that
- * stops answering (its agent is gone) is forgotten and the read falls back to
- * the session the shell asks with, so a stale address costs an honest answer
- * rather than a control that can never speak again.
+ * writing rows into every session the user opens next. An address that stops
+ * answering (its agent is gone) is forgotten and the read falls back to the next
+ * one, the session the shell asks with last, so a stale address costs an honest
+ * answer rather than a control that can never speak again.
  *
  * Every phase a session reaches announces itself through the registry — a
  * transition re-registers that session's status verb — so a change is what buys
@@ -155,6 +157,22 @@ export function registeredAddress(status: GlobalStatus): SessionId | undefined {
   return draining === undefined ? undefined : draining as SessionId
 }
 
+/**
+ * The session the host names as the park's own, whatever phase the park
+ * reached — the address a whole-app read belongs at.
+ *
+ * This is the fact {@link registeredAddress} cannot carry once a park is clean:
+ * a session that reached `safe` has nothing left to do, so no bucket names it,
+ * and a reader in another window would fall back to whatever session it is
+ * showing. An answer written before this field existed names no session here:
+ * an absent address, never one to guess at.
+ * @param status - the host's last whole-app answer.
+ * @returns the session the park belongs to, or `undefined` when the answer names none.
+ */
+export function parkedAddress(status: GlobalStatus): SessionId | undefined {
+  return status.parkedAt === undefined ? undefined : status.parkedAt as SessionId
+}
+
 /** Owns the published whole-app reading; nothing else writes that state. */
 export class SafeStopGlobalControl {
   /** State source the whole-app contribution binds its selector hook to. */
@@ -163,13 +181,14 @@ export class SafeStopGlobalControl {
   /** The session the shell asked this control through; reads start here. */
   private address: SessionId | undefined
   /**
-   * The last session an answer reported as registered — the park's own address.
+   * The last session an answer reported as registered — the address a read
+   * falls back to when the host's own answer names no parked session, which is
+   * every reading written before that field existed.
    *
-   * `draining` names only what is moving right now, so a park that stopped
-   * moving would stop naming the session it lives in, and the read would fall
-   * back to whatever the user happens to be looking at. Remembering the last
-   * registered session keeps the park's rows in the park's transcript for as
-   * long as the park exists. An empty registry does not clear it: a park whose
+   * The buckets that feed it name only what is still moving, so they say
+   * nothing about a park that finished cleanly; the park's own name is the live
+   * fact, and this memory is what keeps the rows in the park's transcript for an
+   * answer that predates it. An empty registry does not clear it: a park whose
    * sessions stopped moving has not moved out of its sessions.
    */
   private lastRegistered: SessionId | undefined
@@ -275,32 +294,43 @@ export class SafeStopGlobalControl {
   }
 
   /**
-   * The session a read goes through: the one the park lives in, else the one an
-   * aggregate read was last served through, else the session the shell is on
-   * now. The park's own address comes first because a read's rows land in the
-   * transcript it was taken through, and the park — not the reader — is what
-   * they are about.
+   * The session a read goes through: the one the park is still draining, else
+   * the one the host names as the park's own, else the one a read was last
+   * served through, else the session the shell is on now. The park's own address
+   * comes first because a read's rows land in the transcript it was taken
+   * through, and the park — not the reader — is what they are about; its name
+   * survives the clean case, where every bucket above is empty and a park that
+   * finished would otherwise have no address at all.
+   * @param skip - an address this read already tried and could not reach. The
+   * fallback is the next candidate rather than the same one again.
    */
-  private target(): SessionId | undefined {
+  private target(skip?: SessionId): SessionId | undefined {
     const current = this.store.getSnapshot().global
-    const registered = current?.kind === 'reported' ? registeredAddress(current.status) : undefined
-    return registered ?? this.lastRegistered ?? this.served ?? this.address
+    const named = current?.kind === 'reported' ? current.status : undefined
+    const candidates: (SessionId | undefined)[] = [
+      named === undefined ? undefined : registeredAddress(named),
+      named === undefined ? undefined : parkedAddress(named),
+      this.lastRegistered,
+      this.served,
+      this.address,
+    ]
+    return candidates.find(candidate => candidate !== undefined && candidate !== skip)
   }
 
   /**
    * Ask the host for the aggregate through the session a read goes through,
    * with the one fallback an address that stopped answering is worth: the
    * remembered address is forgotten, and the read is taken again through the
-   * session the shell is on. A memory of a session this host no longer holds
-   * would otherwise leave the control unable to say anything at all, and a
-   * single retry is the whole price of keeping it honest.
+   * next one — the session the shell is on at the latest. A memory of a session
+   * this host no longer holds would otherwise leave the control unable to say
+   * anything at all, and a single retry is the whole price of keeping it honest.
    */
   private async readAggregate(): Promise<void> {
     const address = this.target()
     if (address === undefined) return
     if (!await this.readAt(address)) return
-    const fallback = this.target()
-    if (fallback === undefined || fallback === address) return
+    const fallback = this.target(address)
+    if (fallback === undefined) return
     await this.readAt(fallback)
   }
 
@@ -308,7 +338,8 @@ export class SafeStopGlobalControl {
    * Publish one aggregate answer, unless a newer read was requested while this
    * one was in flight: that answer would show a state the host has moved past.
    * A served address is remembered, and one that did not answer is forgotten —
-   * that is what makes the next read fall back rather than ask it again.
+   * that is what makes the read fall back to the next address rather than ask
+   * it again.
    * @param sessionId - the session this read goes through.
    * @returns whether this read came back without an answer; a superseded read is
    * not one, because the newer read already owns the outcome.
@@ -321,10 +352,13 @@ export class SafeStopGlobalControl {
       this.served = sessionId
       const registered = registeredSessions(reading.status)[0]
       if (registered !== undefined) this.lastRegistered = registered as SessionId
-    } else if (this.served === sessionId) {
-      // The address that just failed is not the one to ask again; the target's
-      // next choice is what the retry uses.
-      this.served = undefined
+    } else {
+      // An address this host could not reach is not one to ask again: forgetting
+      // the served address and the remembered park address is what sends the
+      // retry to the next candidate. The park's own name is not forgotten — it
+      // is the host's fact, and the next read may well reach it.
+      if (this.served === sessionId) this.served = undefined
+      if (this.lastRegistered === sessionId) this.lastRegistered = undefined
     }
     this.publish(reading)
     return reading.kind === 'unavailable'

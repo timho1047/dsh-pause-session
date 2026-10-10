@@ -234,6 +234,8 @@ export function mountGlobalStop(
    * The aggregate. Every registered session is accounted for: the ones on
    * their way, the ones that will not get there in this process, the trees
    * that hold work a restart cannot resume, and the jobs nothing here can stop.
+   * The park also names the session it belongs to, so a client can address its
+   * reads there rather than at whatever session it is showing.
    */
   const status = async (): Promise<GlobalStatus> => {
     const phases = new Map<SessionId, LivePark>()
@@ -277,10 +279,19 @@ export function mountGlobalStop(
 
     const unresumable: string[] = []
     const unreadTrees: string[] = []
+    const owners = [...phases.keys()]
+    // The session this park belongs to: the first registered session this
+    // process holds, so a client can address its reads at the park rather than
+    // at whatever session the user is looking at. The buckets above name a
+    // session only while it has work left, so a park that reached `safe` — the
+    // clean, ordinary case — would otherwise name no session at all. A record
+    // this process cannot hold is named only when there is nothing else to
+    // name: it is a true fact about the park, but it cannot answer a read.
+    const parkedAt = owners.find(sessionId => !unheld.has(sessionId)) ?? owners[0]
     // One walk is one catalog read, and the walks do not depend on each other:
     // a read of N registered sessions must not take N catalog round-trips end
     // to end. `walkTree` answers from its per-episode cache when it has one.
-    const trees = await Promise.all([...phases.keys()].map(async sessionId => [sessionId, await walkTree(sessionId)] as const))
+    const trees = await Promise.all(owners.map(async sessionId => [sessionId, await walkTree(sessionId)] as const))
     for (const [sessionId, tree] of trees) {
       if (tree.unresumable) unresumable.push(String(sessionId))
       if (tree.unread) unreadTrees.push(String(sessionId))
@@ -304,12 +315,13 @@ export function mountGlobalStop(
       verdict,
       registered,
       safe,
+      ...parkedAt === undefined ? {} : { parkedAt: String(parkedAt) },
       draining: draining.sort(),
       parking,
       stalled: stalled.sort(),
       unresumable: unresumable.sort(),
       unreadTrees: unreadTrees.sort(),
-      jobs: liveJobs(phases.keys()),
+      jobs: liveJobs(owners),
       blind,
     }
   }

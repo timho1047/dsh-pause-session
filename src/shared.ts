@@ -341,6 +341,22 @@ export interface GlobalStatus {
   /** How many of them reached the flushed park point. */
   readonly safe: number
   /**
+   * The session this park belongs to — the first registered one this host can
+   * hold, whatever phase it reached, so a client can address its reads at the
+   * park instead of at whatever session the user happens to be looking at. A
+   * park whose every record is unreadable here names the first of those: the
+   * name is a fact about the park, and an address that cannot answer is the
+   * client's fallback to take.
+   *
+   * The buckets below name a session only while it has something left to do,
+   * and the clean case — every registered session `safe`, which is the ordinary
+   * one — leaves all of them empty: without this field a park that finished
+   * cleanly names no session at all. `undefined` when the park holds nothing,
+   * and absent from a reading written before this field existed; a client must
+   * not treat either absence as an address.
+   */
+  readonly parkedAt?: string
+  /**
    * Registered sessions still working: a tool is in flight or a turn is between
    * steps. Their park point is announced by the marker commands the park
    * registers, so a reader has nothing to watch here.
@@ -376,6 +392,28 @@ function encodeNames(names: readonly string[]): string {
   return names.length === 0 ? EMPTY_FIELD : names.map(escapeField).join(', ')
 }
 
+/**
+ * Encode one optional session id: the empty marker when the park names none.
+ * @param id - the session id, as the host holds it.
+ * @returns the id as it appears inside an encoded field.
+ */
+function encodeId(id: string | undefined): string {
+  return id === undefined ? EMPTY_FIELD : escapeField(id)
+}
+
+/**
+ * Decode one id previously written by {@link encodeId}.
+ * @param field - the encoded field, escapes included.
+ * @returns the id; `undefined` when the text carries none — an absent field and
+ * the empty marker both mean the answer names no session, and a client that
+ * read either as one would address a session the host never named.
+ */
+function decodeId(field: string | undefined): string | undefined {
+  const text = field?.trim()
+  if (text === undefined || text.length === 0 || text === EMPTY_FIELD) return undefined
+  return unescapeField(text)
+}
+
 /** Decode one list field. */
 function decodeNames(field: string | undefined): string[] {
   const text = field?.trim()
@@ -389,12 +427,13 @@ function decodeNames(field: string | undefined): string[] {
  * Encode one whole-app status for a command result.
  * @param status - the state to publish.
  * @returns the result text, e.g.
- * `safe-stop all: waiting; registered: 3; safe: 1; draining: overnight; parking: 1; stalled: -; unresumable: -; unread-trees: -; jobs: bash-1; blind: -`.
+ * `safe-stop all: waiting; registered: 3; safe: 1; parked-at: overnight; draining: overnight; parking: 1; stalled: -; unresumable: -; unread-trees: -; jobs: bash-1; blind: -`.
  */
 export function encodeGlobalStatus(status: GlobalStatus): string {
   return `${GLOBAL_STATUS_PREFIX}${status.verdict}`
     + `; registered: ${status.registered}`
     + `; safe: ${status.safe}`
+    + `; parked-at: ${encodeId(status.parkedAt)}`
     + `; draining: ${encodeNames(status.draining)}`
     + `; parking: ${status.parking}`
     + `; stalled: ${encodeNames(status.stalled)}`
@@ -424,10 +463,15 @@ export function decodeGlobalStatus(text: string): GlobalStatus | undefined {
     const value = Number(byKey.get(key))
     return Number.isSafeInteger(value) && value >= 0 ? value : 0
   }
+  const parkedAt = decodeId(byKey.get('parked-at'))
   return {
     verdict,
     registered: count('registered'),
     safe: count('safe'),
+    // A text written before this field existed names no parked session, and a
+    // park that holds nothing names none either: both decode as no address
+    // rather than as a session to look up.
+    ...parkedAt === undefined ? {} : { parkedAt },
     draining: decodeNames(byKey.get('draining')),
     // An answer written before this field existed reports no session standing
     // still: the oldest reading is the one with nothing known to watch.

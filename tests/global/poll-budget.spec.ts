@@ -18,7 +18,9 @@
  * costs the press read, the one look that closes the press's own echo window,
  * and one read per announced transition after that — nothing watches the drain
  * itself; and a session the user merely views pays nothing once the park's own
- * address is known.
+ * address is known, which the host's answer names whatever phase the park
+ * reached, so even a park that finished cleanly keeps the reads out of a window
+ * that is showing something else.
  *
  * A change that follows the user's own action is that action's own echo, and
  * the action already read the host: those changes are absorbed for
@@ -40,7 +42,7 @@ import { ACTION_ABSORB_MS, ReadBurst, burstWaits } from '../../src/client/burst.
 import type { BurstPolicy } from '../../src/client/burst.ts'
 import { SafeStopControl } from '../../src/client/control.ts'
 import type { SafeStopState } from '../../src/client/control.ts'
-import { SafeStopGlobalControl, registeredAddress } from '../../src/client/global.ts'
+import { SafeStopGlobalControl, parkedAddress, registeredAddress } from '../../src/client/global.ts'
 import type { GlobalReading, GlobalStopState } from '../../src/client/global.ts'
 import { globalStopView } from '../../src/client/view.ts'
 import {
@@ -52,12 +54,17 @@ import type { GlobalStatus, ParkPhase, TriageRow } from '../../src/shared.ts'
 const ADDRESS = SessionId('poll-address')
 const OTHER = SessionId('unrelated-session')
 
-/** One whole-app status, spelled the way the host spells it. */
+/**
+ * One whole-app status, spelled the way the host spells it: the park names the
+ * first session it holds, whatever phase that session reached, and a park that
+ * holds nothing has no session to name.
+ */
 function status(overrides: Partial<GlobalStatus> = {}): GlobalStatus {
-  return {
+  const spelled: GlobalStatus = {
     verdict: 'waiting',
     registered: 1,
     safe: 0,
+    parkedAt: 'overnight',
     draining: ['overnight'],
     parking: 0,
     stalled: [],
@@ -67,6 +74,7 @@ function status(overrides: Partial<GlobalStatus> = {}): GlobalStatus {
     blind: [],
     ...overrides,
   }
+  return spelled.registered === 0 ? { ...spelled, parkedAt: undefined } : spelled
 }
 
 /** One listed row, as the host would publish it, for the panel's own reads. */
@@ -416,6 +424,77 @@ describe('the park read budget', () => {
     // A verdict that names no registered session has no better address to offer.
     expect(registeredAddress(status())).toBe(SessionId('overnight'))
     expect(registeredAddress(status({ verdict: 'safe', registered: 1, safe: 1, draining: [] }))).toBeUndefined()
+    // The clean case is exactly where the park's own name is the whole address:
+    // no bucket names the session any more, and the park still does.
+    expect(parkedAddress(status({ verdict: 'safe', registered: 1, safe: 1, draining: [] }))).toBe(SessionId('overnight'))
+  })
+
+  it('keeps a clean park\'s reads in the parked session, not in the session the window shows', async () => {
+    vi.useFakeTimers()
+    const { commands, host } = hostDouble()
+    host.answered = status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
+    const control = controls(commands)
+
+    // The window is on a session of its own and reads an idle park through it:
+    // that is the address this control has served a read by. This is the pair
+    // the live test caught — a park in one window, an unrelated session in the
+    // other — with the park already clean by the time this window hears of it.
+    await control.refresh(OTHER)
+    expect(sessionsOf(host, STATE_ALL_COMMAND)).toEqual([String(OTHER)])
+
+    // The park is made elsewhere and reaches `safe`: nothing is draining,
+    // stalled, unresumable or unread, so the park's own name is the only thing
+    // in the answer that says which session it belongs to. The read that
+    // discovers it cannot know that yet — the answer is what tells it.
+    host.answered = status({ verdict: 'safe', registered: 1, safe: 1, draining: [] })
+    control.refreshAll()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(sessionsOf(host, STATE_ALL_COMMAND)).toEqual([String(OTHER), String(OTHER)])
+
+    // The other window resumes the park. This window's next read goes through
+    // the session the park belonged to rather than the one it is showing, even
+    // though the answer at the far end of it is an empty registry: the rows of a
+    // park are the park's business, and the uninvolved session's transcript
+    // gains nothing.
+    host.answered = status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
+    control.refreshAll()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(sessionsOf(host, STATE_ALL_COMMAND), 'a row about the park landed in the uninvolved session')
+      .toEqual([String(OTHER), String(OTHER), 'overnight'])
+    expect(readingOf(control)).toEqual({
+      kind: 'reported',
+      status: status({ verdict: 'idle', registered: 0, safe: 0, draining: [] }),
+    })
+  })
+
+  it('falls back to the session on screen when the park\'s own address stops answering', async () => {
+    vi.useFakeTimers()
+    const { commands, host } = hostDouble()
+    host.answered = status({ verdict: 'safe', registered: 1, safe: 1, draining: [] })
+    const control = controls(commands)
+    await control.refresh(OTHER)
+    expect(sessionsOf(host, STATE_ALL_COMMAND)).toEqual([String(OTHER)])
+
+    // The parked session's agent is gone — a record this process can read but
+    // not execute against. The name is still the host's own answer, so the read
+    // is attempted there and lands on the session the shell is on instead of
+    // leaving the control mute.
+    host.unreachable.add('overnight')
+    control.refreshAll()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(sessionsOf(host, STATE_ALL_COMMAND)).toEqual([String(OTHER), 'overnight', String(OTHER)])
+    expect(readingOf(control)).toEqual({
+      kind: 'reported',
+      status: status({ verdict: 'safe', registered: 1, safe: 1, draining: [] }),
+    })
+
+    // The park's name is the host's fact rather than a memory of this control's,
+    // so it is tried again on the next read. That is the price of a park whose
+    // own session cannot answer: one undeliverable read, then the fallback.
+    control.refreshAll()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(sessionsOf(host, STATE_ALL_COMMAND), 'the fallback lost the park\'s address')
+      .toEqual([String(OTHER), 'overnight', String(OTHER), 'overnight', String(OTHER)])
   })
 
   it('spends nothing when the user opens another session after the park has emptied', async () => {
