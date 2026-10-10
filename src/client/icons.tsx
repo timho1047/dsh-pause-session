@@ -69,3 +69,22 @@ export function CaveatIcon(): ReactNode {
     </svg>
   )
 }
+
+/** 14px stroke icon (currentColor): the chevron that opens the decision list. */
+export function ChevronIcon(): ReactNode {
+  return (
+    <svg
+      aria-hidden="true"
+      width={14}
+      height={14}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M6 15l6-6 6 6" />
+    </svg>
+  )
+}

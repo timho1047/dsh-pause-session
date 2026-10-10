@@ -169,7 +169,9 @@ export interface GlobalHomeOptions {
  */
 export async function mountGlobalHome(caseRoot: string, options: GlobalHomeOptions = {}): Promise<GlobalHome> {
   const ctx = new Context()
-  await mountAgentLoopTestDependencies(ctx)
+  // The subagent runtime injects `workingDirectory`; without it the runtime's
+  // fiber stays pending and the tree walk below silently finds no children.
+  await mountAgentLoopTestDependencies(ctx, { workingDirectory: true })
   await ctx.plugin(JsonlSessionPersistence, { root: sessionRootOf(caseRoot), compression: 'none' })
   await ctx.plugin(CommandRuntime)
   await mountParkStorage(ctx, storageOf(caseRoot))

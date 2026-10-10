@@ -181,6 +181,9 @@ describe('the whole-app control state', () => {
       action: 'none',
       detail: '',
       caveats: [],
+      // The decision list's entry point is part of the same view, and a host
+      // that cannot answer has no list to offer either.
+      unclean: 0,
     })
 
     // A press against a state that could not be read must not pick a verb.

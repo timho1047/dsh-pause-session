@@ -36,6 +36,21 @@ export const STATE_ALL_COMMAND = 'safe-state-all'
 /** Command that reports the receiving session's park state; registered only while it is paused. */
 export const STATUS_COMMAND = 'safe-state'
 
+/** Command that reports every session that did not stop cleanly. */
+export const TRIAGE_COMMAND = 'safe-triage'
+
+/** Command that resumes one session from the decision list exactly as the clean path would. */
+export const TRIAGE_CONTINUE_COMMAND = 'safe-triage-continue'
+
+/** Command that resumes one session from the decision list with the unknown-outcome note. */
+export const TRIAGE_NOTE_COMMAND = 'safe-triage-note'
+
+/** Command that opens one session from the decision list without spending a request. */
+export const TRIAGE_REVIEW_COMMAND = 'safe-triage-review'
+
+/** Command that leaves one session from the decision list exactly as it is. */
+export const TRIAGE_LEAVE_COMMAND = 'safe-triage-leave'
+
 /** Stable definition id of the pause command, matched by identity rather than by copy. */
 export const PAUSE_DEFINITION_ID = 'dsh-safe-stop/pause'
 
@@ -53,6 +68,21 @@ export const STATE_ALL_DEFINITION_ID = 'dsh-safe-stop/state-all'
 
 /** Stable definition id of the status read, matched by identity rather than by copy. */
 export const STATUS_DEFINITION_ID = 'dsh-safe-stop/status'
+
+/** Stable definition id of the decision-list read. */
+export const TRIAGE_DEFINITION_ID = 'dsh-safe-stop/triage'
+
+/** Stable definition id of the decision-list "continue" verb. */
+export const TRIAGE_CONTINUE_DEFINITION_ID = 'dsh-safe-stop/triage-continue'
+
+/** Stable definition id of the decision-list "continue with the unknown-outcome note" verb. */
+export const TRIAGE_NOTE_DEFINITION_ID = 'dsh-safe-stop/triage-note'
+
+/** Stable definition id of the decision-list "open without activating" verb. */
+export const TRIAGE_REVIEW_DEFINITION_ID = 'dsh-safe-stop/triage-review'
+
+/** Stable definition id of the decision-list "leave it alone today" verb. */
+export const TRIAGE_LEAVE_DEFINITION_ID = 'dsh-safe-stop/triage-leave'
 
 /** First token of every encoded status, so a descriptor is never parsed by accident. */
 export const STATUS_PREFIX = 'safe-stop: '
@@ -244,4 +274,197 @@ export function decodeGlobalStatus(text: string): GlobalStatus | undefined {
     jobs: decodeNames(byKey.get('jobs')),
     blind: decodeNames(byKey.get('blind')).filter((spot): spot is GlobalBlindSpot => spot === 'trees' || spot === 'jobs'),
   }
+}
+
+/**
+ * First token of every encoded decision list. Separate from the per-session and
+ * whole-app status prefixes on purpose, for the same reason those two are
+ * separate: one decoder must never read another's text.
+ */
+export const TRIAGE_PREFIX = 'safe-stop triage: '
+
+/** How one decision-list row was read out of the session's own stored log. */
+export type TriageReading = 'read' | 'unreadable'
+
+/**
+ * What one stored log says about a tool call whose outcome was never recorded.
+ *
+ * The call event itself is durable; the harness turns every such call into a
+ * synthetic `TOOL_OUTCOME_UNKNOWN` error result when it next reads the log, and
+ * this is that same derivation taken without writing anything back. The marker
+ * itself is never in the stored log of a session still on the list: the resume
+ * that appends it is also the resume that drops the record putting it here.
+ */
+export interface TriageTrace {
+  /** The tool's own name, from the call event the model produced. */
+  readonly tool: string
+  /** The provider-issued id pairing the call with the result that never arrived. */
+  readonly callId: string
+}
+
+/**
+ * One session that did not stop cleanly, as the decision list presents it.
+ *
+ * Every field is read from the session's own log or from the durable park
+ * record; nothing here is derived from the fact that the session is merely
+ * listed. `reading` is the honesty field: a log this host could not read says
+ * `unreadable` and carries no facts, rather than an empty row that would read
+ * as "no traces".
+ */
+export interface TriageRow {
+  /** The parked session. */
+  readonly sessionId: string
+  /** The durable park outcome; never `safe`, which is the clean path's business. */
+  readonly phase: Exclude<ParkPhase, 'safe'>
+  /** When that outcome was last written. */
+  readonly updatedAt: number
+  /** Whether the facts below came from the log. */
+  readonly reading: TriageReading
+  /** What the stored log's last event was, with the step it belongs to when it has one. */
+  readonly lastEvent?: string
+  /** The turn and step that last event belongs to. */
+  readonly turn?: number
+  readonly step?: number
+  /** Tools whose call event is durable and whose result is not — the unknown outcomes. */
+  readonly traces: readonly TriageTrace[]
+  /** Whether the stored log ends owing the model an answer. */
+  readonly owed: boolean
+  /**
+   * Whether the host could hand this session its owed request at all: a log it
+   * could not read, or one whose last request recorded no route, cannot be
+   * woken — which is a fact about the entry, not a refusal of the user's choice.
+   */
+  readonly wakeable: boolean
+}
+
+/** The decision list: what did not stop cleanly, and each row's facts. */
+export interface TriageList {
+  /** Every listed session, in registry order. */
+  readonly rows: readonly TriageRow[]
+}
+
+/** The four decisions the list offers for one row. */
+export const TRIAGE_ACTIONS = ['continue', 'note', 'review', 'leave'] as const
+
+/** One decision the list offers. */
+export type TriageAction = (typeof TRIAGE_ACTIONS)[number]
+
+/** How one row is spelled in the published list; the wake field's state when the host can hand over the owed request. */
+const WAKE_YES = 'yes'
+
+/** Field text for an empty name list, so a field is never silently absent. */
+const NONE = 'none'
+
+/**
+ * One field's text: a fact whose spelling may contain the two separators is
+ * folded, because session ids and tool names are the host's data and the
+ * encoding is the only thing that must survive being parsed.
+ */
+function plainField(text: string): string {
+  return text.replace(/[;,\n]/g, '_')
+}
+
+/** One row's traces, as a list of `tool/callId` items. */
+function encodeTraces(traces: readonly TriageTrace[]): string {
+  if (traces.length === 0) return NONE
+  return traces
+    .map(trace => `${plainField(trace.tool)}/${plainField(trace.callId)}`)
+    .join(', ')
+}
+
+/** Decode {@link encodeTraces}; an item without a tool name is not a trace. */
+function decodeTraces(field: string | undefined): TriageTrace[] {
+  const text = field?.trim()
+  if (text === undefined || text.length === 0 || text === NONE) return []
+  return text.split(',').flatMap((item) => {
+    const entry = item.trim()
+    const at = entry.indexOf('/')
+    if (at <= 0) return []
+    return [{ tool: entry.slice(0, at), callId: entry.slice(at + 1) }]
+  })
+}
+
+/** One row's stop position, encoded as `<last event>` plus the step it belongs to. */
+function encodeStop(row: TriageRow): string {
+  if (row.lastEvent === undefined) return NONE
+  const position = row.turn === undefined
+    ? ''
+    : `/turn ${String(row.turn)}${row.step === undefined ? '' : ` step ${String(row.step)}`}`
+  return `${plainField(row.lastEvent)}${position}`
+}
+
+/**
+ * Encode one decision list for a command result.
+ * @param list - the rows to publish.
+ * @returns the result text, e.g. `safe-stop triage: 1; row: overnight; phase: draining; stopped: tool/call/turn 1 step 1; tools: gated; wake: yes`.
+ */
+export function encodeTriageList(list: TriageList): string {
+  const head = `${TRIAGE_PREFIX}${String(list.rows.length)}`
+  return list.rows.reduce((text, row) => {
+    const stopped = row.reading === 'unreadable' ? 'unreadable' : encodeStop(row)
+    return `${text}; row: ${plainField(row.sessionId)}`
+      + `; phase: ${row.phase}`
+      + `; stopped: ${stopped}`
+      + `; traces: ${row.reading === 'unreadable' ? NONE : encodeTraces(row.traces)}`
+      + `; tools: ${row.reading === 'unreadable' || row.traces.length === 0 ? NONE : encodeNames(row.traces.map(trace => trace.tool))}`
+      + `; owed: ${row.owed ? WAKE_YES : 'no'}`
+      + `; wake: ${row.wakeable ? WAKE_YES : 'no'}`
+  }, head)
+}
+
+/** Decode one field of an encoded row, or `undefined` when the row does not carry it. */
+function fieldOf(fields: readonly string[], key: string): string | undefined {
+  const prefix = `${key}:`
+  const at = fields.findIndex(field => field.trim().startsWith(prefix))
+  return at < 0 ? undefined : fields[at]?.trim().slice(prefix.length).trim()
+}
+
+/**
+ * Decode a decision list previously written by {@link encodeTriageList}.
+ * @param text - a command result's text.
+ * @returns the list, or `undefined` when this text carries none.
+ */
+export function decodeTriageList(text: string): TriageList | undefined {
+  if (!text.startsWith(TRIAGE_PREFIX)) return undefined
+  const [head = '', ...rest] = text.slice(TRIAGE_PREFIX.length).split(';')
+  if (!Number.isSafeInteger(Number(head.trim())) || Number(head.trim()) < 0) return undefined
+  const rows: TriageRow[] = []
+  let fields: string[] = []
+  const flush = (): void => {
+    if (fields.length === 0) return
+    const sessionId = fieldOf(fields, 'row')
+    const phase = fieldOf(fields, 'phase')
+    if (sessionId === undefined || phase === undefined || phase === 'safe') return
+    const stopped = fieldOf(fields, 'stopped')
+    const reading: TriageReading = stopped === 'unreadable' ? 'unreadable' : 'read'
+    // The event name may itself contain a slash (`tool/call`), so the name is
+    // matched lazily and the `/turn` suffix is what ends it. An unreadable row
+    // has no event to name, so it is not run through this at all.
+    const position = reading === 'unreadable'
+      ? null
+      : /^(.*?)(?:\/turn (\d+)(?: step (\d+))?)?$/.exec(stopped ?? '')
+    rows.push({
+      sessionId,
+      phase: phase as TriageRow['phase'],
+      updatedAt: 0,
+      reading,
+      ...position === null
+        ? {}
+        : {
+          lastEvent: position[1] ?? '',
+          turn: Number(position[2]),
+          ...position[3] === undefined ? {} : { step: Number(position[3]) },
+        },
+      traces: reading === 'unreadable' ? [] : decodeTraces(fieldOf(fields, 'traces')),
+      owed: fieldOf(fields, 'owed') === WAKE_YES,
+      wakeable: fieldOf(fields, 'wake') === WAKE_YES,
+    })
+    fields = []
+  }
+  for (const field of rest) {
+    if (field.trim().startsWith('row:')) flush()
+    fields.push(field)
+  }
+  flush()
+  return { rows }
 }

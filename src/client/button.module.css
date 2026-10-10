@@ -164,3 +164,144 @@
     transition: none;
   }
 }
+
+/* The decision list's own entry point: a second, quieter control beside the
+   pill, present only while something did not stop cleanly. It sits before the
+   pill in the flow so the pill itself never moves when the count appears. */
+.dsssPillTriage {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-state-warn-primary, var(--dsw-alias-label-primary));
+  background: var(--dsw-alias-bg-layer-2);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 999px;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 0.14);
+  cursor: pointer;
+  user-select: none;
+}
+
+.dsssPillTriage:hover {
+  color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-border-l2);
+}
+
+.dsssPillTriage:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 1px;
+}
+
+/* The panel opens upward from the pill's corner: the pill sits at the frame's
+   bottom, so a downward panel would be clipped by the viewport. */
+.dsssPillPanel {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(52ch, calc(100vw - 48px));
+  max-height: min(60vh, 420px);
+  padding: 10px 12px;
+  overflow-y: auto;
+  text-align: left;
+  background: var(--dsw-alias-bg-layer-2);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.22);
+}
+
+.dsssPillPanelHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.dsssPillPanelNote {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.dsssPillRows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dsssPillRow {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 6px;
+}
+
+.dsssPillRowHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dsssPillRowId {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.dsssPillRowPhase {
+  flex: none;
+  font-size: 12px;
+  color: var(--dsw-alias-state-warn-primary, var(--dsw-alias-label-primary));
+}
+
+.dsssPillRowFacts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.dsssPillRowActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+.dsssPillAction {
+  padding: 3px 8px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-secondary);
+  background: transparent;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.dsssPillAction:hover {
+  color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-border-l2);
+}
+
+.dsssPillAction:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 1px;
+}

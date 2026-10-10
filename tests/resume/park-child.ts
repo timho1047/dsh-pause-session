@@ -5,7 +5,7 @@
 // from it.
 //
 // Usage: node --experimental-transform-types tests/resume/park-child.ts \
-//          <storageRoot> <sessionRoot> <sessionId> <mode> <route>
+//          <storageRoot> <sessionRoot> <sessionId> <mode> <route> [flushBeforeKill]
 //
 // Modes, each ending in the durable park outcome the parent needs:
 //   clean        paused at the gate with an input the model still owes an
@@ -17,9 +17,19 @@
 //                request standing at the gate is the one that answers the tool
 //                results — the park point the whole gate exists for.
 //   draining     paused while a tool is in flight, so the park never finished.
+//   pair         two calls in one step: the first finishes, the second is still
+//                in flight when the process dies, so the log holds one durable
+//                result and one call the harness must synthesize an outcome for.
 //   parking      paused and standing still, with the session-level flush still
 //                open, so the durable promise is not kept either.
 //   flush-failed paused, but the session-level flush failed.
+//
+// `flushBeforeKill` (optional, default true) makes the session-level checkpoint
+// the request path performs on its own before the process is killed. A real
+// process reaches that checkpoint on its own schedule; a fixture that skipped it
+// would leave NOTHING on disk for an unclean park — no log, no fact to read, and
+// no session to bring back — which is a different case from the one under study.
+// The suites that measure what is NOT durable pass `false` explicitly.
 //
 // stdout carries one RESUME_READY line written synchronously, with the parked
 // session's phase and — for `clean` — the request that was standing at the
@@ -49,19 +59,32 @@ import { mountParkStorage } from '../registry/storage.ts'
 import { GOAL_OBJECTIVE, PENDING_INPUT } from './case.ts'
 import type { ParkMode } from './case.ts'
 
-const [registryRoot, sessionRoot, rawId, rawMode, route = 'deepseek-official'] = process.argv.slice(2)
+const [registryRoot, sessionRoot, rawId, rawMode, route = 'deepseek-official', rawFlush = 'true'] = process.argv.slice(2)
 if (registryRoot === undefined || sessionRoot === undefined || rawId === undefined || rawMode === undefined) {
   console.error('usage: park-child.ts <storageRoot> <sessionRoot> <sessionId> <mode> <route>')
   process.exit(2)
 }
 const id = SessionId(rawId)
 const mode = rawMode as ParkMode
+const flushBeforeKill = rawFlush !== 'false'
 
 /** One assistant response carrying a single tool call. */
 function toolCallResponse(callId: string, toolName: string, args: object): StreamChunk[] {
   return [
     { type: 'block-start', index: 0, blockType: 'tool-call' },
     { type: 'block-end', index: 0, block: { type: 'tool-call', id: ToolCallId(callId), name: toolName, arguments: JSON.stringify(args) } },
+    { type: 'usage', usage: { inputTokens: 5, outputTokens: 5 } },
+    { type: 'finish', reason: { kind: 'tool-calls' } },
+  ]
+}
+
+/** One assistant response carrying two tool calls in one step. */
+function pairCallResponse(ids: readonly string[], toolName: string): StreamChunk[] {
+  return [
+    { type: 'block-start', index: 0, blockType: 'tool-call' },
+    { type: 'block-end', index: 0, block: { type: 'tool-call', id: ToolCallId(ids[0] ?? ''), name: toolName, arguments: JSON.stringify({ id: '1' }) } },
+    { type: 'block-start', index: 1, blockType: 'tool-call' },
+    { type: 'block-end', index: 1, block: { type: 'tool-call', id: ToolCallId(ids[1] ?? ''), name: toolName, arguments: JSON.stringify({ id: '2' }) } },
     { type: 'usage', usage: { inputTokens: 5, outputTokens: 5 } },
     { type: 'finish', reason: { kind: 'tool-calls' } },
   ]
@@ -79,7 +102,9 @@ const harness = await mountAgentLoopTestHarness(ctx)
 
 const provider = new FakeProvider(mode === 'draining' || mode === 'tool-result'
   ? [toolCallResponse('call-1', 'gated', { id: '1' }), textResponse('after the tool'), textResponse('woken answer')]
-  : [textResponse('first answer'), textResponse('held answer'), textResponse('woken answer')])
+  : mode === 'pair'
+    ? [pairCallResponse(['call-fast', 'call-slow'], 'gated'), textResponse('resumed after the tools'), textResponse('woken answer')]
+    : [textResponse('first answer'), textResponse('held answer'), textResponse('woken answer')])
 ctx.llm.registerAdapter([route], provider)
 const agent = await harness.create(id, { provider: route, model: 'model' })
 
@@ -95,12 +120,35 @@ let toolStarted = false
 let releaseTool: () => void = () => {}
 /** Set when the park's own session-level checkpoint is entered. */
 let flushEntered = false
+/** `pair` only: whether the first call's result is durably recorded and the second is still running. */
+let fastDone = false
+let slowStarted = false
 if (mode === 'draining' || mode === 'tool-result') {
   ctx.tools.register(defineContentToolFixture({
     name: 'gated',
     description: 'blocks until the child lets it finish',
     parameters: { id: { type: 'string', required: true } },
     async execute() {
+      toolStarted = true
+      await new Promise<void>((resolve) => { releaseTool = resolve })
+      return [{ type: 'text', text: 'tool done' }]
+    },
+  }))
+}
+if (mode === 'pair') {
+  // The first call finishes on its own; the second never does, so the log ends
+  // with one recorded result and one call whose outcome the world knows and the
+  // log does not.
+  ctx.tools.register(defineContentToolFixture({
+    name: 'gated',
+    description: 'one call returns at once, the other never does',
+    parameters: { id: { type: 'string', required: true } },
+    async execute(args) {
+      if (args.id !== '2') {
+        fastDone = true
+        return [{ type: 'text', text: 'fast tool done' }]
+      }
+      slowStarted = true
       toolStarted = true
       await new Promise<void>((resolve) => { releaseTool = resolve })
       return [{ type: 'text', text: 'tool done' }]
@@ -184,6 +232,18 @@ if (mode === 'clean') {
   await until(() => toolStarted, 'the tool in flight')
   await pause()
   await untilPhase('draining')
+} else if (mode === 'pair') {
+  agent.followup(createUserMessage({ content: [{ type: 'text', text: 'run both tools' }], source: { kind: 'user' } }))
+  await until(() => fastDone && slowStarted, 'the first result recorded and the second call in flight')
+  // The first call's result has to be on disk for the morning read to tell it
+  // apart from the call that never landed; the park's own flush only covers a
+  // session that reached the park point, which this one never does.
+  await ctx.sessions.flush(agent.session)
+  // Paused with one call already answered and the other still running: the
+  // park can never reach its point, and killing here leaves exactly the pair
+  // the morning list has to tell apart.
+  await pause()
+  await untilPhase('draining')
 } else if (mode === 'parking') {
   await pause()
   await until(() => flushEntered, 'the park checkpoint to be dispatched')
@@ -195,9 +255,10 @@ if (mode === 'clean') {
 // The park flush covered the session as it stood at the park point; this child
 // dies without unwinding, so anything appended after that point is made
 // durable here rather than left to the process that will never come back. The
-// modes that are about a park that did NOT complete have nothing to make
-// durable — one has a tool in flight, the other a flush that always fails.
-if (mode === 'clean' || mode === 'goal' || mode === 'tool-result') await ctx.sessions.flush(agent.session)
+// two modes whose subject IS the flush (`parking` holds it open, `flush-failed`
+// makes it fail) skip it on purpose — there the checkpoint is the thing under
+// test, not a fixture detail, and running it here would hang or lie.
+if (flushBeforeKill && mode !== 'parking' && mode !== 'flush-failed') await ctx.sessions.flush(agent.session)
 
 const held = mode === 'tool-result' ? seen[1] : seen[0]
 const request = held === undefined ? undefined : {

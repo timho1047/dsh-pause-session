@@ -158,6 +158,8 @@ export function apply(ctx: ClientContext): void {
           hooks: { safeStopGlobal: globalControl.store },
           refresh: (sessionId) => { void globalControl.refresh(sessionId) },
           toggle: (sessionId) => { void globalControl.toggle(sessionId) },
+          setPanel: (open) => { globalControl.setPanel(open) },
+          decide: (sessionId, action) => { void globalControl.decide(sessionId, action) },
         }),
       },
       SafeStopPill,

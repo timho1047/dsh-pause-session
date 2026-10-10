@@ -39,6 +39,22 @@ import type { ParkRegistry } from './registry.js'
 /** The one wake content a route that keeps an empty user message is given. */
 export const WAKE_MARKER = '.'
 
+/**
+ * How one resume asks the loop for the request it owes the session:
+ *
+ * - `silent`: the clean path's wake, whose content leaves the wire unchanged.
+ * - `message`: the decision list's "continue, and say the tool outcome is
+ *   unknown" — user-visible text on the wire by construction, and the only
+ *   resume that is not invisible.
+ * - `none`: no wake at all. The session comes back from its stored log and
+ *   nothing is asked of the model, which is what "open it for me to look at"
+ *   costs: no request, nothing spent.
+ */
+export type WakeRequest =
+  | { readonly kind: 'silent' }
+  | { readonly kind: 'message'; readonly text: string }
+  | { readonly kind: 'none' }
+
 /** Result copy for a resumed session; the model never sees it. */
 export const RESUMED_TEXT = 'This session resumed from where it paused.'
 
@@ -110,9 +126,27 @@ export interface ResumePath {
   /**
    * Resume one session the registry remembers.
    * @param sessionId - the session to resume.
+   * @param request - which wake this resume delivers; see {@link WakeRequest}.
+   * @param parentId - the direct parent a batch release already brought back, when there is one.
    * @returns what happened, and the copy for whoever asked.
    */
-  resumeSession(sessionId: SessionId): Promise<ResumeAttempt>
+  resumeSession(sessionId: SessionId, request: WakeRequest, parentId?: SessionId): Promise<ResumeAttempt>
+  /**
+   * Resume one session the decision list officially owns — a record that is
+   * known NOT to be clean, which the clean path above must refuse and this entry
+   * exists to carry out. Same release order, same wake vocabulary.
+   * @param sessionId - the listed session to bring back.
+   * @param request - which wake the decision delivers; see {@link WakeRequest}.
+   * @param finalize - whether the decision continues the session (`'release'`) or only opens it (`'review'`).
+   * @param parentId - the direct parent a batch release already brought back, when there is one.
+   * @returns what happened, and the copy for whoever asked.
+   */
+  decideUnclean(
+    sessionId: SessionId,
+    request: WakeRequest,
+    finalize: 'release' | 'review',
+    parentId?: SessionId,
+  ): Promise<ResumeAttempt>
   /**
    * Resume every session the registry remembers, clean ones only. One session's
    * failure never stops the others.
@@ -208,16 +242,23 @@ export function installResumePath(
   /**
    * Ask the loop for the request it owes this session. Nothing is woken when a
    * request is already standing at the gate or the loop is already running: the
-   * continuation is in flight, and a second wake would duplicate it.
+   * continuation is in flight, and a second wake would duplicate it. The content
+   * is the route's business only for the silent wake; a note is the user's
+   * decision and goes on the wire as written, on every route.
    * @param agent - the live agent to wake.
+   * @param request - which wake this resume delivers.
    * @returns whether a wake input was delivered.
    */
-  const wake = (agent: Agent): boolean => {
+  const wake = (agent: Agent, request: WakeRequest): boolean => {
+    if (request.kind === 'none') return false
     if (gate.isHeld(agent.id) || agent.status !== 'idle') return false
     if (!owedReply(agent.session)) return false
     const provider = routeOf(agent.session)?.provider
     if (provider === undefined) return false
-    agent.followup(createUserMessage({ content: wakeContent(provider), source: { kind: 'user' } }))
+    const content: ContentBlock[] = request.kind === 'message'
+      ? [{ type: 'text', text: request.text }]
+      : wakeContent(provider)
+    agent.followup(createUserMessage({ content, source: { kind: 'user' } }))
     return true
   }
 
@@ -250,13 +291,27 @@ export function installResumePath(
    * gone, so a record that cannot be dropped leaves the session parked rather
    * than silently running.
    * @param sessionId - the parked session to bring back.
+   * @param request - which wake the decision delivers; see {@link WakeRequest}.
+   * @param finalize - whether this resume ends the park (`'release'`) or only
+   * opens the session for reading (`'review'`). Only a release drops the durable
+   * record and opens the gate; a review leaves both exactly as they were,
+   * because the session has not been continued and is still held.
    * @param rearm - whether the record's goal opt-out allows re-opening its goal.
    * @param parentId - the direct parent a batch release already brought back,
    * when there is one. A subagent child resumed under its live parent is the
    * shape the harness's own cold resume uses; with no live parent the session
    * comes back on its own, which is all that can be done with it.
    */
-  const activate = async (sessionId: SessionId, rearm: boolean, parentId?: SessionId): Promise<ResumeAttempt> => {
+  const activate = async (
+    sessionId: SessionId,
+    request: WakeRequest,
+    finalize: 'release' | 'review',
+    rearm: boolean,
+    parentId?: SessionId,
+  ): Promise<ResumeAttempt> => {
+    // Continuing a session is what may spend its goal's rounds; opening one to
+    // look at it is not, so a review never re-opens a goal either.
+    const mayRearm = finalize === 'release' && rearm
     const parent = parentId === undefined ? undefined : ctx.agents.get(parentId)
     let agent: Agent
     try {
@@ -277,8 +332,17 @@ export function installResumePath(
     }
     ensureRoute(agent)
     // Delivered while the pause still holds the gate, so the request it builds
-    // waits there and leaves only once the durable record does.
-    wake(agent)
+    // waits there and leaves only once the durable record does. `none` builds
+    // no request at all: the session is open for reading, and the model is owed
+    // nothing new.
+    // Whether that produced a wake says nothing about the release. A wake can
+    // be refused because the log owes no answer at all (a session parked while
+    // idle) or because the loop was already running; the user's decision to
+    // continue is what releases the session in every one of those cases.
+    wake(agent, request)
+    // A review ends here: the session is open and held, and the record that
+    // holds it is still the user's to decide on.
+    if (finalize === 'review') return { sessionId, resumed: true, answer: { kind: 'success', text: RESUMED_TEXT } }
     try {
       await registry.forget(sessionId)
     } catch (error: unknown) {
@@ -286,11 +350,60 @@ export function installResumePath(
       return { sessionId, resumed: false, refusal: 'unrecorded', answer: { kind: 'error', text: UNRECORDED_TEXT } }
     }
     gate.resume(sessionId)
-    if (rearm) rearmGoal(agent)
+    if (mayRearm) rearmGoal(agent)
     return { sessionId, resumed: true, answer: { kind: 'success', text: RESUMED_TEXT } }
   }
 
-  const resumeSession = async (sessionId: SessionId, parentId?: SessionId): Promise<ResumeAttempt> => {
+  /**
+   * Load one unclean session back from its stored log.
+   *
+   * This is the morning list's own entry point, and it exists precisely because
+   * the clean path must keep refusing these records: the refusal is the clean
+   * path's guarantee, not a guard this entry can borrow. A user who has read the
+   * row and chosen one of the three decisions that resume it has made the
+   * decision the clean path is not allowed to make for them. The release order
+   * is the same one: the durable record goes first, then the gate — so a record
+   * that cannot be dropped leaves the session parked.
+   * @param sessionId - the listed session to bring back.
+   * @param request - which wake the decision delivers; see {@link WakeRequest}.
+   * @param parentId - the direct parent a batch release already brought back, when there is one.
+   * @returns what happened, and the copy for whoever asked.
+   */
+  const decideUnclean = async (
+    sessionId: SessionId,
+    request: WakeRequest,
+    finalize: 'release' | 'review',
+    parentId?: SessionId,
+  ): Promise<ResumeAttempt> => {
+    const record = registry.get(sessionId)
+    if (record === undefined) {
+      return { sessionId, resumed: false, refusal: 'not-parked', answer: { kind: 'success', text: NOT_PARKED_TEXT } }
+    }
+    const live = ctx.agents.get(sessionId)
+    if (live === undefined) return await activate(sessionId, request, finalize, record.rearmGoal, parentId)
+    if (!gate.isPaused(sessionId)) {
+      // Something else already released this session; there is nothing this
+      // path could do that would not be a second resume.
+      return { sessionId, resumed: true, answer: { kind: 'success', text: RESUMED_TEXT } }
+    }
+    const adopted = deps.adopted(sessionId)
+    // An adopted pause with nothing standing at the gate has no continuation to
+    // release: the process that built that request is gone, so the decision's
+    // own wake is what asks for one.
+    if (adopted) {
+      ensureRoute(live)
+      wake(live, request)
+    }
+    if (finalize === 'review') return { sessionId, resumed: true, answer: { kind: 'success', text: RESUMED_TEXT } }
+    const released = await deps.release(sessionId, RESUMED_TEXT)
+    if (released.kind === 'error') {
+      return { sessionId, resumed: false, refusal: 'unrecorded', answer: released }
+    }
+    if (adopted && record.rearmGoal) rearmGoal(live)
+    return { sessionId, resumed: true, answer: released }
+  }
+
+  const resumeSession = async (sessionId: SessionId, request: WakeRequest, parentId?: SessionId): Promise<ResumeAttempt> => {
     const record = registry.get(sessionId)
     const live = ctx.agents.get(sessionId)
 
@@ -305,7 +418,7 @@ export function installResumePath(
       // to release: the process that built that request is gone.
       if (adopted) {
         ensureRoute(live)
-        wake(live)
+        wake(live, request)
       }
       const released = await deps.release(sessionId, RESUMED_TEXT)
       if (released.kind === 'error') {
@@ -325,7 +438,7 @@ export function installResumePath(
     if (record.phase !== 'safe') {
       return { sessionId, resumed: false, refusal: 'not-clean', answer: { kind: 'error', text: UNCLEAN_TEXT } }
     }
-    return await activate(sessionId, record.rearmGoal, parentId)
+    return await activate(sessionId, request, 'release', record.rearmGoal, parentId)
   }
 
   /**
@@ -379,6 +492,7 @@ export function installResumePath(
 
   return {
     resumeSession,
+    decideUnclean,
     resumeParked: async () => {
       const release = await releaseOrder(registry.list().map(entry => entry.sessionId))
       const attempts: ResumeAttempt[] = []
@@ -386,7 +500,7 @@ export function installResumePath(
         // One release per level and no concurrency cap inside it: the levels
         // are the milliseconds a child's wake needs, not a queue.
         attempts.push(...await Promise.all(level.map(sessionId =>
-          resumeSession(sessionId, release.parents.get(sessionId)))))
+          resumeSession(sessionId, { kind: 'silent' }, release.parents.get(sessionId)))))
       }
       return attempts
     },

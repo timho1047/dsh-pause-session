@@ -8,9 +8,11 @@
  * @module dsh-safe-stop/client/view
  */
 
-import type { GlobalReading } from './global.js'
+import type { GlobalReading, TriageReading } from './global.js'
 import type { SafeStopReading } from './control.js'
 import type { SafeStopKey } from './locales.js'
+import type { TriageRow } from '../shared.js'
+import type { TriageAction } from '../shared.js'
 
 /** What one reading renders as. */
 export interface SafeStopView {
@@ -75,6 +77,81 @@ export interface GlobalCaveat {
 /** Which verb a whole-app press runs. */
 export type GlobalAction = 'stop-all' | 'resume-all' | 'none'
 
+/** One decision as the list renders it. */
+export interface TriageActionView {
+  /** The decision this button takes. */
+  readonly action: TriageAction
+  /** Visible label. */
+  readonly labelKey: SafeStopKey
+  /** What it does, for the accessible name. */
+  readonly ariaKey: SafeStopKey
+}
+
+/** The four decisions, in the order a user reads them: least to most cautious. */
+export const TRIAGE_ACTION_VIEWS: readonly TriageActionView[] = [
+  { action: 'continue', labelKey: 'triage.continue', ariaKey: 'triage.continue.aria' },
+  { action: 'note', labelKey: 'triage.note', ariaKey: 'triage.note.aria' },
+  { action: 'review', labelKey: 'triage.review', ariaKey: 'triage.review.aria' },
+  { action: 'leave', labelKey: 'triage.leave', ariaKey: 'triage.leave.aria' },
+]
+
+/** One listed session, as the panel renders it. */
+export interface TriageRowView {
+  /** Host data, rendered verbatim. */
+  readonly sessionId: string
+  /** The durable outcome, as a word. */
+  readonly phaseKey: SafeStopKey
+  /** Stop position: the event the log ends on and the step it belongs to. */
+  readonly stopped?: string
+  /** The tools whose outcomes were never recorded. */
+  readonly unknownTools: readonly string[]
+  /** Whether the host said it can hand this session the request it owes. */
+  readonly wakeable: boolean
+  /** Whether the log could be read at all. */
+  readonly readable: boolean
+}
+
+/** What the decision-list panel renders. */
+export interface TriageView {
+  /** Whether the panel has anything to show; a host that cannot answer shows nothing. */
+  readonly visible: boolean
+  /** Whether any listed session can actually be continued. */
+  readonly rows: readonly TriageRowView[]
+}
+
+/** The word each non-clean phase is shown as. */
+const PHASE_KEY: Readonly<Record<TriageRow['phase'], SafeStopKey>> = {
+  draining: 'triage.phase.draining',
+  parking: 'triage.phase.parking',
+  'flush-failed': 'triage.phase.flushFailed',
+}
+
+/**
+ * Map one decision-list reading to its view.
+ * @param reading - the host-reported list, or `undefined` before the panel asked.
+ * @returns the rows as the panel renders them.
+ */
+export function triageView(reading: TriageReading | undefined): TriageView {
+  if (reading === undefined || reading.kind === 'unavailable') return { visible: false, rows: [] }
+  return {
+    visible: true,
+    rows: reading.rows.map(row => ({
+      sessionId: row.sessionId,
+      phaseKey: PHASE_KEY[row.phase],
+      ...row.lastEvent === undefined
+        ? {}
+        : {
+          stopped: row.turn === undefined
+            ? row.lastEvent
+            : `${row.lastEvent} · turn ${String(row.turn)}${row.step === undefined ? '' : ` step ${String(row.step)}`}`,
+        },
+      unknownTools: row.traces.map(trace => trace.tool),
+      wakeable: row.wakeable,
+      readable: row.reading === 'read',
+    })),
+  }
+}
+
 /** What the whole-app reading renders as. */
 export interface GlobalStopView {
   /** Whether the control renders at all; a control with no host answer claims nothing. */
@@ -92,6 +169,8 @@ export interface GlobalStopView {
   readonly action: GlobalAction
   /** Host numbers, rendered verbatim beside the label. */
   readonly detail: string
+  /** How many decisions are waiting; shown on the panel's own entry point. */
+  readonly unclean: number
   /** Named facts the user must not miss; rendered on the tooltip. */
   readonly caveats: readonly GlobalCaveat[]
 }
@@ -103,12 +182,12 @@ export interface GlobalStopView {
  */
 export function globalStopView(reading: GlobalReading | undefined): GlobalStopView {
   if (reading === undefined) {
-    return { visible: false, enabled: false, ariaKey: 'all.checking.aria', action: 'none', detail: '', caveats: [] }
+    return { visible: false, enabled: false, ariaKey: 'all.checking.aria', action: 'none', detail: '', caveats: [], unclean: 0 }
   }
   // A host that cannot answer gets no control: this plugin never renders a
   // button whose state it would have to invent.
   if (reading.kind === 'unavailable') {
-    return { visible: false, enabled: false, ariaKey: 'unavailable.aria', action: 'none', detail: '', caveats: [] }
+    return { visible: false, enabled: false, ariaKey: 'unavailable.aria', action: 'none', detail: '', caveats: [], unclean: 0 }
   }
   const { status } = reading
   const caveats: GlobalCaveat[] = []
@@ -125,7 +204,10 @@ export function globalStopView(reading: GlobalReading | undefined): GlobalStopVi
   if (verdict !== 'safe' && status.stalled.length > 0 && status.draining.length > 0) {
     caveats.push({ key: 'all.caveat.stalled', names: status.stalled })
   }
-  const base = { visible: true, enabled: true, caveats } as const
+  // The whole-app verdict calls these "not safe"; the list is where the user
+  // decides them, so the panel's entry point counts the same set.
+  const unclean = status.stalled.length
+  const base = { visible: true, enabled: true, caveats, unclean } as const
   switch (verdict) {
     case 'idle':
       // Nothing parked: the pill is the affordance itself, so it carries no

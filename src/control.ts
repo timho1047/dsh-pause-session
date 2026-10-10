@@ -36,7 +36,7 @@ import type { Context, Fiber } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { CommandDefinitionId } from '@deepseek-ai/dsh-commands/brand'
 import type { CommandResult } from '@deepseek-ai/dsh-commands'
-import type { SessionId } from '@deepseek-ai/dsh-session'
+import { SessionId } from '@deepseek-ai/dsh-session'
 import type { PauseGate } from './gate.js'
 import { mountGlobalStop } from './global.js'
 import type { GlobalStop, LivePark } from './global.js'
@@ -44,10 +44,17 @@ import type { ParkWatch } from './park.js'
 import type { ParkRegistry } from './registry.js'
 import { installResumePath } from './resume.js'
 import type { ResumeAttempt, ResumeOptions, ResumePath } from './resume.js'
+import { mountTriageList } from './triage.js'
+import type { TriageListService } from './triage.js'
+import { TRIAGE_NOT_LISTED_TEXT } from './triage.js'
+import type { TriageAction } from './shared.js'
 import {
-  encodeParkStatus, PAUSE_COMMAND, PAUSE_DEFINITION_ID, RESUME_ALL_COMMAND, RESUME_ALL_DEFINITION_ID,
-  RESUME_COMMAND, RESUME_DEFINITION_ID, STATE_ALL_COMMAND, STATE_ALL_DEFINITION_ID, STATUS_COMMAND,
-  STATUS_DEFINITION_ID, STOP_ALL_COMMAND, STOP_ALL_DEFINITION_ID,
+  encodeParkStatus, encodeTriageList, PAUSE_COMMAND, PAUSE_DEFINITION_ID, RESUME_ALL_COMMAND,
+  RESUME_ALL_DEFINITION_ID, RESUME_COMMAND, RESUME_DEFINITION_ID, STATE_ALL_COMMAND, STATE_ALL_DEFINITION_ID,
+  STATUS_COMMAND, STATUS_DEFINITION_ID, STOP_ALL_COMMAND, STOP_ALL_DEFINITION_ID, TRIAGE_COMMAND,
+  TRIAGE_CONTINUE_COMMAND, TRIAGE_CONTINUE_DEFINITION_ID, TRIAGE_DEFINITION_ID, TRIAGE_LEAVE_COMMAND,
+  TRIAGE_LEAVE_DEFINITION_ID, TRIAGE_NOTE_COMMAND, TRIAGE_NOTE_DEFINITION_ID, TRIAGE_REVIEW_COMMAND,
+  TRIAGE_REVIEW_DEFINITION_ID,
 } from './shared.js'
 import type { ParkPhase, ParkStatus } from './shared.js'
 
@@ -229,7 +236,7 @@ export function installSessionControl(
         definitionId: CommandDefinitionId(RESUME_DEFINITION_ID),
         name: RESUME_COMMAND,
         description: 'Resume this paused Session',
-        handler: async (invocation) => (await resumePath.resumeSession(invocation.agent.id)).answer,
+        handler: async (invocation) => (await resumePath.resumeSession(invocation.agent.id, { kind: 'silent' })).answer,
       })
       scope.commands.register({
         definitionId: CommandDefinitionId(STATUS_DEFINITION_ID),
@@ -355,6 +362,23 @@ export function installSessionControl(
     adopted: sessionId => marks.get(sessionId)?.origin === 'registry',
   })
 
+  // The decision list reads the same durable registry and acts through the same
+  // resume path, so a session is on exactly one of the two morning paths: the
+  // silent one when its record says `safe`, this one otherwise.
+  const triage: TriageListService = mountTriageList(ctx, registry, resumePath)
+
+  /**
+   * The one handler the four decision verbs share. The list is addressed by
+   * session like every other command on this channel, so the row the user
+   * decided on travels as the command's own input — and a command aimed at a
+   * session that is not on the list changes nothing.
+   */
+  const decide = (action: TriageAction) => async (invocation: { readonly rawInput: string }): Promise<CommandResult> => {
+    const target = invocation.rawInput.trim()
+    if (target.length === 0) return { kind: 'error', text: TRIAGE_NOT_LISTED_TEXT }
+    return await triage.decide(SessionId(target), action)
+  }
+
   // The whole-app park reads the marks through this one accessor, so the
   // aggregate and the per-session control can never describe different states.
   const globalStop: GlobalStop = mountGlobalStop(ctx, watch, registry, {
@@ -411,6 +435,41 @@ export function installSessionControl(
       name: STATE_ALL_COMMAND,
       description: 'Report whether every parked Session is safe to close',
       handler: async () => globalStop.readStatus(),
+    })
+    // The morning decision list, and the four decisions it offers. All five are
+    // registered globally for the same reason the whole-app verbs are: the
+    // sessions they act on are the ones with no live agent to carry a command.
+    // The decisions take the listed session as their input, because the command
+    // channel is addressed by the session the user is typing on.
+    yield ctx.commands.register({
+      definitionId: CommandDefinitionId(TRIAGE_DEFINITION_ID),
+      name: TRIAGE_COMMAND,
+      description: 'List every Session that did not stop cleanly',
+      handler: async () => ({ kind: 'success', text: encodeTriageList(await triage.read()) }),
+    })
+    yield ctx.commands.register({
+      definitionId: CommandDefinitionId(TRIAGE_CONTINUE_DEFINITION_ID),
+      name: TRIAGE_CONTINUE_COMMAND,
+      description: 'Resume a listed Session: <session id>',
+      handler: decide('continue'),
+    })
+    yield ctx.commands.register({
+      definitionId: CommandDefinitionId(TRIAGE_NOTE_DEFINITION_ID),
+      name: TRIAGE_NOTE_COMMAND,
+      description: 'Resume a listed Session with a note that its tool outcome is unknown: <session id>',
+      handler: decide('note'),
+    })
+    yield ctx.commands.register({
+      definitionId: CommandDefinitionId(TRIAGE_REVIEW_DEFINITION_ID),
+      name: TRIAGE_REVIEW_COMMAND,
+      description: 'Open a listed Session for review without running it: <session id>',
+      handler: decide('review'),
+    })
+    yield ctx.commands.register({
+      definitionId: CommandDefinitionId(TRIAGE_LEAVE_DEFINITION_ID),
+      name: TRIAGE_LEAVE_COMMAND,
+      description: 'Leave a listed Session paused for today: <session id>',
+      handler: decide('leave'),
     })
     yield gate.onChange(sessionId => { sync(sessionId) })
     // A request arriving at (or leaving) the gate is the moment a session can
