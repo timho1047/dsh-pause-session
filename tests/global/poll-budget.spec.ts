@@ -761,7 +761,7 @@ describe('one change, one read', () => {
     return {
       host,
       listeners,
-      injected: faceOf(registrations, 'shell.overlay'),
+      wholeApp: faceOf(registrations, 'conversation.session.header.utilities'),
       header: faceOf(registrations, 'conversation.session.header.actions'),
     }
   }
@@ -787,7 +787,7 @@ describe('one change, one read', () => {
     benchRun.host.answered = status({ verdict: 'safe', registered: 1, safe: 1, draining: [] })
     // A mounted pill has read the host once; that read is what gives a
     // whole-app command a session to travel through.
-    benchRun.injected.refresh(ADDRESS)
+    benchRun.wholeApp.refresh(ADDRESS)
     await vi.advanceTimersByTimeAsync(0)
     const before = benchRun.host.reads
     expect(before).toBe(1)
@@ -827,7 +827,7 @@ describe('one change, one read', () => {
     vi.useFakeTimers()
     const benchRun = bench()
     benchRun.host.answered = status({ verdict: 'safe', registered: 1, safe: 1, draining: [] })
-    benchRun.injected.refresh(ADDRESS)
+    benchRun.wholeApp.refresh(ADDRESS)
     await vi.advanceTimersByTimeAsync(0)
     const before = benchRun.host.reads
     expect(before).toBe(1)
@@ -874,7 +874,7 @@ describe('one change, one read', () => {
     benchRun.host.answered = status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
     // The pill's own mount read is what gives the header control an aggregate
     // to answer from.
-    benchRun.injected.refresh(ADDRESS)
+    benchRun.wholeApp.refresh(ADDRESS)
     await vi.advanceTimersByTimeAsync(0)
     benchRun.header.refresh(header)
     await vi.advanceTimersByTimeAsync(0)

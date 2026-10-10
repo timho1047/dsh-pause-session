@@ -1,13 +1,14 @@
 /**
- * The whole-app control: one pill in the frame-wide overlay layer that answers
- * "can I close the lid?", presses the park or the release, and — when something
- * did not stop cleanly — opens the morning decision list.
+ * The whole-app control: one pill in the conversation header's utilities row
+ * that answers "can I close the lid?", presses the park or the release, and —
+ * when something did not stop cleanly — opens the morning decision list.
  *
- * The layer is the only root-scoped, additive seat the shell declares for a
- * frame-wide surface of its own, and it is exactly what this is — a status
- * pill outside every column, above every panel, click-through except for its
- * own entries. The per-session control stays in the session header where the
- * session it acts on is.
+ * The header's right-aligned utilities row is inside the conversation column,
+ * which is where this control belongs: it answers for every session tree, but
+ * it is read while looking at one, and a surface inside the layout is covered
+ * by whatever covers that column — a sidebar or a drawer — instead of floating
+ * above the whole frame. The decision list hangs from the control into the
+ * conversation area below.
  *
  * The pill reads the host through the command channel only (`./global.ts`):
  * with no answer, or with no session to ask through, it renders nothing rather
@@ -22,14 +23,14 @@ import type { ReactNode } from 'react'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-// Type-only: pulls the ui-layout SlotMap merge (the root-scoped shell.overlay).
-import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+// Type-only: pulls the ui-conversation SlotMap merge (header.utilities).
+import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 // Type-only: pulls the ui-session GlobalStandardProps merge (useSessions).
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type { TriageAction } from '../shared.js'
 import { addressingSession } from './global.js'
 import type { GlobalStopState } from './global.js'
-import { globalStopView, triageView, TRIAGE_ACTION_VIEWS, TRIAGE_GOAL_VIEW } from './view.js'
+import { globalStopView, showsPauseControl, triageView, TRIAGE_ACTION_VIEWS, TRIAGE_GOAL_VIEW } from './view.js'
 import type { TriageRowView } from './view.js'
 import { CaveatIcon, ChevronIcon, PauseIcon, ResumeIcon } from './icons.js'
 import styles from './button.module.css'
@@ -47,8 +48,8 @@ export interface SafeStopPillInjected {
   decide: (sessionId: string, action: TriageAction) => void
 }
 
-/** Full props of the frame-wide safe-stop pill. */
-export type SafeStopPillProps = PropsRuntime<'shell.overlay'>
+/** Full props of the whole-app safe-stop control. */
+export type SafeStopPillProps = PropsRuntime<'conversation.session.header.utilities'>
   & InjectFace<SafeStopPillInjected>
   & PropsLocale<'safe-stop'>
 
@@ -109,14 +110,14 @@ function TriageSessionRow(props: {
 }
 
 /**
- * The frame-wide control: what the host says about the whole park, the one
+ * The whole-app control: what the host says about the whole park, the one
  * press that parks or releases all of it, and the decision list for whatever
  * did not stop cleanly.
- * @param props - shell runtime, host operations, and localized copy.
- * @returns the pill and its panel, or nothing while the host has not answered.
+ * @param props - session-header runtime, host operations, and localized copy.
+ * @returns the control and its panel, or nothing while the host has not answered.
  */
 export function SafeStopPill(props: SafeStopPillProps): ReactNode {
-  const { refresh, toggle, setPanel, decide, t, useSessions } = props
+  const { refresh, toggle, setPanel, decide, t, useSessions, useSession } = props
   const reading = props.useSafeStopGlobal(state => state.global)
   const triage = props.useSafeStopGlobal(state => state.triage)
   const open = props.useSafeStopGlobal(state => state.panelOpen)
@@ -126,13 +127,18 @@ export function SafeStopPill(props: SafeStopPillProps): ReactNode {
   const address = useSessions(addressingSession)
   const view = globalStopView(reading)
   const list = triageView(triage)
+  // A subagent's own header gets nothing, exactly like the per-session control:
+  // its work is its parent's, and the parent's header already speaks for the
+  // whole tree. The mount read below waits for the same gate, so a header that
+  // renders nothing spends no host round-trip either.
+  const visible = showsPauseControl(useSession(snapshot => snapshot.subagent))
   // Hand the control the session the shell is on. It reads there once, when it
   // has no answer yet; afterwards the address follows the view while the reads
   // follow the park (see `./global.ts`).
   useEffect(() => {
-    if (address !== undefined) refresh(address)
-  }, [refresh, address])
-  if (!view.visible || address === undefined) return null
+    if (visible && address !== undefined) refresh(address)
+  }, [refresh, address, visible])
+  if (!visible || !view.visible || address === undefined) return null
   const tip = view.caveats
     .map(caveat => caveat.names.length === 0
       ? t(caveat.key)

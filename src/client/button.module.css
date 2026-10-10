@@ -132,12 +132,12 @@
   }
 }
 
-/* The whole-app pill. The overlay layer is click-through and covers the whole
-   frame, so the entry anchors itself to a corner and keeps its own events. */
+/* The whole-app control. It sits in the conversation header's own utilities
+   row, inside the column it answers for, so whatever covers that area — a
+   sidebar or a drawer — covers the control with it. The wrapper is the panel's
+   containing block, which is what keeps the panel anchored to the control. */
 .dsssPill {
-  position: absolute;
-  right: 16px;
-  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  position: relative;
   display: inline-flex;
   align-items: center;
 }
@@ -237,12 +237,14 @@
   outline-offset: 1px;
 }
 
-/* The panel opens upward from the pill's corner: the pill sits at the frame's
-   bottom, so a downward panel would be clipped by the viewport. */
+/* The panel opens downward from the header control into the conversation area
+   below. The header clips nothing, so the panel crosses its bottom edge; the
+   z-index clears the view tab strip (z-index 1) where the two overlap at that
+   edge. */
 .dsssPillPanel {
   position: absolute;
   right: 0;
-  bottom: calc(100% + 8px);
+  top: calc(100% + 6px);
   z-index: 30;
   display: flex;
   flex-direction: column;

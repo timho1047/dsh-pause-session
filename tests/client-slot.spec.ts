@@ -1,6 +1,6 @@
 /**
- * The client half's contract with the host page: which slot it contributes
- * to, under which id, that it owns a locale namespace, and that it requires
+ * The client half's contract with the host page: which slots it contributes
+ * to, under which ids, that it owns a locale namespace, and that it requires
  * the host round-trip it cannot work without. Asserted through the plugin's
  * declared interface (`inject` + `apply`), not its internals.
  * @module dsh-safe-stop/test/client-slot
@@ -54,16 +54,26 @@ function fakeClientContext() {
 }
 
 describe('client slot contribution', () => {
-  it('contributes a control into the session header actions slot', () => {
+  it('contributes both controls into the session header, under their own ids', () => {
     const { ctx, recorded } = fakeClientContext()
     apply(ctx as never)
     expect(recorded).toContainEqual({ injected: 'conversation.session.header.actions' })
-    const registration = recorded.find(entry => entry.options !== undefined)
-    expect(registration?.options).toMatchObject({
-      name: 'conversation.session.header.actions',
-      id: 'safe-stop',
-      locale: 'safe-stop',
-    })
+    expect(recorded).toContainEqual({ injected: 'conversation.session.header.utilities' })
+    const registrations = recorded.flatMap(entry => entry.options === undefined ? [] : [entry.options])
+    expect(registrations).toMatchObject([
+      { name: 'conversation.session.header.actions', id: 'safe-stop', locale: 'safe-stop' },
+      { name: 'conversation.session.header.utilities', id: 'safe-stop-all', locale: 'safe-stop' },
+    ])
+  })
+
+  it('leaves the frame-wide overlay layer alone', () => {
+    // The whole-app control belongs to the conversation column it answers for:
+    // a sidebar or drawer that covers that area covers the control with it,
+    // while a frame-wide overlay entry floats above every column.
+    const { ctx, recorded } = fakeClientContext()
+    apply(ctx as never)
+    expect(recorded.some(entry => entry.injected === 'shell.overlay')).toBe(false)
+    expect(recorded.some(entry => entry.options?.name === 'shell.overlay')).toBe(false)
   })
 
   it('registers its own locale namespace', () => {

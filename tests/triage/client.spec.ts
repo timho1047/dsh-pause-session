@@ -1,6 +1,8 @@
 /**
- * Task 08's browser half: the decision list rides the same command channel the
- * rest of the control does, and shows nothing it was not told.
+ * The decision list in the browser: the panel rides the same command channel
+ * the rest of the control does, and shows nothing it was not told. The
+ * whole-app control lives in the conversation header's utilities row, and the
+ * panel is opened and read from that seat like any other.
  *
  * The controller is driven against a double of the real Client-callable command
  * namespace that answers the way the host does — the list verb's RESULT carries
@@ -12,13 +14,16 @@
 
 import { describe, expect, it } from 'vitest'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import { apply } from '../../src/client/index.tsx'
+import type { SafeStopPillInjected } from '../../src/client/pill.tsx'
 import { SafeStopGlobalControl, TRIAGE_DECISION_COMMAND } from '../../src/client/global.ts'
-import type { TriageReading } from '../../src/client/global.ts'
+import type { GlobalStopState, TriageReading } from '../../src/client/global.ts'
 import { globalStopView, triageView, TRIAGE_GOAL_VIEW } from '../../src/client/view.ts'
 import {
   decodeTriageList, encodeGlobalStatus, encodeTriageList, STATE_ALL_COMMAND, TRIAGE_COMMAND, TRIAGE_GOAL_COMMAND,
 } from '../../src/shared.ts'
 import type { GlobalStatus, TriageList, TriageRow } from '../../src/shared.ts'
+import { until } from '../gate/loop.ts'
 
 const ADDRESS = SessionId('client-address')
 
@@ -228,5 +233,68 @@ describe('the decision list in the browser', () => {
     // A session id that is exactly the empty marker is still that session.
     const marker = decodeTriageList(encodeTriageList({ rows: [row({ sessionId: '-' })] }))
     expect(marker?.rows[0]?.sessionId).toBe('-')
+  })
+})
+
+describe('the decision list from its header seat', () => {
+  /**
+   * Mount the client half on a stand-in Context, and reach the whole-app
+   * control through the face the framework hands its header entry. The real
+   * SlotRegistry is not mounted here (see `tests/client-slot.spec.ts`); what is
+   * exercised is the seat the panel is opened and read from.
+   */
+  function bench() {
+    const { commands, host } = hostDouble()
+    const registrations: { options: Record<string, unknown> }[] = []
+    const ctx = {
+      effect(callback: () => unknown) {
+        callback()
+        return () => {}
+      },
+      locale: { register: () => () => {} },
+      remote: { commands, $on: () => () => {} },
+      slots: {
+        inject: (_name: string, callback: () => unknown) => { callback(); return () => {} },
+        register: (options: Record<string, unknown>) => {
+          registrations.push({ options })
+          return () => {}
+        },
+      },
+    }
+    apply(ctx as never)
+    const entry = registrations.find(registration =>
+      registration.options['name'] === 'conversation.session.header.utilities')
+    if (entry === undefined) throw new Error('safe-stop: the whole-app control registered no slot entry')
+    const face = (entry.options as { inject?: () => SafeStopPillInjected }).inject
+    if (face === undefined) throw new Error('safe-stop: the whole-app control registered no inject face')
+    return { host, injected: face() }
+  }
+
+  it('opens and reads the panel from the header, spending nothing on rows while it is closed', async () => {
+    const benchRun = bench()
+    const state = (): GlobalStopState => benchRun.injected.hooks.safeStopGlobal.getSnapshot()
+
+    benchRun.injected.refresh(ADDRESS)
+    await until(() => state().global !== undefined)
+    // Something did not stop cleanly, which is what makes the panel reachable:
+    // its entry point counts the same set the whole-app verdict calls unclean.
+    expect(globalStopView(state().global)).toMatchObject({ visible: true, unclean: 1 })
+    expect(state().triage).toBeUndefined()
+    expect(benchRun.host.lines).toEqual([`/${STATE_ALL_COMMAND}`])
+
+    benchRun.injected.setPanel(true)
+    await until(() => state().triage !== undefined)
+    expect(state().panelOpen).toBe(true)
+    expect(benchRun.host.lines).toContain(`/${TRIAGE_COMMAND}`)
+    expect(triageView(state().triage).rows).toMatchObject([
+      { sessionId: 'overnight-tools', phaseKey: 'triage.phase.draining', unknownTools: ['gated'] },
+    ])
+
+    // A decision taken from the header still runs the session-addressed verb;
+    // the press is fire-and-forget, so the command is what is waited on.
+    benchRun.injected.decide('overnight-tools', 'continue')
+    const decision = `/${TRIAGE_DECISION_COMMAND.continue} overnight-tools`
+    await until(() => benchRun.host.lines.includes(decision))
+    expect(benchRun.host.lines.slice(0, 2)).toEqual([`/${STATE_ALL_COMMAND}`, `/${TRIAGE_COMMAND}`])
   })
 })

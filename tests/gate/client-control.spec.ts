@@ -377,7 +377,8 @@ describe('browser control wiring', () => {
       },
     }
     apply(ctx as never)
-    const entry = registrations[0]
+    const entry = registrations.find(registration =>
+      registration.options?.name === 'conversation.session.header.actions')
     if (entry === undefined) throw new Error('safe-stop: the control registered no slot entry')
     return {
       host,

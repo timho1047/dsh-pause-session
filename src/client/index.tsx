@@ -3,19 +3,25 @@
  *
  * Registers two controls: one in the session header's title-adjacent action
  * group (`conversation.session.header.actions`), which pauses or resumes the
- * session it sits on, and one in the frame-wide overlay layer
- * (`shell.overlay`), which answers for the whole app. The header slot is
- * session-scoped and its props carry `sessionId`, so every open session renders
- * its own control and switching sessions follows automatically; the overlay
- * entry is root-scoped, which is what lets one control speak for every session.
+ * session it sits on, and one in the header's right-aligned utilities row
+ * (`conversation.session.header.utilities`), which answers for the whole app.
+ * Both seats are session-scoped and their props carry `sessionId`, so every
+ * open session header renders its own pair and switching sessions follows
+ * automatically; the whole-app control speaks for every session from the
+ * header of the one on screen.
+ *
+ * The whole-app control sits inside the conversation column rather than in the
+ * frame-wide overlay layer: it is read while looking at one conversation, and
+ * a sidebar or drawer that covers that area covers the control with it.
  *
  * Both controls are host-authoritative: they read state from the host's command
  * registry and drive it through the host's session commands (`./control.ts` and
  * `./global.ts` document why the command registry is the only live channel a
  * third-party plugin can use). Each stays inert wherever that round-trip is
  * unavailable rather than rendering a control that cannot tell the truth. The
- * header control also reads the whole-app answer the pill publishes, so a park
- * that holds nothing does not cost a host round-trip per header.
+ * header control also reads the whole-app answer the whole-app control
+ * publishes, so a park that holds nothing does not cost a host round-trip per
+ * header.
  * @module dsh-safe-stop/client
  */
 
@@ -27,10 +33,8 @@ import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: pulls the api-remotes Client face and its forwarded-event key set.
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
-// Type-only: pulls the ui-conversation SlotMap merge (header.actions).
+// Type-only: pulls the ui-conversation SlotMap merge (header.actions, header.utilities).
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
-// Type-only: pulls the ui-layout SlotMap merge (the root-scoped shell.overlay).
-import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 // Type-only: pulls the renderer-owned slots service (ctx.slots).
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
@@ -139,8 +143,8 @@ export function SafeStopButton(props: SafeStopButtonProps): ReactNode {
 
 /**
  * Client plugin body: register the locale dictionaries, own both controllers,
- * follow the host's registry changes, and contribute the session-header control
- * and the frame-wide pill.
+ * follow the host's registry changes, and contribute the per-session control
+ * and the whole-app control into the session header.
  * @param ctx - client context carrying slots, locale, and the Remote face.
  */
 export function apply(ctx: ClientContext): void {
@@ -206,13 +210,14 @@ export function apply(ctx: ClientContext): void {
       SafeStopButton,
     ),
   )
-  // The whole-app control goes in the frame-wide overlay layer: it belongs to
-  // no session, and that layer is the shell's own additive seat for a
-  // frame-wide surface (a status pill is one of the things it names).
-  ctx.slots.inject('shell.overlay', () =>
+  // The whole-app control goes in the header's right-aligned utilities row:
+  // the conversation column's own top-right corner, additive beside the
+  // entries already there, and inside the layout rather than above it. Its
+  // order puts it past the shipped utilities, which is the row's right end.
+  ctx.slots.inject('conversation.session.header.utilities', () =>
     ctx.slots.register(
       {
-        name: 'shell.overlay',
+        name: 'conversation.session.header.utilities',
         id: 'safe-stop-all',
         order: 60,
         locale: NS,

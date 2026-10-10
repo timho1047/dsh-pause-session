@@ -17,7 +17,7 @@ import { apply, inject } from '../../src/client/index.tsx'
 import type { SafeStopPillInjected } from '../../src/client/pill.tsx'
 import { SafeStopGlobalControl, addressingSession } from '../../src/client/global.ts'
 import type { GlobalReading } from '../../src/client/global.ts'
-import { globalStopView } from '../../src/client/view.ts'
+import { globalStopView, showsPauseControl } from '../../src/client/view.ts'
 import {
   decodeGlobalStatus, encodeGlobalStatus, RESUME_ALL_COMMAND, STATE_ALL_COMMAND, STOP_ALL_COMMAND,
 } from '../../src/shared.ts'
@@ -411,15 +411,28 @@ describe('the whole-app contribution', () => {
       },
     }
     apply(ctx as never)
-    const entry = registrations.find(registration => registration.options.name === 'shell.overlay')
-    if (entry === undefined) throw new Error('safe-stop: the whole-app pill registered no slot entry')
+    const entry = registrations.find(registration => registration.options.name === 'conversation.session.header.utilities')
+    if (entry === undefined) throw new Error('safe-stop: the whole-app control registered no slot entry')
     return { host, readsDone, listeners, cleanups, injected, options: entry.options, entry }
   }
 
-  it('contributes the pill into the frame-wide overlay layer, under its own id', () => {
+  it('contributes the whole-app control into the header utilities slot, under its own id', () => {
     const benchRun = bench()
-    expect(benchRun.injected).toEqual(['conversation.session.header.actions', 'shell.overlay'])
-    expect(benchRun.options).toMatchObject({ name: 'shell.overlay', id: 'safe-stop-all', locale: 'safe-stop' })
+    expect(benchRun.injected).toEqual(['conversation.session.header.actions', 'conversation.session.header.utilities'])
+    expect(benchRun.options).toMatchObject({
+      name: 'conversation.session.header.utilities',
+      id: 'safe-stop-all',
+      locale: 'safe-stop',
+    })
+  })
+
+  it('stays off a subagent session, exactly like the per-session control', () => {
+    // Both sides of the header read the same snapshot fact: a subagent's session
+    // header is not where its parent's tree is read from, and the parent's
+    // control already speaks for it.
+    const subagent = { address: { mode: 'continuable', parentSessionId: 'parent', childSessionId: 'child' } }
+    expect(showsPauseControl(subagent)).toBe(false)
+    expect(showsPauseControl(null)).toBe(true)
   })
 
   it('reads the host once at mount and re-reads on a forwarded registry change', async () => {
