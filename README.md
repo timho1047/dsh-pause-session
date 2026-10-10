@@ -3,9 +3,12 @@
 Stop every running DSH session — and its subagents — at a safe point before you
 leave, then resume them the next morning as if nothing was interrupted.
 
-**Status: walking skeleton.** The bundle installs and mounts, and the session
-header renders this plugin's control. The control is inert: the pause gate, the
-park registry and the resume path are not implemented yet.
+**Status: feature-complete, awaiting the end-to-end rehearsal.** One press
+parks every running session tree at its next model-request boundary and reports
+when it is safe to close the lid; the pause survives a restart; the next press
+resumes the cleanly parked sessions with nothing added to the request, and
+anything that did not stop cleanly goes to a decision list instead. What is not
+yet verified on a real machine is listed in [REHEARSAL.md](REHEARSAL.md).
 
 ## Install
 
