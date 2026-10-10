@@ -11,6 +11,12 @@
  * stored log through a read handle that claims no ownership and writes nothing,
  * so asking what happened cannot itself change what happened.
  *
+ * WHAT ONE READ COSTS. The list is read again on every command-registry change
+ * while the panel is open, and what it publishes is about the end of a log that
+ * only grows, so `./coldlog.ts` bounds each row's read to that end. A row whose
+ * facts the bound cannot hold reports itself unreadable rather than publishing
+ * a fragment.
+ *
  * WHAT A ROW REPORTS. "Where it stopped" is the last event of the stored log
  * with the turn and step it belongs to. "Which tool was in flight" is the
  * `tool/call` events that no durable `tool/result` answers — a call event is
@@ -56,11 +62,10 @@ import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 // Type-only: the optional `ctx.sessionPersistence` read seam and its handle.
 import type {} from '@deepseek-ai/dsh-session-persistence'
 import type { CommandResult } from '@deepseek-ai/dsh-commands'
-import { derivedHistory, owesReply, routeNamed } from './history.js'
+import { coldRead, logFacts, positionOf, TRIAGE_WINDOW_EVENTS } from './coldlog.js'
 import type { ParkRegistry, ParkedSession } from './registry.js'
 import type { ResumePath } from './resume.js'
-import { describeError } from './shared.js'
-import type { TriageAction, TriageList, TriageRow, TriageTrace } from './shared.js'
+import type { TriageAction, TriageList, TriageRow } from './shared.js'
 
 /** The route a wake input has to be addressed to; see `./resume.ts`. */
 type WakeOf = Parameters<ResumePath['resumeSession']>[1]
@@ -98,12 +103,6 @@ export const UNKNOWN_OUTCOME_NOTE = 'A tool call from this step was interrupted:
   + 'result was durably recorded, so its outcome is unknown. If it had side effects, verify the external state '
   + 'before doing anything else, and do not retry it blindly. Then continue with what I asked for.'
 
-/** What one stored log says, or that this host could not read it. */
-interface ColdRead {
-  /** The events exactly as they are stored: no repair, no synthesis. */
-  readonly events: readonly SessionEvent[]
-}
-
 /**
  * One registry entry this list owns: every park outcome but `safe`, which is
  * the silent path's business and never appears here.
@@ -111,98 +110,26 @@ interface ColdRead {
 type ListedPark = Omit<ParkedSession, 'phase'> & { readonly phase: TriageRow['phase'] }
 
 /**
- * Events that are not the session's own story: the bookkeeping of the pause
- * command the user pressed, and the pending-input splices the inbox writes.
- * They are real and durable, but "it stopped right after `/safe-stop` finished"
- * is not what "where did it stop" means.
- */
-const BOOKKEEPING_EVENTS: ReadonlySet<string> = new Set(['command/run', 'command/done', 'agent/inbox/spliced'])
-
-/** The turn and step an event belongs to, when it carries them. */
-function positionOf(event: SessionEvent): { readonly turn?: number; readonly step?: number } {
-  const data = event.data
-  if (typeof data !== 'object' || data === null) return {}
-  const turn = 'turn' in data && typeof data.turn === 'number' ? data.turn : undefined
-  const step = 'step' in data && typeof data.step === 'number' ? data.step : undefined
-  return { ...turn === undefined ? {} : { turn }, ...step === undefined ? {} : { step } }
-}
-
-/**
- * Read one session's stored log without taking ownership of it.
- * @param ctx - host context carrying the optional persistence service.
- * @param sessionId - the stored session to read.
- * @returns the events exactly as stored, or `undefined` when no read seam exists or it refused.
- */
-async function coldRead(ctx: Context, sessionId: SessionId): Promise<ColdRead | undefined> {
-  const persistence = ctx.get('sessionPersistence')
-  if (persistence === undefined) return undefined
-  let handle
-  try {
-    handle = await persistence.open(sessionId, 'read')
-  } catch (error: unknown) {
-    ctx.logger.warn(`safe-stop: could not open the stored log of "${sessionId}": ${describeError(error)}`)
-    return undefined
-  }
-  try {
-    const stored = await handle.read(0, undefined)
-    return { events: [...stored.events] }
-  } catch (error: unknown) {
-    ctx.logger.warn(`safe-stop: could not read the stored log of "${sessionId}": ${describeError(error)}`)
-    return undefined
-  } finally {
-    await handle.close()
-  }
-}
-
-/**
- * Every tool call the STORED events record and no stored result answers.
- *
- * Deliberately the stored prefix rather than the repaired view: what a row
- * reports is the state of the session's own log, and the harness's synthetic
- * unknown-outcome results are exactly what that log is missing. Taking the
- * repaired view here would subtract the very traces the row exists to show.
- */
-function unansweredCalls(events: readonly SessionEvent[]): TriageTrace[] {
-  const names = new Map<string, string>()
-  const answered = new Set<string>()
-  for (const event of events) {
-    if (event.type === 'tool/call') {
-      names.set(String(event.data.callId), event.data.name)
-      continue
-    }
-    if (event.type !== 'tool/result') continue
-    answered.add(String(event.data.message.toolCallId))
-  }
-  return [...names].flatMap(([callId, tool]) => answered.has(callId) ? [] : [{ tool, callId }])
-}
-
-/**
  * One row's facts, as the session's own log reports them.
  * @param ctx - host context carrying the registered message projections.
  * @param entry - the durable park record this row is built from.
- * @param stored - the events exactly as they are stored.
- * @returns the row, ready to publish.
+ * @param events - the events the bounded read returned, in sequence order.
+ * @param complete - whether those events are the whole stored log.
+ * @returns the row, ready to publish, or `undefined` when the read cannot support it.
  */
 function rowOf(
   ctx: Context,
   entry: ListedPark,
-  stored: readonly SessionEvent[],
-): TriageRow {
+  events: readonly SessionEvent[],
+  complete: boolean,
+): TriageRow | undefined {
   const { sessionId, phase, updatedAt, rearmGoal } = entry
-  // The stop position is the last event the log actually ends on, minus the
-  // bookkeeping that only says how the pause itself was requested.
-  const last = [...stored].reverse().find(event => !BOOKKEEPING_EVENTS.has(event.type))
-  const traces = unansweredCalls(stored)
-  // Whether an answer is owed is the wake's own question, read through the
-  // wake's own rule over the history the harness would derive from this log. A
-  // log this build cannot fold leaves the question unanswerable, and the promise
-  // is withheld rather than guessed.
-  let owed = false
-  try {
-    owed = owesReply(derivedHistory(stored, ctx.sessions.messageProjections))
-  } catch (error: unknown) {
-    ctx.logger.warn(`safe-stop: could not derive the history of "${sessionId}": ${describeError(error)}`)
-  }
+  const facts = logFacts(events, complete, ctx.sessions.messageProjections)
+  // A log this read cannot fold into those facts says nothing rather than
+  // something: the row reports itself unreadable, which is what a list that
+  // must not lie does when it does not know.
+  if (facts === undefined) return undefined
+  const { last, traces, owed, wakeable } = facts
   return {
     sessionId: String(sessionId),
     phase,
@@ -215,7 +142,7 @@ function rowOf(
     // Two facts have to hold before this host can hand the session its owed
     // request: the log must name the route the wake would be addressed to, and
     // there must be an answer still owed for the wake to ask for.
-    wakeable: owed && routeNamed(stored),
+    wakeable,
   }
 }
 
@@ -246,9 +173,15 @@ export interface TriageListService {
  * @param ctx - host context carrying the optional persistence service.
  * @param registry - the durable list of park outcomes.
  * @param resumePath - the path all three resuming decisions go through.
+ * @param windowEvents - how many events of each stored log one read may fold.
  * @returns the list read and the decision verbs.
  */
-export function mountTriageList(ctx: Context, registry: ParkRegistry, resumePath: ResumePath): TriageListService {
+export function mountTriageList(
+  ctx: Context,
+  registry: ParkRegistry,
+  resumePath: ResumePath,
+  windowEvents: number = TRIAGE_WINDOW_EVENTS,
+): TriageListService {
   /**
    * The rows each calling session was last shown by its own read. A decision
    * names its target as command input, and the command channel carries no
@@ -257,23 +190,25 @@ export function mountTriageList(ctx: Context, registry: ParkRegistry, resumePath
    */
   const shown = new Map<SessionId, ReadonlySet<string>>()
 
+  const unreadable = (entry: ListedPark): TriageRow => ({
+    sessionId: String(entry.sessionId),
+    phase: entry.phase,
+    updatedAt: entry.updatedAt,
+    reading: 'unreadable',
+    traces: [],
+    owed: false,
+    wakeable: false,
+    rearmGoal: entry.rearmGoal,
+  })
+
   const readable = async (entry: ListedPark): Promise<TriageRow> => {
-    const read = await coldRead(ctx, entry.sessionId)
+    const read = await coldRead(ctx, entry.sessionId, windowEvents)
     // A log this host could not read says so. An empty row would claim the
     // session left no traces, which is precisely the verdict nobody has.
-    if (read === undefined) {
-      return {
-        sessionId: String(entry.sessionId),
-        phase: entry.phase,
-        updatedAt: entry.updatedAt,
-        reading: 'unreadable',
-        traces: [],
-        owed: false,
-        wakeable: false,
-        rearmGoal: entry.rearmGoal,
-      }
-    }
-    return rowOf(ctx, entry, read.events)
+    if (read.kind === 'unreadable') return unreadable(entry)
+    // Facts this bounded read cannot support say the same thing: the row is
+    // reported unreadable rather than filled with a guess.
+    return rowOf(ctx, entry, read.events, read.complete) ?? unreadable(entry)
   }
 
   /**
@@ -303,7 +238,7 @@ export function mountTriageList(ctx: Context, registry: ParkRegistry, resumePath
 
   return {
     read: async (caller) => {
-      const rows = await Promise.all(registry.list()
+      const rows = await Promise.all([...registry.parked.values()]
         .flatMap(entry => entry.phase === 'safe' ? [] : [readable({ ...entry, phase: entry.phase })]))
       shown.set(caller, new Set(rows.map(row => row.sessionId)))
       return { rows }

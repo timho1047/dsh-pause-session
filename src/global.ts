@@ -206,7 +206,14 @@ export function mountGlobalStop(
     return [...found].filter(sessionId => !deps.isPaused(sessionId))
   }
 
-  /** Live jobs of the registered trees, plus the unowned ones every caller sees. */
+  /**
+   * Live jobs of the registered trees, plus the unowned ones every caller sees.
+   *
+   * One registry walk per owner is the whole answer the jobs contract allows:
+   * `list()` with no caller answers with unowned jobs only, and `list(owner)`
+   * answers for exactly one owner, because the registry preflights ownership
+   * instead of letting a reader enumerate another session's work.
+   */
   const liveJobs = (owners: Iterable<SessionId>): readonly string[] => {
     const jobs = ctx.get('jobs')
     if (jobs === undefined) return []
@@ -231,8 +238,11 @@ export function mountGlobalStop(
     const phases = new Map<SessionId, LivePark>()
     // The durable list is the promise; a live mark is the same episode's
     // fresher phase, and a press that could not be recorded is neither.
-    for (const entry of registry.list()) phases.set(entry.sessionId, { phase: entry.phase, moving: false })
-    for (const [sessionId, park] of deps.live()) phases.set(sessionId, park)
+    for (const [sessionId, record] of registry.parked) phases.set(sessionId, { phase: record.phase, moving: false })
+    // Read out of the accessor's own snapshot rather than through it per mark,
+    // so this read asks the live state once however many sessions it holds.
+    const live = deps.live()
+    for (const [sessionId, park] of live) phases.set(sessionId, park)
     for (const sessionId of unrecorded) phases.set(sessionId, { phase: 'draining', moving: false })
     const unheld = deps.unheld()
     // Walks are per episode: a session the park no longer owns drops its entry,
@@ -260,8 +270,11 @@ export function mountGlobalStop(
 
     const unresumable: string[] = []
     const unreadTrees: string[] = []
-    for (const sessionId of phases.keys()) {
-      const tree = await walkTree(sessionId)
+    // One walk is one catalog read, and the walks do not depend on each other:
+    // a read of N registered sessions must not take N catalog round-trips end
+    // to end. `walkTree` answers from its per-episode cache when it has one.
+    const trees = await Promise.all([...phases.keys()].map(async sessionId => [sessionId, await walkTree(sessionId)] as const))
+    for (const [sessionId, tree] of trees) {
       if (tree.unresumable) unresumable.push(String(sessionId))
       if (tree.unread) unreadTrees.push(String(sessionId))
     }

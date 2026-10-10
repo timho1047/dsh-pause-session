@@ -107,6 +107,8 @@ export interface TriageHomeOptions {
   readonly route?: string
   /** Mount the goal service and its round driver, for the cases a goal is part of. */
   readonly goals?: boolean
+  /** Events of each stored log the decision list may fold per row; the plugin's default when absent. */
+  readonly maxListedLogEvents?: number
 }
 
 /**
@@ -144,7 +146,12 @@ export async function reviveTriageHome(caseRoot: string, options: TriageHomeOpti
     seen.push(request)
     return next()
   })
-  await ctx.plugin({ name, inject, apply, Config })
+  // The Loader hands a row's config through the schema, so the schema is what
+  // the plugin is registered with; this morning's bound travels as that row's
+  // config value.
+  const pluginConfig: Record<string, unknown> = {}
+  if (options.maxListedLogEvents !== undefined) pluginConfig['maxListedLogEvents'] = options.maxListedLogEvents
+  await ctx.plugin({ name, inject, apply, Config }, pluginConfig)
   const desk = await harness.create(SessionId('morning-desk'), { provider: route, model: 'model' })
   const signal = new AbortController().signal
 

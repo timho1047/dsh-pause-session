@@ -16,7 +16,11 @@
  *
  * A park that is still moving has no registry change to announce it, so this
  * control re-reads on its own while the verdict is `waiting` and stops as soon
- * as it settles.
+ * as it settles. A verdict that never settles — a stalled session is permanent
+ * — is read under `./poll.ts`'s budget and then left on screen unread: the
+ * panel stays readable and the pill keeps saying what it says, but the browser
+ * stops spending a host round-trip and two log records on a state that has
+ * stopped moving. Registry changes are coalesced into one read per tick.
  * @module dsh-safe-stop/client/global
  */
 
@@ -30,6 +34,8 @@ import {
   TRIAGE_REVIEW_COMMAND,
 } from '../shared.js'
 import type { GlobalStatus, TriageAction, TriageRow } from '../shared.js'
+import { DEFAULT_POLL_POLICY, Poller } from './poll.js'
+import type { PollPolicy } from './poll.js'
 import { globalStopView } from './view.js'
 
 /** What the whole-app control knows: the host's answer, or that it could not ask. */
@@ -102,18 +108,30 @@ export class SafeStopGlobalControl {
   private latestTriage = 0
   /** Highest read sequence requested: an answer older than it is dropped. */
   private latest = 0
-  private pending: ReturnType<typeof setTimeout> | undefined
+  /** A read this control asked for while one was already running. */
+  private pendingRead = false
+  /** Whether a read pass is in flight; changes landing in one are read by the next. */
+  private reading = false
+  /** The budgeted re-read timer; see `./poll.ts`. */
+  private readonly poller: Poller
 
   /**
    * @param commands - the Client-callable command namespace.
    * @param lifetime - aborts in-flight calls and the re-read loop when the plugin unloads.
-   * @param pollMs - how long to wait before re-reading a park that is still moving.
+   * @param pollMs - how long to wait before the first re-read of a moving park.
+   * @param policy - the polling budget and visibility source; defaults to `pollMs` and the real page.
    */
   constructor(
     private readonly commands: ClientRemote['commands'],
     private readonly lifetime: AbortSignal,
     private readonly pollMs = 400,
-  ) {}
+    policy: Omit<PollPolicy, 'initialMs'> = DEFAULT_POLL_POLICY,
+  ) {
+    this.poller = new Poller(
+      () => { this.refreshAll() },
+      { ...policy, initialMs: pollMs },
+    )
+  }
 
   /**
    * Ask the host for the aggregate through one session.
@@ -134,11 +152,34 @@ export class SafeStopGlobalControl {
   refreshAll(): void {
     const address = this.address
     if (address === undefined) return
-    void this.refresh(address)
-    // The list is the same question asked of the same host, so a registry
-    // change refreshes it too — but only while the user has it open: a closed
-    // panel must not spend command calls on state nobody is reading.
-    if (this.store.getSnapshot().panelOpen) void this.refreshTriage()
+    this.pendingRead = true
+    if (this.reading) return
+    this.reading = true
+    void this.drain(address)
+  }
+
+  /**
+   * Carry out one re-read pass, then one more if the host changed again while
+   * it ran. A burst of registry changes therefore costs one read, and a change
+   * that lands mid-read is still read rather than dropped.
+   * @param address - the session this control talks through.
+   */
+  private async drain(address: SessionId): Promise<void> {
+    try {
+      do {
+        this.pendingRead = false
+        await this.refresh(address)
+        // The list is the same question asked of the same host, so a registry
+        // change refreshes it too — but only while the user has it open: a
+        // closed panel must not spend command calls on state nobody is reading.
+        if (this.store.getSnapshot().panelOpen) await this.refreshTriage()
+      } while (this.pendingRead)
+    } catch {
+      // A read that rejected is not a reason to stop following the host: the
+      // next change — or the next poll — reads again.
+    } finally {
+      this.reading = false
+    }
   }
 
   /**
@@ -148,8 +189,14 @@ export class SafeStopGlobalControl {
    */
   setPanel(open: boolean): void {
     this.store.update((state) => { state.panelOpen = open })
-    if (open) void this.refreshTriage()
-    else this.schedulePoll()
+    // Opening the list is a user action on the park, so it starts the re-read
+    // budget over: the rows it shows are about to be acted on.
+    if (open) {
+      this.poller.reset()
+      void this.refreshTriage()
+      return
+    }
+    this.schedulePoll()
   }
 
   /** Ask the host for the decision list through the session this control talks through. */
@@ -178,6 +225,9 @@ export class SafeStopGlobalControl {
   async decide(sessionId: string, action: TriageAction): Promise<void> {
     const address = this.address
     if (address === undefined) return
+    // A decision acts on the park, so the re-read budget starts over: what it
+    // released is moving again.
+    this.poller.reset()
     await this.refreshTriage()
     await this.commands.execute(address, `/${TRIAGE_DECISION_COMMAND[action]} ${sessionId}`, [], this.lifetime)
     await this.refreshTriage()
@@ -201,6 +251,10 @@ export class SafeStopGlobalControl {
     if (current === undefined || current.kind !== 'reported') return
     const action = globalStopView(current).action
     if (action === 'none') return
+    // A press is a user action on the park: the session it addresses is about
+    // to be parked or released, which is exactly the state worth watching
+    // again from the start of the budget.
+    this.poller.reset()
     const line = action === 'stop-all' ? `/${STOP_ALL_COMMAND}` : `/${RESUME_ALL_COMMAND}`
     const executed = await this.commands.execute(sessionId, line, [], this.lifetime)
     if (!executed.ok) {
@@ -243,6 +297,12 @@ export class SafeStopGlobalControl {
    * draining can join or leave the list while the panel is open. A settled
    * screen stops asking — every re-read is two command records in the address
    * session's log, which is worth paying only while the answer can change.
+   *
+   * A screen that keeps moving is asked about under `./poll.ts`'s budget and
+   * then left alone. That is not a state change: the last answer stays
+   * published — the verdict, the pill and the rows are exactly as the host
+   * last reported them — and pressing the pill still reads again. What stops
+   * is the unpaid re-reading of a question whose answer has stopped moving.
    */
   private schedulePoll(): void {
     const state = this.store.getSnapshot()
@@ -254,17 +314,19 @@ export class SafeStopGlobalControl {
         || state.triage.kind === 'unavailable'
         || state.triage.rows.some(row => row.phase === 'draining')
       ))
-    if (!moving || this.pollMs <= 0 || this.lifetime.aborted) {
-      if (this.pending !== undefined) {
-        clearTimeout(this.pending)
-        this.pending = undefined
-      }
+    if (!moving || this.lifetime.aborted) {
+      this.poller.stop()
       return
     }
-    if (this.pending !== undefined) return
-    this.pending = setTimeout(() => {
-      this.pending = undefined
-      this.refreshAll()
-    }, this.pollMs)
+    this.poller.start()
+  }
+
+  /**
+   * Follow the page in and out of view. Hidden time is not polling time, and
+   * a page that comes back continues the episode rather than buying a new
+   * budget: showing the page again is not a user action on the park.
+   */
+  watchVisibility(): void {
+    this.poller.checkVisibility()
   }
 }

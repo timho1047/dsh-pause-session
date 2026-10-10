@@ -15,6 +15,7 @@
 
 import { z } from 'zod'
 import type { Context } from '@deepseek-ai/cordis'
+import { TRIAGE_LOG_MAX_EVENTS, TRIAGE_WINDOW_EVENTS } from './coldlog.js'
 import { installSessionControl } from './control.js'
 import { PauseGate } from './gate.js'
 import { mountParkWatch } from './park.js'
@@ -48,6 +49,15 @@ export const DEFAULT_SILENT_WAKE_ROUTES = ['deepseek-official', 'deepseek-accoun
 const ConfigShape = z.object({
   /** Provider routes known to drop an empty user message; see {@link DEFAULT_SILENT_WAKE_ROUTES}. */
   silentWakeRoutes: z.array(z.string()).default([...DEFAULT_SILENT_WAKE_ROUTES]),
+  /**
+   * How many events of a parked session's stored log the morning list folds per
+   * row, counted back from the end. The list reads a session's stop position
+   * and its unknown tool outcomes, both facts about the log's end, so this
+   * bounds what a panel left open costs without changing what a row says about
+   * a log that fits inside it. A row whose log needs more than this is reported
+   * unreadable rather than guessed at; see `./coldlog.ts`.
+   */
+  maxListedLogEvents: z.number().int().min(1).max(TRIAGE_LOG_MAX_EVENTS).default(TRIAGE_WINDOW_EVENTS),
 })
 
 /** Validated plugin configuration. */
@@ -82,6 +92,7 @@ export async function apply(ctx: Context, config: Config = Config.parse({})): Pr
   )
   const control = installSessionControl(ctx, gate, mountParkWatch(ctx), registry, {
     silentWakeRoutes: config.silentWakeRoutes,
+    maxListedLogEvents: config.maxListedLogEvents,
   })
   await control.adopt()
 }

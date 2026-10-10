@@ -121,13 +121,37 @@ export function apply(ctx: ClientContext): void {
   const globalControl = new SafeStopGlobalControl(ctx.remote.commands, lifetime.signal)
   // The host publishes no push channel of its own, so the forwarded command
   // registry change is what makes these controls live: re-read after every one.
-  ctx.effect(
-    () => ctx.remote.$on('commands/change', () => {
+  //
+  // The host announces a registration and an unregistration per command, so
+  // parking N sessions arrives as 2N events; reading on each of them would be
+  // 2N aggregate reads of the same state. One tick's worth of changes is one
+  // read: the first event schedules the pass, and everything the host had
+  // already queued joins it.
+  let scheduled = false
+  const reread = (): void => {
+    if (scheduled) return
+    scheduled = true
+    queueMicrotask(() => {
+      scheduled = false
       control.refreshAll()
       globalControl.refreshAll()
-    }),
+    })
+  }
+  ctx.effect(
+    () => ctx.remote.$on('commands/change', reread),
     'safe-stop: host command registry changes',
   )
+  // A page that is not on screen is not being read: the controls stop their
+  // re-read timers while it is hidden and continue them when it comes back.
+  ctx.effect(() => {
+    if (typeof document === 'undefined') return () => {}
+    const onVisibility = (): void => {
+      control.watchVisibility()
+      globalControl.watchVisibility()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => { document.removeEventListener('visibilitychange', onVisibility) }
+  }, 'safe-stop: page visibility')
   ctx.slots.inject('conversation.session.header.actions', () =>
     ctx.slots.register(
       {

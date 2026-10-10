@@ -76,6 +76,16 @@ export interface ParkRegistry {
    */
   list(): readonly ParkedSession[]
   /**
+   * The same list as {@link list}, as a lazily kept read-only view.
+   *
+   * The whole-app aggregate and the decision list read this once per status
+   * read, and a status read can happen on every command-registry change; the
+   * view is rebuilt only when the stored entries actually changed, so a read
+   * that changes nothing does not build a second copy of the list to look at.
+   * A caller must not mutate it.
+   */
+  readonly parked: ReadonlyMap<SessionId, ParkedSession>
+  /**
    * @param sessionId - session to look up.
    * @returns the remembered session, or `undefined` when nothing is parked under that id.
    */
@@ -116,19 +126,33 @@ export async function openParkRegistry(ctx: Context): Promise<ParkRegistry> {
   const domain: Domain<typeof parkRegistryDomain> = await ctx.storageDomain.open(parkRegistryDomain)
   ctx.effect(() => () => domain.close(), 'safe-stop: registry')
   const sessions = domain.table('sessions')
+  /** The entries the cached view was built from; replaced whenever they differ. */
+  let cachedFrom: readonly ParkedSession[] = []
+  let cached: ReadonlyMap<SessionId, ParkedSession> | undefined
   const entryOf = (sessionId: SessionId): ParkedSession | undefined => {
     const record = sessions.get(sessionId)
     return record === undefined
       ? undefined
       : { sessionId, phase: record.phase, updatedAt: record.updatedAt, rearmGoal: record.rearmGoal }
   }
+  const entriesNow = (): readonly ParkedSession[] => [...sessions.entries()].map(([sessionId, record]) => ({
+    sessionId,
+    phase: record.phase,
+    updatedAt: record.updatedAt,
+    rearmGoal: record.rearmGoal,
+  }))
   return {
-    list: () => [...sessions.entries()].map(([sessionId, record]) => ({
-      sessionId,
-      phase: record.phase,
-      updatedAt: record.updatedAt,
-      rearmGoal: record.rearmGoal,
-    })),
+    list: entriesNow,
+    get parked() {
+      const entries = entriesNow()
+      // Same length and same records: the view the last read built still
+      // describes this list, so hand that one back rather than another copy.
+      if (cached !== undefined && entries.length === cachedFrom.length
+        && entries.every((entry, at) => entry === cachedFrom[at])) return cached
+      cachedFrom = entries
+      cached = new Map(entries.map(entry => [entry.sessionId, entry]))
+      return cached
+    },
     get: entryOf,
     record: async (sessionId, phase) => {
       const updatedAt = Date.now()

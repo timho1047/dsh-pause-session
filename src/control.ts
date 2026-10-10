@@ -202,6 +202,16 @@ export function summarizeResume(attempts: readonly ResumeAttempt[]): string {
 }
 
 /**
+ * Everything the session control needs from the composition: the clean resume
+ * path's route knowledge, plus the bound the decision list reads each parked
+ * log under.
+ */
+export interface SessionControlOptions extends ResumeOptions {
+  /** Events of each stored log the decision list may fold per row; see `./coldlog.ts`. */
+  readonly maxListedLogEvents?: number
+}
+
+/**
  * Contribute the session control: the pause verb, the per-session status read,
  * the global resume verb, and — for every paused session that has a live agent
  * — the resume marker.
@@ -210,7 +220,7 @@ export function summarizeResume(attempts: readonly ResumeAttempt[]): string {
  * @param gate - the pause gate this control drives and reflects.
  * @param watch - the per-session activity fold the park predicate reads.
  * @param registry - the durable pause list every phase change is written to.
- * @param options - route knowledge the clean resume path's wake content needs.
+ * @param options - route knowledge the clean resume path needs, and the decision list's read bound.
  * @returns the mount-time adoption step and the morning resume path.
  */
 export function installSessionControl(
@@ -218,7 +228,7 @@ export function installSessionControl(
   gate: PauseGate,
   watch: ParkWatch,
   registry: ParkRegistry,
-  options: ResumeOptions,
+  options: SessionControlOptions,
 ): SessionControl {
   /** Marks per paused session; presence here mirrors the gate's own membership. */
   const marks = new Map<SessionId, ParkMark>()
@@ -459,7 +469,7 @@ export function installSessionControl(
   // The decision list reads the same durable registry and acts through the same
   // resume path, so a session is on exactly one of the two morning paths: the
   // silent one when its record says `safe`, this one otherwise.
-  const triage: TriageListService = mountTriageList(ctx, registry, resumePath)
+  const triage: TriageListService = mountTriageList(ctx, registry, resumePath, options.maxListedLogEvents)
 
   /**
    * The one handler the four decision verbs share. The list is addressed by

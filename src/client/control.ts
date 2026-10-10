@@ -11,8 +11,11 @@
  * the read; this module never derives either from its own press.
  *
  * A phase that is still moving (`draining`, `parking`) has no registry change
- * to announce it, so this control re-reads on its own while one is on screen
- * and stops as soon as the phase settles.
+ * to announce it, so this control re-reads on its own while one is on screen —
+ * under `./poll.ts`'s budget, so a phase that never settles stops being asked
+ * about instead of being asked about forever. Registry changes are coalesced
+ * into one read per browser tick: parking a session registers two commands,
+ * and the host announces each of them.
  * @module dsh-safe-stop/client/control
  */
 
@@ -23,6 +26,8 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import {
   decodeParkStatus, PAUSE_COMMAND, RESUME_COMMAND, RESUME_DEFINITION_ID, STATUS_COMMAND, STATUS_DEFINITION_ID,
 } from '../shared.js'
+import { DEFAULT_POLL_POLICY, Poller } from './poll.js'
+import type { PollPolicy } from './poll.js'
 
 /**
  * What the Session-header control knows about one session: what the host
@@ -64,19 +69,31 @@ export class SafeStopControl {
   private readonly latest = new Map<SessionId, number>()
   /** Sessions whose phase is still moving and therefore need another look. */
   private readonly transient = new Set<SessionId>()
-  private pending: ReturnType<typeof setTimeout> | undefined
+  /** Sessions a re-read asked for while one was already running. */
+  private readonly dirty = new Set<SessionId>()
+  /** Whether a re-read pass is in flight; changes landing in one are read by the next. */
+  private reading = false
+  /** The budgeted re-read timer; see `./poll.ts`. */
+  private readonly poller: Poller
   private reads = 0
 
   /**
    * @param commands - the Client-callable command namespace.
    * @param lifetime - aborts in-flight calls and the re-read loop when the plugin unloads.
-   * @param pollMs - how long to wait before re-reading a transient phase.
+   * @param pollMs - how long to wait before the first re-read of a transient phase.
+   * @param policy - the polling budget and visibility source; defaults to `pollMs` and the real page.
    */
   constructor(
     private readonly commands: ClientRemote['commands'],
     private readonly lifetime: AbortSignal,
     private readonly pollMs = 400,
-  ) {}
+    policy: Omit<PollPolicy, 'initialMs'> = DEFAULT_POLL_POLICY,
+  ) {
+    this.poller = new Poller(
+      () => { this.refreshAll() },
+      { ...policy, initialMs: pollMs },
+    )
+  }
 
   /**
    * Read the host's state for one session.
@@ -95,9 +112,33 @@ export class SafeStopControl {
     this.publish(sessionId, reading)
   }
 
-  /** Re-read every session this control has shown, after the host's registry changed. */
+  /**
+   * Re-read every session this control has shown, after the host's registry
+   * changed. Reads are coalesced: a burst of registry changes asks for one
+   * pass, and a change that lands while a pass is running is read by the one
+   * that follows rather than starting another read of every session.
+   */
   refreshAll(): void {
-    for (const sessionId of this.shown) void this.refresh(sessionId)
+    for (const sessionId of this.shown) this.dirty.add(sessionId)
+    if (this.reading) return
+    this.reading = true
+    void this.drain()
+  }
+
+  /** Read every session one pending pass asked for, until none is left. */
+  private async drain(): Promise<void> {
+    try {
+      do {
+        const batch = [...this.dirty]
+        this.dirty.clear()
+        for (const sessionId of batch) await this.refresh(sessionId)
+      } while (this.dirty.size > 0)
+    } catch {
+      // A registry read that rejected is not a reason to stop following the
+      // host: the next change — or the next poll — reads again.
+    } finally {
+      this.reading = false
+    }
   }
 
   /**
@@ -156,20 +197,24 @@ export class SafeStopControl {
   /**
    * Keep looking while any shown session is still moving. The host announces a
    * settled phase through no registry change of its own, so waiting for one
-   * would leave "draining" on screen forever.
+   * would leave "draining" on screen forever — but a phase that never settles
+   * must not be asked about forever either, which is the budget `./poll.ts`
+   * enforces.
    */
   private schedulePoll(): void {
-    if (this.transient.size === 0 || this.pollMs <= 0 || this.lifetime.aborted) {
-      if (this.pending !== undefined) {
-        clearTimeout(this.pending)
-        this.pending = undefined
-      }
+    if (this.transient.size === 0 || this.lifetime.aborted) {
+      this.poller.stop()
       return
     }
-    if (this.pending !== undefined) return
-    this.pending = setTimeout(() => {
-      this.pending = undefined
-      for (const sessionId of [...this.transient]) void this.refresh(sessionId)
-    }, this.pollMs)
+    this.poller.start()
+  }
+
+  /**
+   * Follow the page in and out of view. Hidden time is not polling time, and
+   * a page that comes back continues the episode rather than buying a new
+   * budget: showing the page again is not a user action on the park.
+   */
+  watchVisibility(): void {
+    this.poller.checkVisibility()
   }
 }
