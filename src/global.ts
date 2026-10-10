@@ -27,14 +27,14 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { CommandResult } from '@deepseek-ai/dsh-commands'
 import type { SessionId } from '@deepseek-ai/dsh-session'
-// Type-only: the optional `ctx.subagents` service and its descendant rows.
-import type {} from '@deepseek-ai/dsh-subagent'
 // Type-only: the optional `ctx.jobs` service and its read-only projection.
 import type {} from '@deepseek-ai/dsh-jobs'
 import type { ParkWatch } from './park.js'
 import type { ParkRegistry } from './registry.js'
-import { describeError, encodeGlobalStatus } from './shared.js'
+import { encodeGlobalStatus } from './shared.js'
 import type { GlobalBlindSpot, GlobalStatus, GlobalVerdict, ParkPhase } from './shared.js'
+import { walkDescendants } from './tree.js'
+import type { TreeWalk } from './tree.js'
 
 /**
  * How many times one press walks the trees again. A tree can grow while the
@@ -93,16 +93,38 @@ export interface GlobalStop {
    * @returns the aggregate as of this read.
    */
   readStatus(): Promise<CommandResult>
+  /**
+   * Report one session a press could not register, so the aggregate names it.
+   * The whole-app action records that fact for its own targets; a press of a
+   * session's tree reports the members the registry refused through here.
+   * @param sessionId - the session a press tried and failed to register.
+   * @param unrecorded - whether it is now known to be unparked for that reason.
+   */
+  markUnrecorded(sessionId: SessionId, unrecorded: boolean): void
 }
 
-/** One session found by a tree walk; cached per park episode. */
-interface TreeWalk {
+/** One tree walk as this aggregate reads it: the members, and the two ways a walk can be doubted. */
+interface TreeReading {
   /** Catalog descendants of the walked session, direct children and deeper. */
   readonly members: readonly SessionId[]
   /** Whether any branch holds a route a restart cannot resume. */
   readonly unresumable: boolean
   /** Whether any branch could not be read, so the tree is not vouched for. */
   readonly unread: boolean
+}
+
+/** Fold one shared tree walk into the two doubts this report publishes. */
+function readingOf(walk: TreeWalk): TreeReading {
+  return {
+    members: walk.members.map(member => member.id),
+    // A route no restart can resume, either because the catalog says so or
+    // because it holds a mode this build cannot read.
+    unresumable: walk.members.some(member => member.mode !== 'continuable')
+      || walk.unread.some(branch => branch.reason === 'unsupported'),
+    // `unsupported` was traversed, so its members are known; the other reasons
+    // mean that branch was not read at all.
+    unread: walk.unreadWhole || walk.unread.some(branch => branch.reason !== 'unsupported'),
+  }
 }
 
 /**
@@ -126,8 +148,13 @@ export function mountGlobalStop(
    * instead of quietly leaving them out of a park it then calls safe.
    */
   const unrecorded = new Set<SessionId>()
+  /** Record or clear one session's "pressed and the registry refused" state. */
+  const markUnrecorded = (sessionId: SessionId, flag: boolean): void => {
+    if (flag) unrecorded.add(sessionId)
+    else unrecorded.delete(sessionId)
+  }
   /** Per-episode tree walks; an entry lives exactly as long as the park owns it. */
-  const walks = new Map<SessionId, TreeWalk>()
+  const walks = new Map<SessionId, TreeReading>()
 
   /**
    * Whether a session has unfinished work right now. Three real answers, any
@@ -143,48 +170,22 @@ export function mountGlobalStop(
   }
 
   /**
-   * Read one session's subagent tree from the catalog's own descendant rows.
-   * The mode on each row is the harness's durable record of whether that child
-   * can be resumed after a restart, which is what the report has to name; a
-   * branch that could not be read is `unread`, never assumed clean. One walk is
-   * taken per session per park episode: the answer is a fact about the tree, not
-   * about the moment it was asked.
+   * Read one session's subagent tree through the shared walker and remember the
+   * reading for this park episode. The tree is a fact about the episode, not
+   * about the moment it was asked, and the aggregate reads several sessions per
+   * answer; the cache keeps that read from repeating a catalog round-trip it
+   * has already paid for.
    */
-  const walkTree = async (sessionId: SessionId): Promise<TreeWalk> => {
+  const walkTree = async (sessionId: SessionId): Promise<TreeReading> => {
     const cached = walks.get(sessionId)
     if (cached !== undefined) return cached
-    const subagents = ctx.get('subagents')
-    if (subagents === undefined) {
-      const absent: TreeWalk = { members: [], unresumable: false, unread: true }
-      walks.set(sessionId, absent)
-      return absent
-    }
-    let walk: TreeWalk
-    try {
-      const rows = await subagents.listDescendants(sessionId)
-      const members: SessionId[] = []
-      let unresumable = false
-      let unread = false
-      for (const row of rows) {
-        if (row.kind === 'child') {
-          members.push(row.id)
-          // `unknown` is a catalog mode this build cannot read: it is not a
-          // resumable route either, so it lands on the same side as one-shot.
-          if (row.mode !== 'continuable') unresumable = true
-          continue
-        }
-        // `unsupported` is an unknown child mode (traversed, still not
-        // resumable); the other two reasons mean the branch was not read.
-        if (row.reason === 'unsupported') unresumable = true
-        else unread = true
-      }
-      walk = { members, unresumable, unread }
-    } catch (error: unknown) {
-      ctx.logger.warn(`safe-stop: could not read the subagent tree of "${sessionId}": ${describeError(error)}`)
-      walk = { members: [], unresumable: false, unread: true }
-    }
-    walks.set(sessionId, walk)
-    return walk
+    // No subagent service at all: the walk would answer "no members", which is
+    // not the same claim as "no children", and this report may not make it.
+    const reading = ctx.get('subagents') === undefined
+      ? { members: [], unresumable: false, unread: true }
+      : readingOf(await walkDescendants(ctx, sessionId))
+    walks.set(sessionId, reading)
+    return reading
   }
 
   /**
@@ -314,9 +315,7 @@ export function mountGlobalStop(
         for (const sessionId of targets) {
           // The press is a durable promise per session: one that cannot be
           // recorded is rolled back there and named here.
-          const recorded = await deps.press(sessionId)
-          if (recorded) unrecorded.delete(sessionId)
-          else unrecorded.add(sessionId)
+          markUnrecorded(sessionId, !await deps.press(sessionId))
           deps.look(sessionId)
         }
       }
@@ -326,5 +325,6 @@ export function mountGlobalStop(
         : { kind: 'error', text: answer }
     },
     readStatus: async () => ({ kind: 'success', text: encodeGlobalStatus(await status()) }),
+    markUnrecorded,
   }
 }

@@ -17,10 +17,10 @@ import { apply, inject } from '../../src/client/index.tsx'
 import type { SafeStopInjected } from '../../src/client/index.tsx'
 import { SafeStopControl } from '../../src/client/control.ts'
 import type { SafeStopReading } from '../../src/client/control.ts'
-import { safeStopView } from '../../src/client/view.ts'
+import { safeStopView, showsPauseControl } from '../../src/client/view.ts'
 import {
-  encodeParkStatus, GOAL_COMMAND, GOAL_DEFINITION_ID, PAUSE_COMMAND, PAUSE_DEFINITION_ID, RESUME_COMMAND,
-  RESUME_DEFINITION_ID, STATUS_COMMAND, STATUS_DEFINITION_ID,
+  encodeParkStatus, foldTreePhases, GOAL_COMMAND, GOAL_DEFINITION_ID, PAUSE_COMMAND, PAUSE_DEFINITION_ID,
+  RESUME_COMMAND, RESUME_DEFINITION_ID, STATUS_COMMAND, STATUS_DEFINITION_ID,
 } from '../../src/shared.ts'
 import type { ParkPhase } from '../../src/shared.ts'
 import { until } from './loop.ts'
@@ -294,6 +294,49 @@ describe('browser control state', () => {
     pending[0]?.({ ok: true, value: [{ name: PAUSE_COMMAND, description: '', definitionId: PAUSE_DEFINITION_ID }] })
     await stale
     expect(readingOf(control)).toEqual({ phase: 'parking', runningTools: [] })
+  })
+})
+
+describe('the header control\'s seat', () => {
+  /** A loaded snapshot of a top-level session. */
+  const mainSession = { subagent: null }
+  /** A session snapshot carrying the subagent fact, as the read-only composer reads it. */
+  const subagentSession = {
+    subagent: { address: { mode: 'continuable', parentSessionId: 'parent-session', childSessionId: String(SID) } },
+  }
+
+  it('renders nothing on a subagent session, and its control on a top-level one', () => {
+    // The header control is the user's button for a session's work, and that
+    // work includes the subagents under it — so the button does not belong
+    // inside the tree. The snapshot's own `subagent` field is what tells them
+    // apart; a session whose snapshot has not loaded yet claims nothing and
+    // keeps the control.
+    expect(showsPauseControl(subagentSession.subagent)).toBe(false)
+    expect(showsPauseControl(mainSession.subagent)).toBe(true)
+    expect(showsPauseControl(undefined)).toBe(true)
+  })
+
+  it('answers a still-draining member with the tree\'s phase, not the session\'s', () => {
+    // The host folds the registered members of the tree into one phase; the
+    // browser only has to read it, and it must never round a phase up. A
+    // `draining` reading keeps the control live so pressing again can take the
+    // whole tree back.
+    expect(safeStopView({ phase: 'draining', runningTools: [] }))
+      .toMatchObject({ paused: true, enabled: true, labelKey: 'state.draining' })
+    expect(safeStopView({ phase: 'parking', runningTools: [] }))
+      .toMatchObject({ paused: true, enabled: true, labelKey: 'state.parking' })
+    expect(safeStopView({ phase: 'safe', runningTools: [] }))
+      .toMatchObject({ paused: true, enabled: true, labelKey: 'state.safe' })
+  })
+
+  it('folds a tree to its least-clean member, and to safe only when all are', () => {
+    // The direction the fold compares in: a failed flush is further from clean
+    // than work still on its way, and one clean member never carries a set.
+    expect(foldTreePhases(new Set(['safe']))).toEqual({ phase: 'safe', safe: true })
+    expect(foldTreePhases(new Set(['safe', 'safe', 'safe']))).toEqual({ phase: 'safe', safe: true })
+    expect(foldTreePhases(new Set(['safe', 'draining']))).toEqual({ phase: 'draining', safe: false })
+    expect(foldTreePhases(new Set(['draining', 'safe', 'parking']))).toEqual({ phase: 'parking', safe: false })
+    expect(foldTreePhases(new Set(['safe', 'flush-failed']))).toEqual({ phase: 'flush-failed', safe: false })
   })
 })
 

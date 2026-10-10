@@ -36,10 +36,11 @@ import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deep
 import type { AgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import { apply, inject, name } from '../../src/index.ts'
-import { decodeGlobalStatus } from '../../src/shared.ts'
-import type { GlobalStatus } from '../../src/shared.ts'
+import { decodeGlobalStatus, decodeParkStatus, RESUME_COMMAND, STOP_ALL_COMMAND } from '../../src/shared.ts'
+import type { GlobalStatus, ParkStatus } from '../../src/shared.ts'
 import { FakeProvider, textResponse } from '../assumptions/fake-provider.ts'
 import type { ScriptEntry } from '../assumptions/fake-provider.ts'
+import { mountHeldParkStorage } from '../registry/held.ts'
 import { mountParkStorage } from '../registry/storage.ts'
 
 /** The registry root one case's park state lives in. */
@@ -68,20 +69,32 @@ export interface BlockingTool {
   release(index: number): void
   /** Let every call that ever started finish. */
   releaseAll(): void
+  /**
+   * Let the call that carried this `id` argument finish. Which session's call
+   * that is depends on request order, not on session order, so a case that must
+   * hold one named member in flight addresses it by the id it passed in.
+   * @param id - the value that call passed as its `id` argument.
+   */
+  releaseId(id: string): void
+  /** Whether the call carrying this `id` argument has started. */
+  startedId(id: string): boolean
 }
 
 /** Build the blocking tool the running-tree cases hold a session with. */
 export function blockingTool(): BlockingTool {
   const releases: (() => void)[] = []
+  const indexOfId = new Map<string, number>()
   let started = 0
   return {
     definition: defineContentToolFixture({
       name: 'gated',
       description: 'blocks until the spec releases this call',
       parameters: { id: { type: 'string', required: true } },
-      async execute() {
+      async execute(args) {
         const index = started
         started += 1
+        const id = args.id
+        if (typeof id === 'string') indexOfId.set(id, index)
         await new Promise<void>((resolve) => { releases[index] = resolve })
         return [{ type: 'text', text: 'tool done' }]
       },
@@ -89,6 +102,8 @@ export function blockingTool(): BlockingTool {
     started: () => started,
     release: (index) => { releases[index]?.() },
     releaseAll: () => { for (const release of releases) release() },
+    releaseId: (id) => { releases[indexOfId.get(id) ?? -1]?.() },
+    startedId: (id) => indexOfId.has(id),
   }
 }
 
@@ -112,6 +127,16 @@ export interface GlobalHome {
   create(id: string): Promise<Agent>
   /** Run one slash command on one session, exactly as the browser half does. */
   run(agent: Agent, command: string): Promise<CommandResult>
+  /** Press the session-header pause verb on one session and hand back its answer. */
+  stop(agent: Agent): Promise<CommandResult>
+  /** Press the session-header release verb on one session and hand back its answer. */
+  release(agent: Agent): Promise<CommandResult>
+  /**
+   * Read the park state of one session the way its header control does: the
+   * marker's presence is the pause, and the status command's own answer carries
+   * the phase.
+   */
+  headerStatus(agent: Agent): Promise<ParkStatus | undefined>
   /** Read the aggregate through the verb the whole-app control executes. */
   status(agent: Agent): Promise<GlobalStatus>
   /** Start a live background job owned by one session. */
@@ -174,6 +199,12 @@ export interface GlobalHomeOptions {
    * goal exists — mounts the service alone.
    */
   readonly goalRounds?: boolean
+  /**
+   * Router for the park registry's writes: a key this predicate accepts has
+   * every record write refused. It is how a case puts a write failure on one
+   * member of a tree, which is where the press's per-member rollback shows.
+   */
+  readonly failingRecordKeys?: (key: string) => boolean
 }
 
 /**
@@ -189,7 +220,15 @@ export async function mountGlobalHome(caseRoot: string, options: GlobalHomeOptio
   await mountAgentLoopTestDependencies(ctx, { workingDirectory: true })
   await ctx.plugin(JsonlSessionPersistence, { root: sessionRootOf(caseRoot), compression: 'none' })
   await ctx.plugin(CommandRuntime)
-  await mountParkStorage(ctx, storageOf(caseRoot))
+  if (options.failingRecordKeys === undefined) await mountParkStorage(ctx, storageOf(caseRoot))
+  else {
+    // A case that only needs a write refused wants that refusal to land at the
+    // press, not to wait for the spec's hand: nothing here holds a write open.
+    await mountHeldParkStorage(ctx, storageOf(caseRoot), {
+      hold: () => false,
+      failingKeys: options.failingRecordKeys,
+    })
+  }
   // Registered while no session exists yet: the goal projection has to be in
   // place when the session that will carry the goal is created.
   if (options.goals === true) {
@@ -238,6 +277,17 @@ export async function mountGlobalHome(caseRoot: string, options: GlobalHomeOptio
     plugin,
     create: (id) => harness.create(SessionId(id), { provider: 'fake', model: 'fake' }),
     run,
+    stop: agent => run(agent, 'safe-stop'),
+    release: agent => run(agent, RESUME_COMMAND),
+    headerStatus: async (agent) => {
+      const answer = await run(agent, 'safe-state')
+      const text = answer.text
+      const status = text === undefined ? undefined : decodeParkStatus(text)
+      if (status === undefined) {
+        throw new Error(`safe-stop: the header status answered in an unknown vocabulary: ${String(text)}`)
+      }
+      return status
+    },
     status: async (agent) => {
       const answer = await run(agent, 'safe-state-all')
       const status = answer.text === undefined ? undefined : decodeGlobalStatus(answer.text)

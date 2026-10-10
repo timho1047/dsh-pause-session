@@ -45,6 +45,7 @@ import type { PauseGate } from './gate.js'
 import { owesReply } from './history.js'
 import type { ParkRegistry } from './registry.js'
 import { describeError } from './shared.js'
+import { walkDescendants } from './tree.js'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
@@ -199,6 +200,52 @@ export interface ResumePath {
    * @returns the copy for whoever asked.
    */
   setRearmGoal(sessionId: SessionId, rearmGoal: boolean): Promise<CommandResult>
+  /**
+   * Release one parked session and the registered members of its tree: the
+   * counterpart of a press that registered a whole tree.
+   * @param sessionId - the session whose tree the user released.
+   * @returns what happened to the tree, and the copy for whoever asked.
+   */
+  releaseTree(sessionId: SessionId): Promise<ReleaseTreeOutcome>
+}
+
+/** What releasing one session's registered tree did. */
+export interface ReleaseTreeOutcome {
+  /** How many sessions this release covered: the session plus its registered descendants. */
+  readonly members: number
+  /** How many of them are running again. */
+  readonly resumed: number
+  /** How many could not be resumed, and why the release did not take them back. */
+  readonly refusals: readonly { readonly sessionId: SessionId; readonly refusal: ResumeRefusal }[]
+  /** The copy for whoever pressed the release. */
+  readonly answer: CommandResult
+}
+
+/**
+ * How one tree-wide release answers the person who pressed it. One release, one
+ * sentence about all of it: what came back, and — by name, because those rows
+ * are what the morning list is for — what did not.
+ * @param released - the sessions this release covered, in release order.
+ * @returns the result text, e.g. `safe-stop resumed 2 sessions from where they stopped; "child" did not stop cleanly`.
+ */
+export function summarizeTreeRelease(released: readonly ResumeAttempt[]): string {
+  const resumed = released.filter(attempt => attempt.resumed).length
+  const head = resumed === 0
+    ? 'safe-stop resumed nothing from this tree'
+    : resumed === 1
+      ? 'safe-stop resumed 1 session from where it stopped'
+      : `safe-stop resumed ${resumed} sessions from where they stopped`
+  const refused = released.filter(attempt => !attempt.resumed)
+  if (refused.length === 0) return `${head}.`
+  const named = refused
+    .filter(attempt => attempt.refusal === 'not-clean')
+    .map(attempt => `"${String(attempt.sessionId)}"`)
+  const rest = named.length === 0
+    ? `${String(refused.length)} could not be resumed`
+    : refused.length === named.length
+      ? `${named.join(', ')} did not stop cleanly`
+      : `${named.join(', ')} did not stop cleanly, and ${String(refused.length - named.length)} more could not be resumed`
+  return `${head}; ${rest}.`
 }
 
 /**
@@ -564,6 +611,70 @@ export function installResumePath(
   return {
     resumeSession,
     decideUnclean,
+    releaseTree: async (sessionId) => {
+      // The tree is read here, not taken from the press: the members that were
+      // registered are exactly the members whose records exist, and a member
+      // the walk cannot reach has no record to release either.
+      const rooted = [sessionId, ...(await walkDescendants(ctx, sessionId)).members.map(member => member.id)]
+      const registered = rooted.filter(member => registry.get(member) !== undefined)
+      if (registered.length === 0) {
+        return { members: 0, resumed: 0, refusals: [], answer: { kind: 'success', text: NOT_PARKED_TEXT } }
+      }
+      // One control, two jobs. A tree with nothing clean in it is a press being
+      // taken back: the user is undoing the pause they just asked for, and the
+      // clean-only rule must not stand in the way of that — it would leave a
+      // session the user cancelled still parked, which is the one thing the
+      // press-again button must never do. A tree that holds anything clean is
+      // the release, and there the rule holds per record: the members that did
+      // not stop cleanly keep their pause and are never silently woken.
+      const cancelling = registered.every(member => registry.get(member)?.phase !== 'safe')
+      const released: ResumeAttempt[] = []
+      if (cancelling) {
+        for (const member of registered) {
+          const answer = await deps.release(member, RESUMED_TEXT)
+          released.push(answer.kind === 'error'
+            ? { sessionId: member, resumed: false, refusal: 'unrecorded', answer }
+            : { sessionId: member, resumed: true, answer })
+        }
+      } else {
+        const release = await releaseOrder(registered)
+        for (const level of release.levels) {
+          for (const member of level) {
+            // The rule, applied here rather than left to the entry points
+            // below: a pause this process pressed is normally the user's own
+            // to take back, so the clean path releases it without asking its
+            // phase. In a tree release it is not — a member that did not stop
+            // cleanly keeps its pause, and the caller names it.
+            const record = registry.get(member)
+            if (record !== undefined && record.phase !== 'safe') {
+              released.push({
+                sessionId: member,
+                resumed: false,
+                refusal: 'not-clean',
+                answer: { kind: 'error', text: UNCLEAN_TEXT },
+              })
+              continue
+            }
+            released.push(await resumeSession(member, { kind: 'silent' }, release.parents.get(member)))
+          }
+        }
+      }
+      const root = released.find(attempt => attempt.sessionId === sessionId)
+      const refusals = released
+        .filter((attempt): attempt is ResumeAttempt & { refusal: ResumeRefusal } => !attempt.resumed && attempt.refusal !== undefined)
+        .map(attempt => ({ sessionId: attempt.sessionId, refusal: attempt.refusal }))
+      return {
+        members: released.length,
+        resumed: released.filter(attempt => attempt.resumed).length,
+        refusals,
+        // The root's own answer is what the person who pressed sees: their
+        // session either came back or it did not, and the tree's other members
+        // are named in the count and in the refusals.
+        answer: root === undefined
+          ? { kind: 'success', text: NOT_PARKED_TEXT }
+          : { kind: refusals.length === 0 && root.resumed ? 'success' : 'error', text: summarizeTreeRelease(released) },
+      }
+    },
     resumeParked: async () => {
       const release = await releaseOrder(registry.list().map(entry => entry.sessionId))
       const attempts: ResumeAttempt[] = []

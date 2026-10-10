@@ -35,6 +35,23 @@ export interface SafeStopView {
 }
 
 /**
+ * Whether the pause control renders on one session at all.
+ *
+ * The control is the user's button for a session's work, and that work includes
+ * the subagents under it — which is why the press covers the tree and why the
+ * button does not belong inside the tree. The client can tell: a Session
+ * snapshot carries a `subagent` field, the same signal the read-only composer
+ * reads. A subagent's service is not the user's to pause: its parent's control
+ * already speaks for it, and a second button here would offer to stop "a
+ * session" from inside a child.
+ * @param subagent - the session snapshot's own subagent fact, absent when unknown.
+ * @returns whether this session's header renders the control.
+ */
+export function showsPauseControl(subagent: { readonly address: unknown } | null | undefined): boolean {
+  return subagent === null || subagent === undefined
+}
+
+/**
  * One reading's goal opt-out, as the view carries it. Only an answered flag
  * becomes a field: a missing one must stay missing through the mapping, or the
  * renderer would show the product default as if the host had said it.

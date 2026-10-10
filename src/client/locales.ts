@@ -2,10 +2,10 @@
 
 /** Simplified Chinese dictionary (the key-set source of truth). */
 export const zh = {
-  'pause.aria': '暂停这个会话：下一条模型请求不再发出',
-  'pause.tip': '暂停这个会话',
-  'resume.aria': '取消这次暂停，让这个会话继续',
-  'resume.tip': '取消暂停，让这个会话继续',
+  'pause.aria': '暂停这个会话及其子代理：它们下一条模型请求不再发出',
+  'pause.tip': '暂停这个会话及其子代理',
+  'resume.aria': '取消这次暂停，让这个会话及其子代理继续',
+  'resume.tip': '取消暂停，让这个会话及其子代理继续',
   'draining.aria': '正在收尾：先跑完在飞的工具，再拦住下一条模型请求；按下可取消这次暂停',
   'parking.aria': '正在把待发输入写入磁盘；按下可取消这次暂停',
   'safe.aria': '已经停稳并落盘，可以安全合盖；按下可取消这次暂停',
@@ -70,10 +70,10 @@ export type SafeStopKey = keyof typeof zh
 
 /** English dictionary, checked complete against the zh key set. */
 export const en: Record<SafeStopKey, string> = {
-  'pause.aria': 'Pause this session: its next model request will not be sent',
-  'pause.tip': 'Pause this session',
-  'resume.aria': 'Cancel this pause and let the session continue',
-  'resume.tip': 'Cancel the pause and continue',
+  'pause.aria': 'Pause this session and its subagents: their next model request will not be sent',
+  'pause.tip': 'Pause this session and its subagents',
+  'resume.aria': 'Cancel this pause and let this session and its subagents continue',
+  'resume.tip': 'Cancel the pause and let them continue',
   'draining.aria': 'Finishing up: the running tool completes before the next model request is held; press to cancel this pause',
   'parking.aria': 'Writing this session’s pending input to disk; press to cancel this pause',
   'safe.aria': 'Parked and flushed — it is safe to close the lid; press to cancel this pause',

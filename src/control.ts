@@ -21,6 +21,13 @@
  * silent morning resume would otherwise spend the user's rounds unasked. The
  * switch is addressed to the session it changes, so it needs no listed row.
  *
+ * The header control is the user's button for ONE session's work, and that work
+ * includes the subagents under it: the press registers the session and its
+ * descendant tree, the release takes the same tree back, and the status the
+ * header shows is the worst phase among the members the press registered. The
+ * whole-app control covers every running tree and answers for all of them; this
+ * one answers for the tree it owns.
+ *
  * A mark is not a park. A session is parked only once nothing is left to drain:
  * no call in flight AND either its next model request is held at the gate or no
  * turn is open at all (there will be no next request to hold). Only then is the
@@ -60,22 +67,56 @@ import type { TriageListService } from './triage.js'
 import { TRIAGE_NOT_LISTED_TEXT } from './triage.js'
 import type { TriageAction } from './shared.js'
 import {
-  describeError, encodeParkStatus, encodeTriageList, GOAL_COMMAND, GOAL_DEFINITION_ID, PAUSE_COMMAND,
-  PAUSE_DEFINITION_ID, RESUME_ALL_COMMAND, RESUME_ALL_DEFINITION_ID, RESUME_COMMAND, RESUME_DEFINITION_ID,
-  STATE_ALL_COMMAND, STATE_ALL_DEFINITION_ID, STATUS_COMMAND, STATUS_DEFINITION_ID, STOP_ALL_COMMAND,
-  STOP_ALL_DEFINITION_ID, TRIAGE_COMMAND, TRIAGE_CONTINUE_COMMAND, TRIAGE_CONTINUE_DEFINITION_ID,
-  TRIAGE_DEFINITION_ID, TRIAGE_GOAL_COMMAND, TRIAGE_GOAL_DEFINITION_ID, TRIAGE_LEAVE_COMMAND,
-  TRIAGE_LEAVE_DEFINITION_ID, TRIAGE_NOTE_COMMAND, TRIAGE_NOTE_DEFINITION_ID, TRIAGE_REVIEW_COMMAND,
-  TRIAGE_REVIEW_DEFINITION_ID,
+  describeError, encodeParkStatus, encodeTriageList, foldTreePhases, GOAL_COMMAND, GOAL_DEFINITION_ID,
+  PAUSE_COMMAND, PAUSE_DEFINITION_ID, RESUME_ALL_COMMAND, RESUME_ALL_DEFINITION_ID, RESUME_COMMAND,
+  RESUME_DEFINITION_ID, STATE_ALL_COMMAND, STATE_ALL_DEFINITION_ID, STATUS_COMMAND, STATUS_DEFINITION_ID,
+  STOP_ALL_COMMAND, STOP_ALL_DEFINITION_ID, TRIAGE_COMMAND, TRIAGE_CONTINUE_COMMAND,
+  TRIAGE_CONTINUE_DEFINITION_ID, TRIAGE_DEFINITION_ID, TRIAGE_GOAL_COMMAND, TRIAGE_GOAL_DEFINITION_ID,
+  TRIAGE_LEAVE_COMMAND, TRIAGE_LEAVE_DEFINITION_ID, TRIAGE_NOTE_COMMAND, TRIAGE_NOTE_DEFINITION_ID,
+  TRIAGE_REVIEW_COMMAND, TRIAGE_REVIEW_DEFINITION_ID,
 } from './shared.js'
 import type { ParkPhase, ParkStatus } from './shared.js'
+import { walkDescendants } from './tree.js'
 
-/** Result copy for a session that just reached the pause point; the model never sees it. */
-const PAUSED_TEXT = 'This session is paused. It stops once the work in flight drains.'
-  + ' Press again to cancel the pause.'
+/**
+ * Result copy for a session that just reached the pause point; the model never
+ * sees it. The count is the point: the header control is the user's button for
+ * one session's work, and that work includes the subagents under it, so the
+ * press must not read as having stopped a single thing.
+ * @param agents - how many subagents this press registered alongside the session.
+ * @returns the copy for the person who pressed.
+ */
+function pausedText(agents: number): string {
+  const registered = agents === 0
+    ? 'this session'
+    : agents === 1
+      ? 'this session and 1 subagent'
+      : `this session and ${String(agents)} subagents`
+  return `safe-stop registered ${registered}. They stop once the work in flight drains.`
+    + ' Press again to cancel the pause.'
+}
 
 /** Result copy for a press or a release the durable registry refused to record. */
 const UNRECORDED_TEXT = 'safe-stop could not write the pause registry, so it did not change the pause state.'
+
+/**
+ * What a tree-wide press reports when it could not read the tree. The session
+ * itself is paused and says so; its subagents are neither registered nor
+ * vouched for, and the answer names that limit rather than letting the session's
+ * own park stand for a tree nobody read.
+ */
+const TREE_UNREAD_TEXT = 'safe-stop could not read this session\'s subagent tree, so it did not register its subagents.'
+
+/**
+ * Result copy for a tree-wide press that could not record part of the tree.
+ * The members it names are still running; the ones it does not are paused.
+ * @param names - the members whose park record could not be written.
+ * @returns the copy for the person who pressed.
+ */
+function unrecordedTreeText(names: readonly SessionId[]): string {
+  return `safe-stop could not register ${names.map(name => `"${String(name)}"`).join(', ')}`
+    + ' in the pause registry, so they are not paused. Everything else in the tree is.'
+}
 
 /**
  * Result copy for a state-changing park verb issued from inside a model turn.
@@ -131,6 +172,20 @@ async function sessionReadable(ctx: Context, sessionId: SessionId): Promise<bool
   }
 }
 
+/** What one tree-wide press registered, and what it could not. */
+export interface PressTreeOutcome {
+  /** How many sessions this press covered: the session plus its descendants. */
+  readonly members: number
+  /** How many of them now have a durable park record behind them. */
+  readonly registered: number
+  /** Whether the pressed session itself is one of them. */
+  readonly rootRegistered: boolean
+  /** The members whose record could not be written; they are not paused. */
+  readonly unrecorded: readonly SessionId[]
+  /** Whether the tree walk itself failed, so the session's subagents were not covered. */
+  readonly unread: boolean
+}
+
 /** One session's park in progress. */
 interface ParkMark {
   /**
@@ -163,20 +218,6 @@ interface ParkMark {
    * keeps a second look from starting a second flush for the same park.
    */
   advancing: boolean
-}
-
-/** The status one mark reports right now. */
-function statusOf(mark: ParkMark, runningTools: readonly string[]): ParkStatus {
-  switch (mark.phase) {
-    case 'draining':
-      return { phase: 'draining', safe: false, runningTools }
-    case 'parking':
-      return { phase: 'parking', safe: false, runningTools: [] }
-    case 'safe':
-      return { phase: 'safe', safe: true, runningTools: [] }
-    case 'flush-failed':
-      return { phase: 'flush-failed', safe: false, runningTools: [] }
-  }
 }
 
 /** What mounting the session control hands back to the plugin entry. */
@@ -246,6 +287,13 @@ export function installSessionControl(
    * instead of counting them among the sessions this park owns.
    */
   const unheld = new Set<SessionId>()
+  /**
+   * Sessions a press of this process tried to register and the registry
+   * refused. They are running, unmarked, and invisible to the live accessor,
+   * so this is the only thing that keeps the aggregate from quietly omitting
+   * them; see {@link GlobalStop.markUnrecorded}.
+   */
+  const unrecorded = new Set<SessionId>()
   /** Bumped by every mark and every cancel; a stale generation publishes nothing. */
   let generation = 0
 
@@ -294,6 +342,50 @@ export function installSessionControl(
   }
 
   /**
+   * The phase a durable record holds for one session right now, whether or not
+   * this process holds it. A member whose session this host cannot read still
+   * has a record, and that record is the only thing anyone knows about it.
+   */
+  const recordedPhase = (sessionId: SessionId): ParkPhase | undefined =>
+    marks.get(sessionId)?.phase ?? registry.get(sessionId)?.phase
+
+  /**
+   * The state this session's header reports: the worst phase among the members
+   * the session's own press registered, folded with the session's own.
+   *
+   * The control speaks for a tree, so it may not say "safe to close" while a
+   * member of that tree is still draining, stalled, or not readable — the user
+   * would close the lid on work this press started. A branch the walk could not
+   * read may hold a member nobody can see, so an unread branch counts as
+   * unfinished rather than as empty.
+   * @param mark - the session's own mark, whose phase the fold starts from.
+   * @returns the phase to publish and the goal opt-out that rides beside it.
+   */
+  const treeStatus = async (sessionId: SessionId, mark: ParkMark): Promise<ParkStatus> => {
+    const walk = await walkDescendants(ctx, sessionId)
+    const phases: ParkPhase[] = [mark.phase]
+    for (const member of walk.members) {
+      const phase = recordedPhase(member.id)
+      if (phase !== undefined) phases.push(phase)
+    }
+    // An unread branch: unknown is not clean, and it is not a settled state
+    // either, so it folds in as the phase a member would report between the
+    // park point and the flush.
+    for (let at = 0; at < walk.unread.length + (walk.unreadWhole ? 1 : 0); at += 1) phases.push('parking')
+
+    const folded = foldTreePhases(phases)
+    // The goal opt-out is the session's own record's, never a member's: the
+    // switch beside this marker names the session it changes.
+    const record = registry.get(sessionId)
+    return {
+      phase: folded.phase,
+      safe: folded.safe,
+      runningTools: mark.phase === 'draining' ? watch.activity(sessionId).runningTools : [],
+      ...record === undefined ? {} : { rearmGoal: record.rearmGoal },
+    }
+  }
+
+  /**
    * Ensure one paused session has both commands registered. Registration is
    * once per park: the status is answered by the command, not frozen into the
    * descriptor, so a phase change needs no command re-registration.
@@ -303,15 +395,10 @@ export function installSessionControl(
     if (mark === undefined || markers.has(sessionId)) return
     const agent = ctx.agents.get(sessionId)
     if (agent === undefined) return
-    // The record is read per status call rather than frozen into the mark: the
-    // goal opt-out is durable state beside the phase, not part of this mark.
-    const status = (): string => {
-      const record = registry.get(sessionId)
-      return encodeParkStatus({
-        ...statusOf(mark, watch.activity(sessionId).runningTools),
-        ...record === undefined ? {} : { rearmGoal: record.rearmGoal },
-      })
-    }
+    // The record is read per status call rather than frozen into the mark: both
+    // the goal opt-out and the members of the tree the press registered are
+    // durable state beside the phase, not part of this mark.
+    const status = async (): Promise<string> => encodeParkStatus(await treeStatus(sessionId, mark))
     // The registry keys scoped definitions off the context a call is made
     // through, and Cordis refuses an undeclared service access, so the marker
     // goes through a `commands`-injected child of THIS agent's context: the
@@ -321,16 +408,18 @@ export function installSessionControl(
       scope.commands.register({
         definitionId: CommandDefinitionId(RESUME_DEFINITION_ID),
         name: RESUME_COMMAND,
-        description: 'Resume this paused Session',
+        description: 'Resume this parked Session and its subagents',
         handler: async (invocation) => (modelIssued(ctx)
           ? { kind: 'error', text: UNATTENDED_TEXT }
-          : (await resumePath.resumeSession(invocation.agent.id, { kind: 'silent' })).answer),
+          : (await resumePath.releaseTree(invocation.agent.id)).answer),
       })
       scope.commands.register({
         definitionId: CommandDefinitionId(STATUS_DEFINITION_ID),
         name: STATUS_COMMAND,
-        description: status(),
-        handler: () => ({ kind: 'success', text: status() }),
+        // This descriptor is only the marker the browser looks for; the state
+        // it reports is derived per call, tree and all.
+        description: 'Report this parked tree',
+        handler: async () => ({ kind: 'success', text: await status() }),
       })
       // This session's own goal opt-out. It is the one goal switch that needs no
       // cross-session target — the caller IS the session whose record changes —
@@ -459,6 +548,79 @@ export function installSessionControl(
     return false
   }
 
+  /**
+   * Press one session's pause and register its whole tree behind it.
+   *
+   * "One session's work" includes the subagents it delegated to, nested ones
+   * included, and the user does not pause them one by one. So the press walks
+   * the session's own catalog tree and gives every member the same durable
+   * treatment the session gets: {@link press} registers what it can hold, and a
+   * member whose record cannot be written is named here rather than counted as
+   * paused.
+   *
+   * A tree the walk could not read is the one case where the press does less
+   * than the tree: the session itself is still registered — the user pressed a
+   * session, and its park is real — and the answer says the subagents were not
+   * covered rather than counting a tree nobody read.
+   * @param sessionId - the session whose tree the user pressed.
+   * @returns which members are registered and which could not be.
+   */
+  const pressTree = async (sessionId: SessionId): Promise<PressTreeOutcome> => {
+    // Nothing live means nothing this press could hold; the check is also what
+    // keeps a session disposed in the middle of a press on the path that
+    // records the park point it reached.
+    if (ctx.sessions.get(sessionId) === undefined) {
+      return { members: 0, registered: 0, rootRegistered: false, unrecorded: [], unread: false }
+    }
+    const walk = await walkDescendants(ctx, sessionId)
+    // A tree this press could not read is not a reason to drop the session
+    // itself: the user pressed a session, and its own park is still real. What
+    // is refused is the claim about the tree, which is why the count stays at
+    // the one member this press actually covers.
+    if (walk.unreadWhole) {
+      const pressed = await press(sessionId)
+      // The look is unconditional on purpose: a session that left the store
+      // during this press has a mark and cannot be flushed, which is the one
+      // way its park still reaches a durable "not clean" instead of a phase
+      // that never settles.
+      look(sessionId)
+      globalStop.markUnrecorded(sessionId, !pressed)
+      return {
+        members: 1,
+        registered: pressed ? 1 : 0,
+        rootRegistered: pressed,
+        unrecorded: pressed ? [] : [sessionId],
+        unread: true,
+      }
+    }
+    const registered: SessionId[] = []
+    const unrecorded: SessionId[] = []
+    for (const id of [sessionId, ...walk.members.map(member => member.id)]) {
+      // The press is per member on purpose: one member that cannot be recorded
+      // is named while the rest keep the pause they got.
+      const paused = await press(id)
+      if (paused) {
+        registered.push(id)
+        // A member this host has nothing live for has no mark to walk; one that
+        // does is looked at now, exactly as the session's own press looked at
+        // itself.
+        look(id)
+      } else {
+        unrecorded.push(id)
+      }
+      // The aggregate owns the same fact, so a member the registry refused is
+      // named by the whole-app report too.
+      globalStop.markUnrecorded(id, !paused)
+    }
+    return {
+      members: registered.length + unrecorded.length,
+      registered: registered.length,
+      rootRegistered: registered.includes(sessionId),
+      unrecorded,
+      unread: false,
+    }
+  }
+
   const sync = (sessionId: SessionId): void => {
     if (!gate.isPaused(sessionId)) {
       drop(sessionId)
@@ -537,15 +699,22 @@ export function installSessionControl(
     yield ctx.commands.register({
       definitionId: CommandDefinitionId(PAUSE_DEFINITION_ID),
       name: PAUSE_COMMAND,
-      description: 'Pause this Session before its next model request',
+      description: 'Pause this Session and its subagents before their next model request',
       handler: async (invocation) => {
         if (modelIssued(ctx)) return { kind: 'error', text: UNATTENDED_TEXT }
         const sessionId = invocation.agent.id
-        if (!await press(sessionId)) return { kind: 'error', text: UNRECORDED_TEXT }
+        const pressed = await pressTree(sessionId)
+        if (pressed.unrecorded.length > 0) {
+          return { kind: 'error', text: unrecordedTreeText(pressed.unrecorded) }
+        }
+        const agents = pressed.rootRegistered ? pressed.registered - 1 : pressed.registered
+        // A tree this press could not read leaves the session itself parked and
+        // its subagents unaccounted for; the answer says exactly that much.
+        if (pressed.unread) return { kind: 'success', text: `${pausedText(agents)} ${TREE_UNREAD_TEXT}` }
         // The press returns now: the drain happens while the user stays free to
-        // walk away or press again to cancel it.
-        look(sessionId)
-        return { kind: 'success', text: PAUSED_TEXT }
+        // walk away or press again to cancel it. The count names the whole
+        // tree, so the answer cannot be mistaken for stopping one thing.
+        return { kind: 'success', text: pausedText(agents) }
       },
     })
     // Registered globally, so the morning path exists on any session the user

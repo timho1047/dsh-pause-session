@@ -201,6 +201,40 @@ export const PARK_PHASES = ['draining', 'parking', 'safe', 'flush-failed'] as co
 /** One park outcome. */
 export type ParkPhase = (typeof PARK_PHASES)[number]
 
+/**
+ * How far along a phase is, worst first. The direction is not the order a park
+ * walks: it orders how much of the promise each outcome keeps, which is what a
+ * fold over several sessions has to compare. `safe` keeps all of it, `draining`
+ * and `parking` are on their way, `flush-failed` has stopped trying — a park
+ * that failed its flush is further from clean than one that is still working at
+ * it, so it must never be the outcome a report rounds down to.
+ */
+const PHASE_SEVERITY: Record<ParkPhase, number> = {
+  safe: 0,
+  draining: 1,
+  parking: 2,
+  'flush-failed': 3,
+}
+
+/**
+ * Fold several records into the one verdict that speaks for all of them: the
+ * worst phase any of them reached, and whether every one of them is clean.
+ *
+ * This is how a session's control answers for its tree. "Safe to close" is a
+ * promise about everything the press registered, so it may be said only when
+ * every member reached the flushed park point; anything else is reported as the
+ * least-clean state in the set, never rounded up to the session's own.
+ * @param phases - the durable phases of the records being spoken for.
+ * @returns the worst phase, and whether that verdict is the clean one.
+ */
+export function foldTreePhases(phases: Iterable<ParkPhase>): { phase: ParkPhase; safe: boolean } {
+  let worst: ParkPhase = 'safe'
+  for (const phase of phases) {
+    if (PHASE_SEVERITY[phase] > PHASE_SEVERITY[worst]) worst = phase
+  }
+  return { phase: worst, safe: worst === 'safe' }
+}
+
 /** The one word each phase is published as, and the whole decoding vocabulary. */
 const PHASE_WORD: Record<ParkPhase, string> = {
   draining: 'draining',
@@ -218,6 +252,13 @@ const GOAL_OFF = 'off'
 
 /** Everything the browser is told about one paused session. */
 export interface ParkStatus {
+  /**
+   * The phase of everything that session's press registered — the session and
+   * the subagent members under it, folded by {@link foldTreePhases}. A member
+   * still draining or stalled holds this at its own phase, because the control
+   * that owns the tree may not say "safe to close" while any member of it is
+   * not.
+   */
   readonly phase: ParkPhase
   /** Whether the host commits to "you can close the lid now". */
   readonly safe: boolean

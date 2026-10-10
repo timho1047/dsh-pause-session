@@ -41,7 +41,7 @@ import { SafeStopGlobalControl } from './global.js'
 import { GoalIcon, PauseIcon, ResumeIcon } from './icons.js'
 import { SafeStopPill } from './pill.js'
 import type { SafeStopPillInjected } from './pill.js'
-import { safeStopView } from './view.js'
+import { safeStopView, showsPauseControl } from './view.js'
 import { en, zh, type SafeStopKey } from './locales.js'
 import styles from './button.module.css'
 
@@ -75,22 +75,28 @@ export type SafeStopButtonProps = PropsRuntime<'conversation.session.header.acti
   & PropsLocale<'safe-stop'>
 
 /**
- * The session's safe-stop control: pause the session before its next model
- * request, or resume it, with the host's own state on screen. Once the host
- * reports the park's goal opt-out, a second switch sits beside it — the only
- * place a session that stopped CLEANLY can be told not to re-open its goal on
- * the next resume, because the decision list shows only the sessions that did
- * not stop cleanly.
+ * The session's safe-stop control: pause the session and its subagents before
+ * their next model request, or resume them, with the host's own state on screen.
+ * Once the host reports the park's goal opt-out, a second switch sits beside it
+ * — the only place a session that stopped CLEANLY can be told not to re-open its
+ * goal on the next resume, because the decision list shows only the sessions
+ * that did not stop cleanly.
+ *
+ * A subagent session renders nothing: its work is its parent's, the parent's
+ * control already covers it, and a button here would offer to pause "a session"
+ * from inside a child.
  * @param props - session runtime, host operations, and localized copy.
- * @returns the header action.
+ * @returns the header action, or nothing on a subagent session.
  */
 export function SafeStopButton(props: SafeStopButtonProps): ReactNode {
-  const { sessionId, refresh, toggle, toggleGoal, t } = props
+  const { sessionId, refresh, toggle, toggleGoal, t, useSession } = props
   const reading = props.useSafeStop(state => state.bySession[String(sessionId)])
   const view = safeStopView(reading)
+  const visible = showsPauseControl(useSession(snapshot => snapshot.subagent))
   // Read once per mounted control: the host is the source of truth, and the
   // forwarded registry change keeps it current afterwards.
   useEffect(() => { refresh(sessionId) }, [refresh, sessionId])
+  if (!visible) return null
   return (
     <span className={styles.dsss}>
       <button
