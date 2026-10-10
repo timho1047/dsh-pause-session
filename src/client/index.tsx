@@ -174,7 +174,10 @@ export function apply(ctx: ClientContext): void {
   // parking N sessions arrives as several events per session. Both controls
   // coalesce that themselves, over the burst's own collection window
   // (`./burst.ts`): a change that lands inside the window postpones the single
-  // burst it buys rather than starting one of its own.
+  // burst it buys rather than starting one of its own. A change that follows
+  // one of the user's own actions is that action's echo instead, and the burst
+  // absorbs it for a short window rather than reading back an answer the
+  // action already put on screen.
   ctx.effect(
     () => ctx.remote.$on('commands/change', () => {
       control.refreshAll()

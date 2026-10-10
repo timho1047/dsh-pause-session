@@ -19,17 +19,27 @@
  * burst read that finds the work in flight, and nothing more until the park
  * announces its next transition; and a session the user merely views pays
  * nothing once the park's own address is known.
+ *
+ * A change that follows the user's own action is that action's own echo, and
+ * the action already read the host: those changes are absorbed for
+ * `ACTION_ABSORB_MS`, so the measured resume — one action read, plus the
+ * unregistration reads its own three markers caused, none of which the 400 ms
+ * trailing window can merge — costs the single read the action made. The same
+ * three markers with no action before them still buy the burst they always did,
+ * and the first change after the window goes quiet is what discovers a park
+ * made elsewhere while the window was open.
  * @module dsh-safe-stop/test/global/poll-budget
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { apply, inject } from '../../src/client/index.tsx'
-import { ReadBurst, burstWaits } from '../../src/client/burst.ts'
+import { ACTION_ABSORB_MS, ReadBurst, burstWaits } from '../../src/client/burst.ts'
 import type { BurstPolicy } from '../../src/client/burst.ts'
 import { SafeStopControl } from '../../src/client/control.ts'
+import type { SafeStopState } from '../../src/client/control.ts'
 import { SafeStopGlobalControl, registeredAddress } from '../../src/client/global.ts'
-import type { GlobalReading } from '../../src/client/global.ts'
+import type { GlobalReading, GlobalStopState } from '../../src/client/global.ts'
 import { globalStopView } from '../../src/client/view.ts'
 import {
   encodeGlobalStatus, encodeParkStatus, encodeTriageList, RESUME_COMMAND, RESUME_DEFINITION_ID,
@@ -640,6 +650,68 @@ describe('the per-session read budget', () => {
     await vi.advanceTimersByTimeAsync(1_000)
     expect(lists(), 'the header was left on an answer the park had moved past').toBe(2)
   })
+
+  it('absorbs the marker changes a header press causes, and reads a change after the window', async () => {
+    vi.useFakeTimers()
+    const { commands, calls } = sessionDouble({ a: 'safe' })
+    const control = new SafeStopControl(commands, new AbortController().signal, WINDOW_MS, policy())
+    const lists = (): number => calls.filter(call => call.line === 'list').length
+
+    await control.refresh(SessionId('a'))
+    expect(lists()).toBe(1)
+    // The header's press reads the host too: one list and one status.
+    await control.toggle(SessionId('a'))
+    expect(lists()).toBe(2)
+
+    // The host unregisters the three marker commands, one change each. They are
+    // the press's own echo, so the header pays nothing for them.
+    control.refreshAll()
+    await vi.advanceTimersByTimeAsync(600)
+    control.refreshAll()
+    await vi.advanceTimersByTimeAsync(600)
+    expect(lists(), 'a marker change the press caused was read back').toBe(2)
+
+    // The last change moved the window 2 s out; once it is over, a change reads.
+    await vi.advanceTimersByTimeAsync(ACTION_ABSORB_MS + 1)
+    control.refreshAll()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(lists(), 'a change after the absorption window was dropped').toBe(3)
+
+    // The goal switch reads as it runs too, so what it causes is absorbed.
+    await control.toggleGoal(SessionId('a'))
+    expect(lists()).toBe(4)
+    control.refreshAll()
+    await vi.advanceTimersByTimeAsync(600)
+    expect(lists(), 'a change the goal switch caused was read back').toBe(4)
+  })
+
+  it('reads a header the park has moved past even while an action absorbs its own echo', async () => {
+    vi.useFakeTimers()
+    const { commands, calls } = sessionDouble({ a: 'active', b: 'active' })
+    const idle = status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
+    let aggregate: GlobalReading = { kind: 'reported', status: idle }
+    const control = new SafeStopControl(commands, new AbortController().signal, WINDOW_MS, policy(), () => aggregate)
+    const listed = (id: string): number => calls.filter(call => call.line === 'list' && call.session === id).length
+
+    // Two headers mount while the park holds nothing: after the mount reads, a
+    // change is answered from the whole-app verdict rather than read.
+    await control.refresh(SessionId('a'))
+    await control.refresh(SessionId('b'))
+    control.refreshAll()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(listed('a')).toBe(1)
+    expect(listed('b')).toBe(1)
+
+    // The user presses header 'a'. Its own read answers it, and in the same
+    // moment another window's park makes the aggregate that stood in for 'b'
+    // wrong. The press's absorption is for the changes it caused, not for what
+    // that reading revealed: 'b' is read rather than left claiming to run.
+    await control.toggle(SessionId('a'))
+    aggregate = { kind: 'reported', status: status() }
+    control.reconsider()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(listed('b'), 'the header was left on an answer the park had moved past').toBe(2)
+  })
 })
 
 describe('the read burst', () => {
@@ -723,6 +795,49 @@ describe('the read burst', () => {
     expect(burstWaits(0)).toEqual([])
     expect(burstWaits(25)).toEqual([25, 62.5, 150, 300])
   })
+
+  it('absorbs every change a client action causes, and reads one after the window closes', async () => {
+    vi.useFakeTimers()
+    const { burst, reads } = movingBurst()
+    // The user acted and the action read the host: what arrives for the next
+    // `ACTION_ABSORB_MS` is that action's own echo, not news.
+    burst.absorb()
+    expect(burst.absorbing).toBe(true)
+    burst.trigger()
+    await vi.advanceTimersByTimeAsync(ACTION_ABSORB_MS + 1)
+    expect(reads(), 'a change the action caused was read back').toBe(0)
+    expect(burst.absorbing).toBe(false)
+
+    // The window has closed, so the next change is news and buys its burst.
+    burst.trigger()
+    await vi.advanceTimersByTimeAsync(10)
+    expect(reads(), 'a change after the absorption window was dropped').toBe(1)
+  })
+
+  it('keeps the window open while the echo keeps arriving', async () => {
+    vi.useFakeTimers()
+    const { burst, reads } = movingBurst()
+    burst.absorb()
+    // The measured resume's unregistration storm — three changes the 400 ms
+    // trailing window cannot merge, the last of them about 2 s after the one
+    // before. Each one absorbed is another window, so the storm costs nothing
+    // rather than one read per change.
+    burst.trigger()
+    await vi.advanceTimersByTimeAsync(640)
+    burst.trigger()
+    await vi.advanceTimersByTimeAsync(440)
+    burst.trigger()
+    await vi.advanceTimersByTimeAsync(960)
+    expect(reads(), 'the storm the action caused was read back').toBe(0)
+    expect(burst.absorbing).toBe(true)
+
+    // Two seconds after the storm's last change, the storm is over.
+    await vi.advanceTimersByTimeAsync(ACTION_ABSORB_MS + 1)
+    expect(burst.absorbing).toBe(false)
+    burst.trigger()
+    await vi.advanceTimersByTimeAsync(10)
+    expect(reads(), 'the change after the storm was dropped').toBe(1)
+  })
 })
 
 describe('one change, one read', () => {
@@ -766,11 +881,19 @@ describe('one change, one read', () => {
     }
   }
 
-  /** One registered slot's inject face, with the operations the controls call. */
+  /** One registered slot's inject face: the operations a control calls, and the state it shows. */
   function faceOf(
     registrations: { options: Record<string, unknown> }[],
     name: string,
-  ): { refresh: (id: SessionId) => void; toggle: (id: SessionId) => void; setPanel: (open: boolean) => void } {
+  ): {
+    refresh: (id: SessionId) => void
+    toggle: (id: SessionId) => void
+    setPanel: (open: boolean) => void
+    hooks: {
+      readonly safeStopGlobal?: { getSnapshot: () => GlobalStopState }
+      readonly safeStop?: { getSnapshot: () => SafeStopState }
+    }
+  } {
     const entry = registrations.find(registration => registration.options['name'] === name)
     if (entry === undefined) throw new Error(`safe-stop: no slot entry registered for ${name}`)
     const face = (entry.options as { inject?: () => never }).inject
@@ -895,5 +1018,184 @@ describe('one change, one read', () => {
     benchRun.listeners[0]?.()
     await vi.advanceTimersByTimeAsync(2_000)
     expect(listed(), 'the header was left on an answer the park had moved past').toBe(2)
+  })
+
+  /** The host's answer a whole-app press leaves behind: nothing registered. */
+  const idleStatus = (): GlobalStatus => status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
+
+  /** What the pill currently shows: the last answer the control published. */
+  const shownBy = (face: {
+    hooks: { safeStopGlobal?: { getSnapshot: () => GlobalStopState } }
+  }): GlobalReading | undefined => face.hooks.safeStopGlobal?.getSnapshot().global
+
+  it('absorbs the unregistration storm a resume causes: one read, not four', async () => {
+    vi.useFakeTimers()
+    const benchRun = bench()
+    // The park is settled, so releasing it is the one press left.
+    benchRun.host.answered = status({ verdict: 'safe', registered: 1, safe: 1, draining: [] })
+    // The pill mounts and reads the host once.
+    benchRun.wholeApp.refresh(ADDRESS)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(benchRun.host.reads).toBe(1)
+
+    // The user resumes. The action reads the host itself: that is read two, and
+    // the answer on screen.
+    benchRun.wholeApp.toggle(ADDRESS)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(benchRun.host.reads).toBe(2)
+    expect(shownBy(benchRun.wholeApp)).toEqual({ kind: 'reported', status: idleStatus() })
+
+    // The host unregisters the parked session's three marker commands and
+    // announces each one on its own — the measured resume put the first two
+    // 0.64 s and 1.08 s after the action's own read, and that storm is what the
+    // 400 ms trailing window cannot merge. All three are that action's echo, so
+    // the whole storm costs nothing at all.
+    benchRun.listeners[0]?.()
+    await vi.advanceTimersByTimeAsync(640)
+    benchRun.listeners[0]?.()
+    await vi.advanceTimersByTimeAsync(440)
+    benchRun.listeners[0]?.()
+    await vi.advanceTimersByTimeAsync(960)
+    expect(benchRun.host.reads, 'the unregistration storm was read back').toBe(2)
+
+    // And nothing follows: an idle park is not watched.
+    await vi.advanceTimersByTimeAsync(3_600_000)
+    expect(benchRun.host.reads).toBe(2)
+    expect(benchRun.host.triageReads, 'a closed panel spent a command call').toBe(0)
+  })
+
+  it('reads a change that arrives after the absorption window: the storm plus one late marker costs two reads', async () => {
+    vi.useFakeTimers()
+    const benchRun = bench()
+    benchRun.host.answered = status({ verdict: 'safe', registered: 1, safe: 1, draining: [] })
+    benchRun.wholeApp.refresh(ADDRESS)
+    await vi.advanceTimersByTimeAsync(0)
+
+    benchRun.wholeApp.toggle(ADDRESS)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(benchRun.host.reads).toBe(2)
+
+    // One unregistration, absorbed: it moves the window 2 s out from itself.
+    benchRun.listeners[0]?.()
+    await vi.advanceTimersByTimeAsync(640)
+    expect(benchRun.host.reads).toBe(2)
+
+    // A change 2.6 s after that one is past the window: the trailing coalescing
+    // is all there is again, so it reads after its own window and first wait.
+    await vi.advanceTimersByTimeAsync(2_600)
+    benchRun.listeners[0]?.()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(benchRun.host.reads, 'the change read before its burst was due').toBe(2)
+    await vi.advanceTimersByTimeAsync(800)
+    expect(benchRun.host.reads, 'a change after the absorption window was dropped').toBe(3)
+    await vi.advanceTimersByTimeAsync(3_600_000)
+    expect(benchRun.host.reads).toBe(3)
+  })
+
+  it('turns three marker changes with no action before them into one burst, not three', async () => {
+    vi.useFakeTimers()
+    const benchRun = bench()
+    benchRun.host.answered = status({ verdict: 'safe', registered: 1, safe: 1, draining: [] })
+    benchRun.wholeApp.refresh(ADDRESS)
+    await vi.advanceTimersByTimeAsync(0)
+    const before = benchRun.host.reads
+    expect(before).toBe(1)
+
+    // Nothing was pressed, so these three markers are news rather than an echo
+    // and the trailing window is what merges them — the behaviour absorption
+    // must not take away. (Markers spread the way the measured storm is — 0.44 s
+    // to 2.04 s apart — outrun that window, and every one the running burst
+    // misses is read on its own: exactly the cost an action's echo no longer
+    // pays.)
+    benchRun.listeners[0]?.()
+    await vi.advanceTimersByTimeAsync(200)
+    benchRun.listeners[0]?.()
+    await vi.advanceTimersByTimeAsync(200)
+    benchRun.listeners[0]?.()
+    await vi.advanceTimersByTimeAsync(800)
+    expect(benchRun.host.reads - before, 'three marker changes became this many reads').toBe(1)
+  })
+
+  it('discovers a park made in another window on the first change after the absorption window', async () => {
+    vi.useFakeTimers()
+    const benchRun = bench()
+    benchRun.host.answered = status({ verdict: 'safe', registered: 1, safe: 1, draining: [] })
+    benchRun.wholeApp.refresh(ADDRESS)
+    await vi.advanceTimersByTimeAsync(0)
+
+    // The user releases the park; the action reads, and its echo is absorbed.
+    benchRun.wholeApp.toggle(ADDRESS)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(benchRun.host.reads).toBe(2)
+
+    // Another window parks a session while the window is open. Its marker
+    // registrations look exactly like the echo — the forwarded event carries no
+    // payload — so they are absorbed, and the pill still shows the release.
+    benchRun.host.answered = status()
+    benchRun.listeners[0]?.()
+    await vi.advanceTimersByTimeAsync(500)
+    benchRun.listeners[0]?.()
+    await vi.advanceTimersByTimeAsync(500)
+    expect(benchRun.host.reads, 'a change inside the absorption window was read').toBe(2)
+    expect(shownBy(benchRun.wholeApp)).toEqual({ kind: 'reported', status: idleStatus() })
+
+    // The next change after the window goes quiet — the park's own
+    // unregistration, or any other — is what discovers it: the window is not a
+    // promise that nothing moved, only that this browser did not have to ask.
+    await vi.advanceTimersByTimeAsync(2_100)
+    benchRun.listeners[0]?.()
+    await vi.advanceTimersByTimeAsync(800)
+    expect(benchRun.host.reads, 'the park made elsewhere was never discovered').toBe(3)
+    expect(shownBy(benchRun.wholeApp)).toEqual({ kind: 'reported', status: status() })
+  })
+
+  it('reads on the next press while the absorption window is still open', async () => {
+    vi.useFakeTimers()
+    const benchRun = bench()
+    benchRun.host.answered = status({ verdict: 'safe', registered: 1, safe: 1, draining: [] })
+    benchRun.wholeApp.refresh(ADDRESS)
+    await vi.advanceTimersByTimeAsync(0)
+
+    // Resume, then park everything again half a second later: a user action
+    // reads whatever the absorption window says.
+    benchRun.wholeApp.toggle(ADDRESS)
+    await vi.advanceTimersByTimeAsync(500)
+    expect(benchRun.host.reads).toBe(2)
+    benchRun.wholeApp.toggle(ADDRESS)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(benchRun.host.reads, 'a press inside the absorption window did not read').toBe(3)
+    expect(shownBy(benchRun.wholeApp)).toEqual({ kind: 'reported', status: status() })
+  })
+
+  it('reads the rows an opened panel shows, and absorbs the changes it causes', async () => {
+    vi.useFakeTimers()
+    const benchRun = bench()
+    benchRun.host.answered = status({ verdict: 'safe', registered: 1, safe: 1, draining: [] })
+    benchRun.wholeApp.refresh(ADDRESS)
+    await vi.advanceTimersByTimeAsync(0)
+    const reads = benchRun.host.reads
+    expect(reads).toBe(1)
+
+    // Opening the panel is a client action: its rows are its own read, and with
+    // a park that has stopped moving there is nothing on screen to watch.
+    benchRun.wholeApp.setPanel(true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(benchRun.host.triageReads, 'the panel did not read its own rows').toBe(1)
+    benchRun.listeners[0]?.()
+    benchRun.listeners[0]?.()
+    await vi.advanceTimersByTimeAsync(3_600_000)
+    expect(benchRun.host.reads - reads, 'an opened panel bought a read for nothing').toBe(0)
+    expect(benchRun.host.triageReads, 'a change the open caused was read back').toBe(1)
+
+    // A decision reads as it runs, so the one read it takes is the answer to its
+    // own consequences.
+    const decided = benchRun.host.reads
+    benchRun.wholeApp.decide('overnight', 'leave')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(benchRun.host.reads - decided, "a decision's own read").toBe(1)
+    benchRun.listeners[0]?.()
+    benchRun.listeners[0]?.()
+    await vi.advanceTimersByTimeAsync(3_600_000)
+    expect(benchRun.host.reads - decided, 'the changes a decision caused were read back').toBe(1)
   })
 })

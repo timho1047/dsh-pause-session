@@ -19,7 +19,9 @@
  * phase that never settles stops being asked about instead of being asked about
  * forever. Registry changes start that burst, and one tick's worth of them —
  * parking a session registers three commands, and the host announces each of
- * them — is one burst.
+ * them — is one burst. A press or a goal switch reads as it runs, and the
+ * marker changes it causes are that action's own echo: those are absorbed for a
+ * short window (`./burst.ts`) rather than read back.
  *
  * The whole-app control reads the same park and publishes what it found
  * (`./global.ts`), and a header consults that answer before spending a read of
@@ -205,6 +207,10 @@ export class SafeStopControl {
     const line = current === undefined || current === 'active'
       ? `/${PAUSE_COMMAND}`
       : `/${RESUME_COMMAND}`
+    // The press is a client action: the markers the host registers or
+    // unregisters as it runs are its own echo, and the read below is the answer
+    // to all of it.
+    this.burst.absorb()
     const executed = await this.commands.execute(sessionId, line, [], this.lifetime)
     if (!executed.ok) {
       this.publish(sessionId, { phase: 'unavailable', runningTools: [] })
@@ -226,6 +232,9 @@ export class SafeStopControl {
    * @returns after the control re-reads the host.
    */
   async toggleGoal(sessionId: SessionId): Promise<void> {
+    // The switch is a client action too: the record change it causes announces
+    // itself through the registry, and the re-read below is the answer.
+    this.burst.absorb()
     await this.commands.execute(sessionId, `/${GOAL_COMMAND}`, [], this.lifetime)
     await this.refresh(sessionId)
   }
@@ -311,7 +320,11 @@ export class SafeStopControl {
     if (this.derived.size === 0 || this.lifetime.aborted || this.nothingParked()) return
     for (const sessionId of this.derived) this.owed.add(sessionId)
     this.derived.clear()
-    this.burst.trigger()
+    // What these headers say is known to be wrong now, so this does not wait out
+    // anything — least of all the absorption window of an action the user took
+    // in the same moment. Absorption is for the changes an action caused, never
+    // for what a reading just revealed.
+    this.burst.next()
   }
 
   /**

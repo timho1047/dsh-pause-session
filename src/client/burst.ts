@@ -15,6 +15,15 @@
  *   registration. The burst therefore waits out a short `windowMs` before its
  *   first read and any trigger inside that window postpones it, so the
  *   registrations of one park start one burst rather than one each;
+ * - a change that arrives within `ACTION_ABSORB_MS` of the user's own action is
+ *   that action's own consequence, not news: the action already read the host,
+ *   so the answer is on screen, and the unregistrations it caused — one event
+ *   per marker command, measured seconds apart, which the window above cannot
+ *   merge — would only be read back. Such a change is absorbed, and each one
+ *   absorbed pushes the window out, because a storm that keeps arriving is
+ *   still the same storm. The window always closes: the first change after
+ *   `ACTION_ABSORB_MS` of quiet is news again, and a user action reads on its
+ *   own whatever the window says;
  * - a burst is a fixed short list of waits, so at most that many reads answer
  *   one transition, however long the page stays open;
  * - a read that finds the verdict settled ends the burst at once, and the last
@@ -66,6 +75,23 @@ export const DEFAULT_BURST_POLICY: BurstPolicy = {
   waitsMs: [400, 1_000, 2_400, 4_800],
   visible: defaultVisibility,
 }
+
+/**
+ * How long after a client action a registry change is that action's own echo.
+ *
+ * A press, a release, a decision, a goal switch and an opened panel each read
+ * the host as they run, so their answer is already on screen when the host
+ * announces what they did — one `commands/change` per marker command, measured
+ * 0.44 s to 2.04 s apart, a cadence the coalescing window cannot merge. Reading
+ * those back is paying for an answer the user already has.
+ *
+ * The window is what makes `commands/change` mean "something moved that this
+ * browser did not do". It is refreshed by every change it absorbs, so a storm
+ * that keeps arriving stays absorbed rather than leaking one read per change,
+ * and it ends for good `ACTION_ABSORB_MS` after the last change: a change after
+ * that is news, and so is the next user action, which reads on its own.
+ */
+export const ACTION_ABSORB_MS = 2_000
 
 /**
  * The waits one burst uses when its first wait is `first`: four reads spread
@@ -124,6 +150,8 @@ export class ReadBurst {
   private left: readonly number[] = []
   /** Whether a burst is in progress: it may be collecting, waiting, reading, or reading again. */
   private running = false
+  /** The absorption window a client action opened, while one is open. */
+  private absorbed: ReturnType<typeof setTimeout> | undefined
 
   /**
    * @param onRead - one more read. Called only for a read the burst owes and the page can show.
@@ -151,6 +179,25 @@ export class ReadBurst {
     return this.running
   }
 
+  /** Whether a change right now is a client action's own echo. */
+  get absorbing(): boolean {
+    return this.absorbed !== undefined
+  }
+
+  /**
+   * The user acted on this control and the action reads: a press, a release, a
+   * decision, a goal switch, an opened panel. Its read is the answer, and the
+   * registry changes it sets off announce themselves for a while afterwards, so
+   * until the window closes a trigger is that echo rather than news.
+   *
+   * Called as the action is taken, before its read lands, because the echo can
+   * arrive while the action is still running.
+   */
+  absorb(): void {
+    if (!this.enabled) return
+    this.armAbsorb()
+  }
+
   /**
    * Something moved — a registry change. The burst first waits out its
    * collection window, and every trigger that lands inside it restarts that
@@ -160,6 +207,13 @@ export class ReadBurst {
    */
   trigger(): void {
     if (!this.enabled) return
+    if (this.absorbing) {
+      // The action's own echo: it announces what the action's read already
+      // answered. Keeping the window open while the echo lasts is what makes a
+      // storm of one-change-per-marker cost nothing at all.
+      this.armAbsorb()
+      return
+    }
     if (!this.running) {
       this.running = true
       this.left = this.policy.waitsMs
@@ -174,7 +228,9 @@ export class ReadBurst {
   /**
    * A read found the state still moving, so the burst owes the next read. A
    * read outside any burst — a mount, a press, a decision — starts one, because
-   * a user action that changes the park is worth watching settle.
+   * a user action that changes the park is worth watching settle. This is also
+   * how a reading that just revealed something gets read, as opposed to a
+   * change that announced it, so an absorption window never applies here.
    */
   next(): void {
     if (this.armed || this.window) return
@@ -187,7 +243,9 @@ export class ReadBurst {
 
   /**
    * Nothing is moving: end the burst and forget it. The last reading stays
-   * published, and the next trigger starts a fresh burst.
+   * published, and the next trigger starts a fresh burst. An action's
+   * absorption window is not the burst's to end — it outlives the read that
+   * settled the state, which is the whole point of it.
    */
   stop(): void {
     this.running = false
@@ -260,6 +318,23 @@ export class ReadBurst {
     }
     const wait = this.left[0]
     if (wait !== undefined) this.armWait(wait)
+  }
+
+  /**
+   * (Re)start the absorption window a client action opened. A hidden page keeps
+   * absorbing: this window is about what the action caused, not about what the
+   * page is doing.
+   */
+  private armAbsorb(): void {
+    this.cancelAbsorb()
+    this.absorbed = this.clock.set(() => { this.absorbed = undefined }, Math.max(ACTION_ABSORB_MS, 0))
+  }
+
+  /** Close the absorption window: changes are news again. */
+  private cancelAbsorb(): void {
+    if (this.absorbed === undefined) return
+    this.clock.clear(this.absorbed)
+    this.absorbed = undefined
   }
 
   /**

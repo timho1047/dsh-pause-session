@@ -36,6 +36,10 @@
  * What owes a read is the host's forwarded registry change, the user's own press
  * or decision, and the first read at mount; once an answer is on screen, the
  * shell handing this control another session to ask through is none of those.
+ * A press, a decision and an opened panel each read the host as they run, and
+ * the changes they set off are that action's own echo: those are absorbed for a
+ * short window (`./burst.ts`), so a forwarded change owes a read exactly when
+ * something moved that this browser did not do.
  * @module dsh-safe-stop/client/global
  */
 
@@ -311,17 +315,16 @@ export class SafeStopGlobalControl {
 
   /**
    * Open or close the decision list. Opening asks the host for the rows; there
-   * is no state to show without that answer. It also buys a burst of its own:
-   * whether anything on screen is worth watching was decided on the last
-   * aggregate read, and opening the panel changes that question rather than
-   * answering it — the rows are what the panel reads.
+   * is no state to show without that answer. Opening is also a client action
+   * that reads, so the changes it sets off are absorbed rather than read back,
+   * and whether the burst owes anything is what its own read decides.
    * @param open - whether the panel should be showing.
    */
   setPanel(open: boolean): void {
     this.store.update((state) => { state.panelOpen = open })
     if (open) {
+      this.burst.absorb()
       void this.refreshTriage()
-      this.burst.trigger()
       return
     }
     this.follow()
@@ -376,6 +379,9 @@ export class SafeStopGlobalControl {
   async decide(sessionId: string, action: TriageAction): Promise<void> {
     const address = this.address
     if (address === undefined) return
+    // A decision reads as it runs, so the marker changes it causes are its own
+    // echo; the state shown afterwards is the host's answers below.
+    this.burst.absorb()
     await this.refreshTriage()
     await this.commands.execute(address, `/${TRIAGE_DECISION_COMMAND[action]} ${sessionId}`, [], this.lifetime)
     await this.refreshTriage()
@@ -400,6 +406,9 @@ export class SafeStopGlobalControl {
     const action = globalStopView(current).action
     if (action === 'none') return
     const line = action === 'stop-all' ? `/${STOP_ALL_COMMAND}` : `/${RESUME_ALL_COMMAND}`
+    // The press is a client action: the host announces the markers it registers
+    // or unregisters as it runs, and the read below is the answer to all of it.
+    this.burst.absorb()
     const executed = await this.commands.execute(sessionId, line, [], this.lifetime)
     if (!executed.ok) {
       this.publish({ kind: 'unavailable' })
