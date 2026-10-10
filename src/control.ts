@@ -10,12 +10,18 @@
  * publish through is the command registry itself — `commands/change` is a
  * forwarded event, and `commands.list(sessionId)` is a Client-callable read.
  *
+ * That same registry is how a phase change leaves this process: a transition
+ * re-registers the status verb, which emits the change a client needs to read
+ * the new phase. It is the only way a third-party plugin can announce anything,
+ * and it is what makes the flush that resolves `parking` into `safe` observable
+ * at all — that step changes no registration of its own.
+ *
  * So the resume definition IS the paused marker: it is registered on a paused
  * session's own agent context and removed on resume, and the browser half reads
  * "paused" from that registration rather than inventing it. A descriptor cannot
  * change after registration, so the park state rides a companion status
- * definition (registered beside the marker, answered by calling it) whose
- * description is re-derived on every read — see `./shared.ts`. That one read
+ * definition (registered beside the marker) whose answer is derived per call
+ * rather than frozen into a descriptor — see `./shared.ts`. That one read
  * carries the record's goal opt-out too, so the session-header control can show
  * and switch it while the session is parked and clean — the state in which a
  * silent morning resume would otherwise spend the user's rounds unasked. The
@@ -51,7 +57,7 @@
 import type { Context, Fiber } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { CommandDefinitionId } from '@deepseek-ai/dsh-commands/brand'
-import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
+import type { CommandDefinition, CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
 import { SessionId } from '@deepseek-ai/dsh-session'
 // Type-only: the optional `ctx.sessionPersistence` observation seam.
 import type {} from '@deepseek-ai/dsh-session-persistence'
@@ -220,6 +226,25 @@ interface ParkMark {
   advancing: boolean
 }
 
+/**
+ * The commands one paused session publishes: the marker set a client reads the
+ * pause from, plus the one way this process can say that its answer changed.
+ *
+ * A third-party plugin can add neither a Client Remote namespace nor a forwarded
+ * event, so the command registry is its only live channel — and the only thing
+ * that makes the registry speak is a registration or an unregistration, which is
+ * what emits `commands/change`. {@link ParkMarkers.announce} therefore refreshes
+ * the status verb's own registration; the three commands a client sees are the
+ * same before and after, and the pair of events is that client's cue to read
+ * once and learn the new phase.
+ */
+interface ParkMarkers {
+  /** The fiber owning all three registrations; disposing it removes every one of them. */
+  readonly fiber: Fiber
+  /** Announce that this session's park phase changed; a no-op until the markers are actually registered. */
+  announce(): void
+}
+
 /** What mounting the session control hands back to the plugin entry. */
 export interface SessionControl {
   /**
@@ -278,8 +303,8 @@ export function installSessionControl(
 ): SessionControl {
   /** Marks per paused session; presence here mirrors the gate's own membership. */
   const marks = new Map<SessionId, ParkMark>()
-  /** Publish fibers per paused session; disposing one removes both commands. */
-  const markers = new Map<SessionId, Fiber>()
+  /** Published marker sets per paused session; disposing one removes its three commands. */
+  const markers = new Map<SessionId, ParkMarkers>()
   /**
    * Records this process did not hold again because the session behind them
    * cannot be read here. Nothing can be parked, released, or decided for them
@@ -299,22 +324,30 @@ export function installSessionControl(
 
   const drop = (sessionId: SessionId): void => {
     marks.delete(sessionId)
-    const fiber = markers.get(sessionId)
-    if (fiber === undefined) return
+    const marker = markers.get(sessionId)
+    if (marker === undefined) return
     markers.delete(sessionId)
-    void Promise.resolve(fiber.dispose()).catch((error: unknown) => {
+    void Promise.resolve(marker.fiber.dispose()).catch((error: unknown) => {
       ctx.logger.warn(`safe-stop: session control cleanup failed: ${describeError(error)}`)
     })
   }
 
   /**
-   * Write one phase to the durable registry, then publish it on the mark.
+   * Write one phase to the durable registry, then publish it on the mark and
+   * announce it on the command channel.
    *
    * The order is the whole point: a phase is published only once a later
    * process would read it back. A failed write leaves the mark on its previous
    * phase, which is never cleaner than what the registry holds — the direction
    * that matters, because "safe to close" is a promise about surviving the
    * process, not about this process's memory.
+   *
+   * A phase that actually changed is also the moment every client is owed a
+   * fresh read: the announcement is what carries `parking` → `safe` out of this
+   * process, since the flush that resolves it changes no registration by
+   * itself. Announcing only on a change is also what keeps the channel quiet —
+   * a write that repeats the phase a mark already holds tells a reader nothing,
+   * so it must not cost one.
    * @param sessionId - the paused session.
    * @param mark - its live mark, updated in place on success.
    * @param phase - the phase to record and publish.
@@ -327,7 +360,9 @@ export function installSessionControl(
       ctx.logger.warn(`safe-stop: could not record the park state of "${sessionId}" as ${phase}: ${describeError(error)}`)
       return false
     }
+    const changed = mark.phase !== phase
     mark.phase = phase
+    if (changed) markers.get(sessionId)?.announce()
     return true
   }
 
@@ -386,9 +421,11 @@ export function installSessionControl(
   }
 
   /**
-   * Ensure one paused session has both commands registered. Registration is
+   * Ensure one paused session has its three verbs registered. Registration is
    * once per park: the status is answered by the command, not frozen into the
-   * descriptor, so a phase change needs no command re-registration.
+   * descriptor, so a phase change needs no re-registration to be readable — the
+   * one {@link ParkMarkers.announce} performs is the announcement itself and
+   * nothing more.
    */
   const publish = (sessionId: SessionId): void => {
     const mark = marks.get(sessionId)
@@ -399,6 +436,16 @@ export function installSessionControl(
     // the goal opt-out and the members of the tree the press registered are
     // durable state beside the phase, not part of this mark.
     const status = async (): Promise<string> => encodeParkStatus(await treeStatus(sessionId, mark))
+    const definition = (): CommandDefinition => ({
+      definitionId: CommandDefinitionId(STATUS_DEFINITION_ID),
+      name: STATUS_COMMAND,
+      // This descriptor is only the marker the browser looks for; the state
+      // it reports is derived per call, tree and all.
+      description: 'Report this parked tree',
+      handler: async () => ({ kind: 'success', text: await status() }),
+    })
+    /** Re-register the status verb, which is the announcement every phase change rides. */
+    let announce: (() => void) | undefined
     // The registry keys scoped definitions off the context a call is made
     // through, and Cordis refuses an undeclared service access, so the marker
     // goes through a `commands`-injected child of THIS agent's context: the
@@ -413,14 +460,16 @@ export function installSessionControl(
           ? { kind: 'error', text: UNATTENDED_TEXT }
           : (await resumePath.releaseTree(invocation.agent.id)).answer),
       })
-      scope.commands.register({
-        definitionId: CommandDefinitionId(STATUS_DEFINITION_ID),
-        name: STATUS_COMMAND,
-        // This descriptor is only the marker the browser looks for; the state
-        // it reports is derived per call, tree and all.
-        description: 'Report this parked tree',
-        handler: async () => ({ kind: 'success', text: await status() }),
-      })
+      /** The status verb's current registration; {@link announce} replaces it. */
+      let registered = scope.commands.register(definition())
+      announce = () => {
+        // Disposing and registering back is one unregistration and one
+        // registration — the two `commands/change` events a transition costs,
+        // microseconds apart, which the client's own window merges into one
+        // read. The three verbs are the same set on either side of it.
+        registered()
+        registered = scope.commands.register(definition())
+      }
       // This session's own goal opt-out. It is the one goal switch that needs no
       // cross-session target — the caller IS the session whose record changes —
       // so the decision list's "only a row you were shown" binding has nothing
@@ -438,7 +487,7 @@ export function installSessionControl(
         },
       })
     })
-    markers.set(sessionId, fiber)
+    markers.set(sessionId, { fiber, announce: () => { announce?.() } })
   }
 
   /**
@@ -812,7 +861,7 @@ export function installSessionControl(
       return undefined
     })
     yield async () => {
-      const pending = [...markers.values()].map(fiber => fiber.dispose())
+      const pending = [...markers.values()].map(marker => marker.fiber.dispose())
       markers.clear()
       marks.clear()
       await Promise.all(pending)

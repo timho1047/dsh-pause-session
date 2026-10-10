@@ -13,15 +13,18 @@
  * pause button can show it without a second host round-trip — and without it,
  * the control renders no switch at all.
  *
- * A phase that is still moving (`draining`, `parking`) has no registry change
- * to announce it reaching its end, so a transition buys a short bounded burst of
- * reads over the next few seconds (`./burst.ts`) rather than a heartbeat; a
- * phase that never settles stops being asked about instead of being asked about
- * forever. Registry changes start that burst, and one tick's worth of them —
- * parking a session registers three commands, and the host announces each of
- * them — is one burst. A press or a goal switch reads as it runs, and the
- * marker changes it causes are that action's own echo: those are absorbed for a
- * short window (`./burst.ts`) rather than read back.
+ * Every phase the host reaches announces itself on that channel: a transition
+ * re-registers the status verb, so a transition is what buys the next read and a
+ * read that finds a phase still moving is the answer to the transition that
+ * produced it rather than a reason to keep asking (`./burst.ts`). One transition
+ * arrives as several registry changes — parking a session also registers its
+ * three commands — so the burst's own collection window is what turns a tick of
+ * changes into one read per shown session. A press or a goal switch reads as it
+ * runs, and the marker changes it causes are that action's own echo: those are
+ * absorbed for a short window (`./burst.ts`) rather than read back — except for
+ * the one look an action owes when that window closes, if the reading it left
+ * behind is still moving, because a transition announced inside the window would
+ * otherwise never be read at all.
  *
  * The whole-app control reads the same park and publishes what it found
  * (`./global.ts`), and a header consults that answer before spending a read of
@@ -86,8 +89,8 @@ export interface SafeStopState {
 
 const INITIAL: SafeStopState = { bySession: {} }
 
-/** Phases that name a moment on the way to a park, not a settled state. */
-const TRANSIENT: ReadonlySet<SafeStopPhase> = new Set<SafeStopPhase>(['draining', 'parking'])
+/** Phases that name a moment on the way to a park rather than a state it reached. */
+const MOVING: ReadonlySet<SafeStopPhase> = new Set<SafeStopPhase>(['draining', 'parking'])
 
 /** Owns the published reading per session; nothing else writes that state. */
 export class SafeStopControl {
@@ -98,10 +101,18 @@ export class SafeStopControl {
   private readonly shown = new Set<SessionId>()
   /** Highest read sequence requested per session: an answer older than it is dropped. */
   private readonly latest = new Map<SessionId, number>()
-  /** Sessions whose phase is still moving and therefore need another look. */
-  private readonly transient = new Set<SessionId>()
-  /** Sessions a registry change has put back on the list of ones to read once. */
+  /**
+   * Sessions a change has put back on the list of ones to read once — a
+   * transition this browser has been told about and has not answered yet.
+   */
   private readonly owed = new Set<SessionId>()
+  /**
+   * Whether the look owed at the close of an echo window is still to be taken.
+   * It reads every shown session, exactly as a change does: the look exists
+   * because a change may have been swallowed, and a swallowed change carries no
+   * payload either.
+   */
+  private trailing = false
   /**
    * Sessions whose header was answered from the whole-app "nothing is
    * registered" instead of a read of their own, and which therefore have to be
@@ -148,28 +159,34 @@ export class SafeStopControl {
    * shown may have moved — the forwarded event carries no payload, so the only
    * honest answer is to look at all of them once. The reads run on the burst's
    * own schedule rather than here, which is what makes a tick's worth of changes
-   * — parking a session registers three commands — one burst instead of three.
+   * — parking a session registers three commands, and a phase change re-registers
+   * one more — one burst instead of one each. A change that is this browser's own
+   * action's echo owes nothing: the action read the host as it ran.
    */
   refreshAll(): void {
     if (this.shown.size === 0 || this.lifetime.aborted) return
+    if (!this.burst.trigger()) return
     for (const sessionId of this.shown) this.owed.add(sessionId)
-    this.burst.trigger()
   }
 
   /**
-   * One pass of the burst. A pass a trigger still owes reads every session that
-   * change may have touched; a later pass watches only the sessions that are
-   * still moving, because a settled phase is not what the burst is for. A
-   * session the whole-app answer has already spoken for is answered from it
-   * instead of being asked about; see {@link answerIsKnown}.
+   * One pass of the burst: every shown session a change still owes a read. The
+   * forwarded event carries no payload, so a change may have touched any of
+   * them and each is read once. A session the whole-app answer has already
+   * spoken for is answered from it instead of being asked about; see
+   * {@link answerIsKnown}.
    */
   private async readAll(): Promise<void> {
     if (this.lifetime.aborted) {
       this.burst.stop()
       return
     }
-    const pass = this.owed.size > 0 ? [...this.owed] : [...this.transient]
+    const pass = this.owed.size > 0 ? [...this.owed] : this.trailing ? [...this.shown] : []
+    // Cleared before the reads, not after: a change that lands while this pass
+    // is in flight is one this pass cannot have answered, so it survives into
+    // the next read rather than being absorbed into this one.
     this.owed.clear()
+    this.trailing = false
     for (const sessionId of pass) {
       if (this.answerIsKnown(sessionId)) {
         this.deriveActive(sessionId)
@@ -266,8 +283,6 @@ export class SafeStopControl {
   }
 
   private publish(sessionId: SessionId, reading: SafeStopReading): void {
-    if (TRANSIENT.has(reading.phase)) this.transient.add(sessionId)
-    else this.transient.delete(sessionId)
     this.store.update((state) => {
       state.bySession = { ...state.bySession, [String(sessionId)]: reading }
     })
@@ -328,22 +343,57 @@ export class SafeStopControl {
   }
 
   /**
-   * Decide what the burst owes after a read: another look while any shown
-   * session is still moving, and nothing once none is.
+   * Decide what the burst owes after a read: another look while a change this
+   * browser has not answered is still outstanding, and nothing once none is.
    *
-   * The host announces a pause through its command registry, but nothing
-   * announces the drain finishing, so `draining` can end only in an answer the
-   * browser reads. Once every shown session has settled — `safe`, `active`, or
-   * a phase the host will not move again — there is nothing left to ask, and
-   * the last reading stays on screen. A read a change still owes counts as
-   * something left to ask: it may be about a session this pass did not touch.
+   * A phase that is still moving is left alone. The host announces every
+   * transition on its command channel — the flush that settles a park included,
+   * which changes no registration of its own — so a read that finds `draining`
+   * or `parking` is the answer to the transition that produced it, and watching
+   * that phase from here would spend reads on a move that is going to speak for
+   * itself. What the burst still owes is the delivery of an announcement: a read
+   * still armed when the change arrived, and a read for a change that landed
+   * while the last pass was in flight.
+   *
+   * The one transition that cannot speak for itself is the one this browser's
+   * own echo window swallowed: a press reads the host, the park moves while the
+   * window is still open, and the changes that would have announced it look
+   * exactly like the press's own registrations. So an action that left a phase
+   * still moving asks for one look when that window closes, and only then — the
+   * read is owed at a moment, not watched. Once nothing is owed, the last
+   * reading stays on screen; the next change, the next user action, or the shell
+   * handing this control a session again is what asks next.
    */
   private follow(): void {
-    if (this.lifetime.aborted || (this.transient.size === 0 && this.owed.size === 0)) {
+    if (this.lifetime.aborted) {
+      this.burst.stop()
+      return
+    }
+    if (this.owed.size === 0) {
+      // The look is owed only while both hold: the window is still swallowing
+      // changes, and the reading the action left is one of the phases whose next
+      // step a change would have announced.
+      const hidden = this.burst.absorbing && this.moving()
+      if (hidden) this.burst.recheckAfterEcho()
+      this.trailing = hidden
       this.burst.stop()
       return
     }
     this.burst.next()
+  }
+
+  /**
+   * Whether any shown session's last reading is a phase the host has not
+   * finished walking — the only states an action's own echo could be hiding a
+   * transition behind.
+   */
+  private moving(): boolean {
+    const shown = this.store.getSnapshot().bySession
+    for (const sessionId of this.shown) {
+      const phase = shown[String(sessionId)]?.phase
+      if (phase !== undefined && MOVING.has(phase)) return true
+    }
+    return false
   }
 
   /**

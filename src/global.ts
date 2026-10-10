@@ -268,9 +268,10 @@ export function mountGlobalStop(
       }
       const bucket = park.moving ? draining : stalled
       bucket.push(String(sessionId))
-      // Standing at the park point with the flush still pending: the one part of
-      // the wait nothing announces, so the browser is told how much of it is
-      // left to watch.
+      // Standing at the park point with the flush still pending is counted
+      // apart from the sessions still draining: both are unfinished, and the
+      // pill's sentence is about how much of the wait is left rather than about
+      // what is still running.
       if (park.moving && park.phase === 'parking') parking += 1
     }
 

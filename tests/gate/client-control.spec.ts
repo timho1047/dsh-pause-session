@@ -228,7 +228,7 @@ describe('browser control state', () => {
     await until(() => (readingOf(control) as { phase?: string } | undefined)?.phase === 'active')
   })
 
-  it('keeps reading while the phase is still moving, and stops once it settles', async () => {
+  it('reads once per announced transition and stops once the phase settles', async () => {
     vi.useFakeTimers()
     const { commands, host } = hostDouble()
     const control = new SafeStopControl(commands, new AbortController().signal, 25)
@@ -237,17 +237,52 @@ describe('browser control state', () => {
     host.runningTools = ['edit']
     await control.refresh(SID)
     expect(readingOf(control)).toMatchObject({ phase: 'draining', runningTools: ['edit'] })
+    const readsAtMount = host.lists.length
 
-    // The host parks: the flush resolves and only the host's next answer says so.
+    // A phase that is still moving is not watched: the host announces its next
+    // transition on the command channel, and that announcement is what makes the
+    // browser look. Nothing here spends a read on the drain itself.
+    await vi.advanceTimersByTimeAsync(3_600_000)
+    expect(host.lists.length, 'a moving phase was watched instead of announced').toBe(readsAtMount)
+
+    // The flush resolves, the host announces it, and the header shows the truth.
     host.phase = 'safe'
     host.runningTools = []
-    await vi.advanceTimersByTimeAsync(30)
+    control.refreshAll()
+    await vi.advanceTimersByTimeAsync(100)
     expect(readingOf(control)).toEqual({ phase: 'safe', runningTools: [], rearmGoal: true })
 
     // A settled phase is not polled: no further host round-trip is issued.
-    const readsWhenSettled = host.lists.length
+    const readsAtSettled = host.lists.length
     await vi.advanceTimersByTimeAsync(500)
-    expect(host.lists.length).toBe(readsWhenSettled)
+    expect(host.lists.length).toBe(readsAtSettled)
+  })
+
+  it('reaches the truth on the next trigger when the announcement never arrived', async () => {
+    vi.useFakeTimers()
+    const { commands, host } = hostDouble()
+    const control = new SafeStopControl(commands, new AbortController().signal, 25)
+    // This page was not listening when the phase moved: all it has is the reading
+    // it took itself.
+    host.paused = true
+    host.phase = 'draining'
+    await control.refresh(SID)
+    expect(readingOf(control)).toMatchObject({ phase: 'draining' })
+
+    // The transition happened and no change was delivered for it. The next
+    // trigger — any registry change, a press, the shell handing this control its
+    // session again — reads the host rather than leaving the stale reading up.
+    host.phase = 'safe'
+    control.refreshAll()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(readingOf(control)).toEqual({ phase: 'safe', runningTools: [], rearmGoal: true })
+
+    // And a host that cannot answer claims nothing at all: the last reading is
+    // replaced by the honest "unavailable", never kept as if it were current.
+    host.failList = true
+    control.refreshAll()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(readingOf(control)).toEqual({ phase: 'unavailable', runningTools: [] })
   })
 
   it('claims nothing when the host cannot answer', async () => {

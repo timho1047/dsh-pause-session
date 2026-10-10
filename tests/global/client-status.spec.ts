@@ -148,25 +148,32 @@ describe('the whole-app control state', () => {
     expect(globalStopView(readingOf(control))).toMatchObject({ action: 'stop-all' })
   })
 
-  it('keeps reading while the park is settling, and stops once it settles', async () => {
+  it('reads once per announced transition, and stops once it settles', async () => {
     vi.useFakeTimers()
     const { commands, host } = hostDouble()
-    // Standing at the park point with the flush pending: the state nothing
-    // announces, which is the one the burst watches.
+    // Standing at the park point with the flush pending. Nothing about this
+    // phase announces itself by itself, so nothing here watches it either: the
+    // flush that settles it is a phase change, and that is what the host
+    // announces.
     host.answered = status({ safe: 1, draining: [], parking: 1 })
     const control = new SafeStopGlobalControl(commands, new AbortController().signal, 25)
     await control.refresh(ADDRESS)
     expect(readingOf(control)).toMatchObject({ kind: 'reported' })
-    const readsAtPress = host.lines.length
+    const readsAtMount = host.lines.length
 
-    // The last session parks; only the host's next answer says so.
-    host.answered = status({ verdict: 'safe', registered: 2, safe: 2, draining: [] })
-    await vi.advanceTimersByTimeAsync(30)
-    expect(readingOf(control)).toEqual({ kind: 'reported', status: status({ verdict: 'safe', registered: 2, safe: 2, draining: [] }) })
+    await vi.advanceTimersByTimeAsync(3_600_000)
+    expect(host.lines.length, 'a settling park was watched instead of announced').toBe(readsAtMount)
+
+    // The transition arrives on the command channel: one read, and the pill
+    // shows the host's own new answer.
+    const parked = status({ verdict: 'safe', registered: 2, safe: 2, draining: [] })
+    host.answered = parked
+    control.refreshAll()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(readingOf(control)).toEqual({ kind: 'reported', status: parked })
     expect(globalStopView(readingOf(control))).toMatchObject({ labelKey: 'all.safe', action: 'resume-all' })
 
     // A settled park is not polled: no further host round-trip is issued.
-    expect(host.lines.length).toBeGreaterThan(readsAtPress)
     const settledReads = host.lines.length
     await vi.advanceTimersByTimeAsync(500)
     expect(host.lines.length).toBe(settledReads)

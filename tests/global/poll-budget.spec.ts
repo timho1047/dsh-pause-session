@@ -11,14 +11,14 @@
  * What is asserted is what the user can see: the pill and the panel keep
  * showing the host's last answer at every point, and the asking stops.
  *
- * The numbers here are the product decision, so the cases state them: one park
- * transition costs one burst however many `commands/change` events announce it
- * (the registry emits up to three marker registrations per parked session, and
- * one measured park cycle produced 21 reads in ~2 minutes, in ~5 burst
- * sequences); a press followed by a long drain costs the press read and the
- * burst read that finds the work in flight, and nothing more until the park
- * announces its next transition; and a session the user merely views pays
- * nothing once the park's own address is known.
+ * The numbers here are the product decision, so the cases state them: a park
+ * transition costs one read however many `commands/change` events announce it
+ * (a phase change is one unregistration and one registration of the status
+ * verb, and the client's window merges them); a press followed by a long drain
+ * costs the press read, the one look that closes the press's own echo window,
+ * and one read per announced transition after that — nothing watches the drain
+ * itself; and a session the user merely views pays nothing once the park's own
+ * address is known.
  *
  * A change that follows the user's own action is that action's own echo, and
  * the action already read the host: those changes are absorbed for
@@ -27,7 +27,9 @@
  * trailing window can merge — costs the single read the action made. The same
  * three markers with no action before them still buy the burst they always did,
  * and the first change after the window goes quiet is what discovers a park
- * made elsewhere while the window was open.
+ * made elsewhere while the window was open. An action that leaves a phase still
+ * moving owes one look when its window closes, because a park can reach its final
+ * phase inside that window and then never announce anything again.
  * @module dsh-safe-stop/test/global/poll-budget
  */
 
@@ -182,7 +184,7 @@ const readingOf = (control: SafeStopGlobalControl): GlobalReading | undefined =>
 describe('the park read budget', () => {
   afterEach(() => { vi.useRealTimers() })
 
-  it('costs one press read and one burst read for a press + long drain + park, then nothing, on the park transition', async () => {
+  it('press + long drain + park: the drain is not watched, and each announced transition buys one read', async () => {
     vi.useFakeTimers()
     const { commands, host } = hostDouble()
     host.answered = status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
@@ -196,17 +198,93 @@ describe('the park read budget', () => {
     expect(host.reads, 'an idle park was read again').toBe(1)
 
     // The press parks one session and the host reports it draining. That read is
-    // the last one: work in flight ends the burst, because the park announces
-    // the end of that work through its own marker registrations.
+    // the answer to the press itself.
     await control.toggle(ADDRESS)
     expect(host.reads).toBe(2)
-    await vi.advanceTimersByTimeAsync(3_600_000)
-    expect(host.reads, 'a drain in flight was watched instead of announced').toBe(2)
-
-    // A verdict that never settles is left alone: the bound is a bound, not a
-    // slower heartbeat. This is the 21-reads-in-2-minutes shape, measured.
-    expect(readingOf(control)).toEqual({ kind: 'reported', status: status() })
     expect(globalStopView(readingOf(control))).toMatchObject({ visible: true, labelKey: 'all.finishing' })
+
+    // The drain is long and nothing announces its end, so nothing watches it:
+    // the one read the press still owes is the look that closes its own echo
+    // window, where a transition announced inside it would have been absorbed.
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(host.reads, 'a drain in flight was watched instead of announced').toBe(3)
+    expect(readingOf(control)).toEqual({ kind: 'reported', status: status() })
+
+    // The tool lands and the session reaches the park point: its phase changed,
+    // so the host announces it and the browser reads once.
+    const holding = status({ verdict: 'waiting', registered: 1, safe: 0, draining: ['overnight'], parking: 1 })
+    host.answered = holding
+    control.refreshAll()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(host.reads, 'the announced park point was not read').toBe(4)
+
+    // The flush resolves: another announced transition, another single read.
+    const parked = status({ verdict: 'safe', registered: 1, safe: 1, draining: [], parking: 0 })
+    host.answered = parked
+    control.refreshAll()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(host.reads, 'the announced flush was not read').toBe(5)
+    expect(readingOf(control)).toEqual({ kind: 'reported', status: parked })
+    expect(globalStopView(readingOf(control))).toMatchObject({ labelKey: 'all.safe' })
+
+    // And silence: a settled park is not read again, however long the page stays
+    // open and however many more changes the host announces.
+    await vi.advanceTimersByTimeAsync(3_600_000)
+    expect(host.reads, 'a settled park was read again').toBe(5)
+  })
+
+  it('reads the park point and the flush as one when they land inside one window', async () => {
+    vi.useFakeTimers()
+    const { commands, host } = hostDouble()
+    // A park made elsewhere, so this browser has no echo window of its own to
+    // close and both transitions are news.
+    host.answered = status({ verdict: 'waiting', registered: 1, safe: 0, draining: ['overnight'], parking: 1 })
+    const control = controls(commands)
+    await control.refresh(ADDRESS)
+    expect(host.reads).toBe(1)
+
+    // The flush resolves milliseconds after the park point, as it does against a
+    // real disk: two transitions, both inside one collection window, one read —
+    // and that read carries the later truth.
+    const parked = status({ verdict: 'safe', registered: 1, safe: 1, draining: [], parking: 0 })
+    host.answered = parked
+    control.refreshAll()
+    control.refreshAll()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(host.reads, 'two transitions inside one window became this many reads').toBe(2)
+    expect(readingOf(control)).toEqual({ kind: 'reported', status: parked })
+  })
+
+  it('reads a park that reached its last phase inside the press\'s own echo window', async () => {
+    vi.useFakeTimers()
+    const { commands, host } = hostDouble()
+    host.answered = status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
+    const control = controls(commands)
+    await control.refresh(ADDRESS)
+    const parked = status({ verdict: 'safe', registered: 1, safe: 1, draining: [], parking: 0 })
+
+    // The press parks a session, and the flush resolves while the press's own
+    // registration echo is still being absorbed. Both transitions arrive as
+    // changes that look exactly like the echo, so reading them back is what the
+    // absorption is for.
+    await control.toggle(ADDRESS)
+    expect(host.reads).toBe(2)
+    host.answered = parked
+    control.refreshAll()
+    control.refreshAll()
+    await vi.advanceTimersByTimeAsync(ACTION_ABSORB_MS)
+    expect(host.reads, 'the echo was read back').toBe(2)
+
+    // The window closes, and with it the only chance anything had to say the
+    // park moved: the one look the press owes is taken, so the pill reports the
+    // host's answer instead of a park nobody holds any more.
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(host.reads, 'the hidden transition was never read').toBe(3)
+    expect(readingOf(control)).toEqual({ kind: 'reported', status: parked })
+    expect(globalStopView(readingOf(control))).toMatchObject({ labelKey: 'all.safe' })
+
+    await vi.advanceTimersByTimeAsync(3_600_000)
+    expect(host.reads, 'the trailing look was a watch after all').toBe(3)
   })
 
   it('answers the parked session rather than the session the user moved to', async () => {
@@ -234,39 +312,43 @@ describe('the park read budget', () => {
     expect(registeredAddress(status({ verdict: 'safe', registered: 1, safe: 1, draining: [] }))).toBeUndefined()
   })
 
-  it('reads nothing more until the park transition, then reads until safe and stops', async () => {
+  it('reads once per announced transition while a park is settling', async () => {
     vi.useFakeTimers()
     const { commands, host } = hostDouble()
-    // Standing at the park point with the flush pending: the one state nothing
-    // announces, so the burst is what covers it.
-    const holding = status({ verdict: 'waiting', registered: 1, safe: 0, draining: [], parking: 1 })
+    // Standing at the park point with the flush pending: a park made elsewhere,
+    // so this browser has no echo window of its own to close.
+    const holding = status({ verdict: 'waiting', registered: 1, safe: 0, draining: ['overnight'], parking: 1 })
     const parked = status({ verdict: 'safe', registered: 1, safe: 1, draining: [], parking: 0 })
     host.answered = status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
     const control = controls(commands)
     await control.refresh(ADDRESS)
     expect(host.reads).toBe(1)
 
-    // The flush resolves while the verdict is settling — no event of its own.
-    // That is the whole job of the burst: 1 mount read, then its four reads at
-    // 25ms of window plus 25, 62.5, 150 and 300ms of waits = 5 reads.
+    // The session reaches the park point: one announced transition, one read.
     host.answered = holding
     control.refreshAll()
-    await vi.advanceTimersByTimeAsync(60_000)
-    expect(host.reads, 'a settling verdict was not watched').toBe(5)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(host.reads, 'the announced park point was not read').toBe(2)
     expect(globalStopView(readingOf(control))).toMatchObject({ labelKey: 'all.finishing', action: 'resume-all' })
 
-    // The flush lands, the burst reads it, and there is nothing left to ask.
+    // The flush is still pending and nothing announces anything: the read the
+    // transition bought is the last one, not the start of a watch.
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(host.reads, 'a settling park was watched instead of announced').toBe(2)
+
+    // The flush lands: the next transition announces itself, and the read it
+    // buys is the last one there is.
     host.answered = parked
     control.refreshAll()
-    await vi.advanceTimersByTimeAsync(60_000)
-    expect(host.reads, 'the safe verdict was not read').toBe(6)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(host.reads, 'the announced flush was not read').toBe(3)
     expect(readingOf(control)).toEqual({ kind: 'reported', status: parked })
     expect(globalStopView(readingOf(control))).toMatchObject({ labelKey: 'all.safe' })
 
     // And silence: a settled park is not read again, however long the page stays
     // open and however many more changes the host announces.
     await vi.advanceTimersByTimeAsync(3_600_000)
-    expect(host.reads, 'a settled park was read again').toBe(6)
+    expect(host.reads, 'a settled park was read again').toBe(3)
   })
 
   it('reads nothing more once the verdict is safe and nothing is draining', async () => {
@@ -455,10 +537,9 @@ describe('the park read budget', () => {
   it('keeps the decision list on the session the user is on, whatever the aggregate is addressed to', async () => {
     vi.useFakeTimers()
     const { commands, host } = hostDouble()
-    // A park whose burst is still live: one session draining, one at the park
-    // point with its flush pending. Opening the panel must not cost the
-    // aggregate its address.
-    host.answered = status({ parking: 1 })
+    // A park with one session draining: the aggregate has a parked session to
+    // address its reads at, and the panel has rows of its own to read.
+    host.answered = status()
     const control = controls(commands)
     await control.refresh(OTHER)
 
@@ -499,8 +580,8 @@ describe('the park read budget', () => {
   it('stops while the page is hidden and takes the read it owed when it comes back', async () => {
     vi.useFakeTimers()
     const { commands, host } = hostDouble()
-    // A park still settling, which is the one state the burst watches: its
-    // first read is counting down when the page goes away.
+    // A park that has moved, which is what owes the read: the change is what the
+    // burst is collecting when the page goes away.
     host.answered = status({ parking: 1 })
     let pageVisible = true
     const control = controls(commands, { visible: () => pageVisible })
@@ -508,17 +589,20 @@ describe('the park read budget', () => {
     const base = host.reads
     expect(base).toBe(1)
 
-    // The burst is waiting out its first 25ms when the page goes away.
+    // The transition is announced and the burst is still waiting out its
+    // collection window when the page goes away.
+    control.refreshAll()
     pageVisible = false
     control.watchVisibility()
     await vi.advanceTimersByTimeAsync(3_600_000)
     expect(host.reads - base, 'a hidden page kept reading').toBe(0)
 
     // Coming back takes the read the burst owed; the hidden hour is not charged
-    // to it and does not lose it.
+    // to it and does not lose it. The collection window is taken again from the
+    // moment the page came back, so the read follows both waits.
     pageVisible = true
     control.watchVisibility()
-    await vi.advanceTimersByTimeAsync(FIRST_WAIT_MS)
+    await vi.advanceTimersByTimeAsync(WINDOW_MS + FIRST_WAIT_MS)
     expect(host.reads - base, 'the read the burst owed was lost').toBe(1)
   })
 
@@ -605,7 +689,7 @@ describe('the per-session read budget', () => {
     return { commands: commands as never, calls }
   }
 
-  it('reads a registry change for every shown session once, then watches only what moves', async () => {
+  it('reads a registry change for every shown session once, and nothing while a phase moves', async () => {
     vi.useFakeTimers()
     const { commands, calls } = sessionDouble({ a: 'draining', b: 'safe' })
     const control = new SafeStopControl(commands, new AbortController().signal, WINDOW_MS, policy())
@@ -616,10 +700,57 @@ describe('the per-session read budget', () => {
     await vi.advanceTimersByTimeAsync(3_600_000)
     const status = calls.filter(call => call.line === `/${STATUS_COMMAND}`)
     // Both mounted sessions were read once for the change — the forwarded event
-    // carries no payload, so either could have moved. The rest of the burst
-    // watches the one still draining, and the settled session is left alone.
-    expect(status.filter(call => call.session === 'a'), 'the draining session was not watched settle').toHaveLength(5)
+    // carries no payload, so either could have moved. Nothing is watched after
+    // that: the session still draining ends its drain with a transition the host
+    // announces, and the settled one is left alone.
+    expect(status.filter(call => call.session === 'a'), 'a draining session was watched').toHaveLength(2)
     expect(status.filter(call => call.session === 'b'), 'a settled session was read again').toHaveLength(2)
+  })
+
+  it('presses while a tool runs: the drain is not watched, and the header reaches safe on the announcements alone', async () => {
+    vi.useFakeTimers()
+    const phases: Record<string, ParkPhase> = { a: 'active' }
+    const { commands, calls } = sessionDouble(phases)
+    const control = new SafeStopControl(commands, new AbortController().signal, WINDOW_MS, policy())
+    const statuses = (): number => calls.filter(call => call.line === `/${STATUS_COMMAND}`).length
+
+    // The header mounts on a running session: one read, no claim.
+    await control.refresh(SessionId('a'))
+    expect(statuses()).toBe(0)
+    expect(control.store.getSnapshot().bySession['a']).toEqual({ phase: 'active', runningTools: [] })
+
+    // The press runs the pause verb and reads the host: the tool is in flight,
+    // so the header says so.
+    phases['a'] = 'draining'
+    await control.toggle(SessionId('a'))
+    expect(statuses()).toBe(1)
+    expect(control.store.getSnapshot().bySession['a']).toMatchObject({ phase: 'draining', runningTools: [] })
+
+    // The drain is long. The one read the press owes is the look that closes its
+    // own echo window; nothing else asks, because the end of the drain announces
+    // itself rather than being watched for.
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(statuses(), 'the drain was watched instead of announced').toBe(2)
+    expect(control.store.getSnapshot().bySession['a']).toMatchObject({ phase: 'draining' })
+
+    // The tool lands and the session reaches the park point: one announced
+    // transition, one read.
+    phases['a'] = 'parking'
+    control.refreshAll()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(statuses(), 'the announced park point was not read').toBe(3)
+
+    // The flush resolves: the transition no registration of its own would show is
+    // announced like the one before it, and read like it too.
+    phases['a'] = 'safe'
+    control.refreshAll()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(statuses(), 'the announced flush was not read').toBe(4)
+    expect(control.store.getSnapshot().bySession['a']).toEqual({ phase: 'safe', runningTools: [] })
+
+    // And silence, with no further user action anywhere in the cycle.
+    await vi.advanceTimersByTimeAsync(3_600_000)
+    expect(statuses(), 'a settled header was read again').toBe(4)
   })
 
   it("answers a header from the park's own verdict while nothing is registered, and reads it for real once something is", async () => {
@@ -989,6 +1120,31 @@ describe('one change, one read', () => {
     benchRun.listeners[0]?.()
     await vi.advanceTimersByTimeAsync(200)
     expect(benchRun.host.reads - spent, 'a running burst read itself again for a later change').toBe(0)
+  })
+
+  it('turns the pair of changes one phase transition emits into one read', async () => {
+    vi.useFakeTimers()
+    const benchRun = bench()
+    benchRun.host.answered = status({ verdict: 'safe', registered: 1, safe: 1, draining: [] })
+    benchRun.wholeApp.refresh(ADDRESS)
+    await vi.advanceTimersByTimeAsync(0)
+    const before = benchRun.host.reads
+    expect(before).toBe(1)
+
+    // A phase change re-registers the session's status verb, and the registry
+    // announces the removal and the insertion separately. One transition, two
+    // changes, one read: the coalescing window is what makes an announcement
+    // cost what it is worth rather than what it is spelled as.
+    benchRun.listeners[0]?.()
+    benchRun.listeners[0]?.()
+    await vi.advanceTimersByTimeAsync(800)
+    expect(benchRun.host.reads - before, 'one transition became this many reads').toBe(1)
+
+    // The next transition is still read: coalescing is not dropping.
+    benchRun.listeners[0]?.()
+    benchRun.listeners[0]?.()
+    await vi.advanceTimersByTimeAsync(800)
+    expect(benchRun.host.reads - before, 'the next transition was dropped').toBe(2)
   })
 
   it('answers a mounted header from the whole-app verdict while nothing is registered', async () => {

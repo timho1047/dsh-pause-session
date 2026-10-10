@@ -26,9 +26,9 @@ import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import { UNATTENDED_TEXT } from '../../src/control.ts'
 import {
   decodeGlobalStatus, decodeParkStatus, GOAL_COMMAND, PAUSE_COMMAND, RESUME_COMMAND, RESUME_DEFINITION_ID,
-  STATUS_COMMAND, STATUS_DEFINITION_ID,
+  STATE_ALL_COMMAND, STATUS_COMMAND, STATUS_DEFINITION_ID,
 } from '../../src/shared.ts'
-import type { ParkStatus } from '../../src/shared.ts'
+import type { GlobalStatus, ParkStatus } from '../../src/shared.ts'
 import { textResponse } from '../assumptions/fake-provider.ts'
 import { control, mountGatedLoop, until } from '../gate/loop.ts'
 import type { GatedLoop } from '../gate/loop.ts'
@@ -91,6 +91,18 @@ function statusDescriptor(ctx: Context, agent: Agent): { definitionId?: string }
   return ctx.commands.list(agent).find(descriptor => descriptor.definitionId === STATUS_DEFINITION_ID)
 }
 
+/**
+ * The aggregate as one whole-app read answers it, so a case can watch the
+ * control's own claim rather than the per-session one beside it.
+ */
+async function aggregate(ctx: Context, agent: Agent): Promise<GlobalStatus> {
+  const execution = await ctx.commands.execute(agent, `/${STATE_ALL_COMMAND}`, [], new AbortController().signal)
+  const text = execution?.result.kind === 'success' ? execution.result.text : undefined
+  const decoded = text === undefined ? undefined : decodeGlobalStatus(text)
+  if (decoded === undefined) throw new Error(`safe-stop: the aggregate answered in an unknown vocabulary: ${String(text)}`)
+  return decoded
+}
+
 /** Wait for one exact published phase, re-reading it as we go. */
 async function phaseBecomes(ctx: Context, agent: Agent, wanted: ParkStatus['phase']): Promise<void> {
   let seen: string | undefined
@@ -142,6 +154,73 @@ function liveSession(loop: GatedLoop, agent: Agent): void {
 }
 
 describe('park state: what the control reports between the press and the park', () => {
+  it('announces every phase transition once, so both readings reach safe with no further action', async () => {
+    const loop = await mountGatedLoop('park-announce', [
+      toolCallResponse('call-1', 'gated', { id: '1' }),
+      textResponse('after the tool'),
+    ])
+    const { ctx, agent } = loop
+    const blocking = blockingTool()
+    ctx.tools.register(blocking.tool)
+    liveSession(loop, agent)
+    const flush = heldFlush(ctx)
+    /** Every `commands/change` the host emits, which is the only live channel a client has. */
+    let changes = 0
+    ctx.on('commands/change', () => { changes += 1 })
+    try {
+      agent.followup(ask('run the tool'))
+      await until(() => blocking.started())
+
+      // The press while the tool runs: the session reports what it is doing, and
+      // the marker set it publishes is what a browser reads the pause from.
+      await control(ctx, agent, PAUSE_COMMAND)
+      expect(await published(ctx, agent)).toEqual({ phase: 'draining', safe: false, runningTools: ['gated'], rearmGoal: true })
+      expect(changes, 'the press published no marker').toBeGreaterThan(0)
+      const atPress = changes
+
+      // The drain itself is silent, and that is not a gap: the press's own read
+      // answered this phase, and the next one announces itself below.
+      await new Promise(resolve => setTimeout(resolve, 60))
+      expect(changes, 'a session still draining announced something').toBe(atPress)
+
+      // The tool lands and the session reaches the park point. Nothing about the
+      // registration changed — the markers were published at the press — so this
+      // transition is exactly what the announcement exists for.
+      blocking.release()
+      await until(() => flush.calls() === 1)
+      expect(await published(ctx, agent)).toEqual({ phase: 'parking', safe: false, runningTools: [], rearmGoal: true })
+      // The host counts a session at the park point among the ones still on
+      // their way — it is not safe yet — and names the flush in `parking`.
+      expect(await aggregate(ctx, agent)).toMatchObject({ registered: 1, safe: 0, draining: ['park-announce'], parking: 1 })
+      const atParkPoint = changes
+      // One unregistration and one registration of the status verb: the pair is
+      // one announcement, which is what a client's coalescing window turns into
+      // one read.
+      expect(atParkPoint - atPress, 'the park point was not announced exactly once').toBe(2)
+
+      // The flush resolves. That is the transition no registration of its own
+      // would ever show, and it is announced like the one before it.
+      flush.release()
+      await phaseBecomes(ctx, agent, 'safe')
+      expect(changes - atParkPoint, 'the flush resolving was not announced exactly once').toBe(2)
+      // Both readings are the truth now — the session's own and the aggregate's —
+      // and neither took a press, a decision, or any other action to get there.
+      // (The verdict also names the surfaces this composition does not mount, so
+      // what is asserted here is the count of sessions it calls safe.)
+      expect(await published(ctx, agent)).toEqual({ phase: 'safe', safe: true, runningTools: [], rearmGoal: true })
+      expect(await aggregate(ctx, agent)).toMatchObject({ registered: 1, safe: 1, draining: [], parking: 0 })
+
+      // A settled park is not announced again: the channel goes quiet with it.
+      const atSafe = changes
+      await new Promise(resolve => setTimeout(resolve, 60))
+      expect(changes, 'a settled park kept announcing itself').toBe(atSafe)
+    } finally {
+      blocking.release()
+      flush.release()
+      await ctx.fiber.dispose()
+    }
+  })
+
   it('reports the running tool, then parks once its result lands and the next request is held', async () => {
     const loop = await mountGatedLoop('park-tool', [
       toolCallResponse('call-1', 'gated', { id: '1' }),

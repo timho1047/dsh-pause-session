@@ -168,16 +168,16 @@ export function apply(ctx: ClientContext): void {
   )
   // The host publishes no push channel of its own, so the forwarded command
   // registry change is what makes these controls live: every one of them is a
-  // transition worth looking at.
+  // transition worth looking at — a park's registrations, a resume's
+  // unregistrations, and the re-registration that carries a phase change.
   //
-  // The host announces a registration and an unregistration per command, so
-  // parking N sessions arrives as several events per session. Both controls
-  // coalesce that themselves, over the burst's own collection window
-  // (`./burst.ts`): a change that lands inside the window postpones the single
-  // burst it buys rather than starting one of its own. A change that follows
-  // one of the user's own actions is that action's echo instead, and the burst
-  // absorbs it for a short window rather than reading back an answer the
-  // action already put on screen.
+  // The host announces one event per registration step, so parking N sessions
+  // arrives as several events per session. Both controls coalesce that
+  // themselves, over the burst's own collection window (`./burst.ts`): a change
+  // that lands inside the window postpones the single read it buys rather than
+  // starting one of its own. A change that follows one of the user's own
+  // actions is that action's echo instead, and the burst absorbs it for a short
+  // window rather than reading back an answer the action already put on screen.
   ctx.effect(
     () => ctx.remote.$on('commands/change', () => {
       control.refreshAll()

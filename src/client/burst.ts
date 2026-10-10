@@ -8,13 +8,16 @@
  * host announces and the user asks for, never a heartbeat:
  *
  * - the host announces a transition by registering or unregistering the paused
- *   session's marker commands, which emits `commands/change` — that event, and
- *   the user's own press or decision, is what starts a burst;
+ *   session's marker commands, and — for a phase change, which no registration
+ *   of its own would show — by registering that session's status verb again.
+ *   Each of those emits `commands/change`, and that event, plus the user's own
+ *   press or decision, is what starts a burst;
  * - one transition announces itself several times: a park registers two or three
- *   marker commands per session, and the host emits one `commands/change` per
- *   registration. The burst therefore waits out a short `windowMs` before its
- *   first read and any trigger inside that window postpones it, so the
- *   registrations of one park start one burst rather than one each;
+ *   marker commands per session and a phase change re-registers one, and the host
+ *   emits one `commands/change` per step. The burst therefore waits out a short
+ *   `windowMs` before its first read and any trigger inside that window
+ *   postpones it, so the announcements of one transition start one burst rather
+ *   than one each;
  * - a change that arrives within `ACTION_ABSORB_MS` of the user's own action is
  *   that action's own consequence, not news: the action already read the host,
  *   so the answer is on screen, and the unregistrations it caused — one event
@@ -24,22 +27,33 @@
  *   still the same storm. The window always closes: the first change after
  *   `ACTION_ABSORB_MS` of quiet is news again, and a user action reads on its
  *   own whatever the window says;
+ * - an absorbed change is deferred rather than lost: a control whose action left
+ *   a phase still moving asks for one look at the moment the window closes
+ *   ({@link ReadBurst.recheckAfterEcho}), which is the read that finds a
+ *   transition the window hid — the park can reach its final phase inside that
+ *   window and never announce anything again. One look per action, and only
+ *   while the state it left is still moving;
  * - a burst is a fixed short list of waits, so at most that many reads answer
  *   one transition, however long the page stays open;
  * - a read that finds the verdict settled ends the burst at once, and the last
  *   reading stays on screen — "the park is settled" is not a state change, so
  *   it must not be re-asked;
- * - a read that finds work still in flight ends it just as fast. The park
- *   announces the end of that work by registering or unregistering its markers,
- *   which is the very event that starts the next burst, so watching the work
- *   from here spends records on a transition that will announce itself;
- * - the flush that settles a park is the one thing that emits no event of its
- *   own, so a verdict that is merely settling — stopped, flush still pending —
- *   keeps the rest of the burst. That is the whole reason a transition can buy
- *   a few reads over a few seconds rather than exactly one;
- * - the bound is a trade, taken knowingly: a flush that outlasts the burst
- *   leaves the last reading on screen until the next trigger. A longer watch is
- *   a longer list of waits, at a linear price in the address session's log;
+ * - a read that finds a phase still moving ends it just as fast. Every phase
+ *   transition is announced at its source, the flush that resolves `parking`
+ *   into `safe` included, and that announcement is the very event that starts
+ *   the next burst — so watching a moving phase from here spends records on a
+ *   transition that will speak for itself;
+ * - what the burst still owes after a read is delivery: the read one
+ *   announcement bought, and one more when a change lands while a pass is in
+ *   flight, which that pass cannot have answered. The bound is a bound, not a
+ *   heartbeat: a phase that never settles is left on screen unread until
+ *   something else moves;
+ * - the bound is a trade, taken knowingly: a reading left on screen when the
+ *   burst runs out is the host's own last answer, and the next trigger — a
+ *   forwarded change, a press, or the shell handing a control its session again
+ *   — reads the truth again. A reading nobody answered is never rendered as a
+ *   confident state. A longer watch is a longer list of waits, at a linear price
+ *   in the address session's log;
  * - while the page is hidden no read is armed at all, and the wait a burst
  *   still owed is armed again when the page comes back: hidden time is neither
  *   charged to the burst nor lost from it.
@@ -98,9 +112,9 @@ export const ACTION_ABSORB_MS = 2_500
 
 /**
  * The waits one burst uses when its first wait is `first`: four reads spread
- * over roughly ten times that. Long enough to watch a park flush settle, short
- * enough that a state which never settles costs a handful of log records rather
- * than a night of them.
+ * over roughly ten times that. Long enough that a read a hidden page or an
+ * in-flight pass deferred is still taken, short enough that a state which never
+ * settles costs a handful of log records rather than a night of them.
  * @param first - milliseconds before the burst's first read, after its window; `<= 0` disables bursting.
  * @returns the waits, in order; empty when bursting is disabled.
  */
@@ -155,6 +169,8 @@ export class ReadBurst {
   private running = false
   /** The absorption window a client action opened, while one is open. */
   private absorbed: ReturnType<typeof setTimeout> | undefined
+  /** Whether a control asked for the one look owed when the echo window closes. */
+  private recheck = false
 
   /**
    * @param onRead - one more read. Called only for a read the burst owes and the page can show.
@@ -202,38 +218,62 @@ export class ReadBurst {
   }
 
   /**
+   * Ask for one read at the moment the echo window closes, because the action's
+   * own read left a state that is still moving.
+   *
+   * The echo window swallows a transition announced inside it — the forwarded
+   * event carries no payload, so nothing distinguishes a marker registration
+   * from a phase change — and after the window no change is guaranteed to come:
+   * the transition that was hidden may be the last one this park makes. The
+   * look owed here is the read that finds it, one per action, and it is not a
+   * watch: once the window has closed, every further change is news and buys its
+   * own read. A control whose action left a settled state owes nothing and asks
+   * for nothing.
+   */
+  recheckAfterEcho(): void {
+    if (!this.enabled) return
+    this.recheck = true
+  }
+
+  /**
    * Something moved — a registry change. The burst first waits out its
    * collection window, and every trigger that lands inside it restarts that
    * window: the two or three registrations of one park start one burst rather
-   * than one each. A burst already past its window absorbs this — every read it
-   * still owes happens after the change.
+   * than one each. A burst already past its window takes this as covered —
+   * every read it still owes happens after the change.
+   *
+   * @returns whether the change is news rather than a client action's own echo.
+   * The echo announces what the action's read already answered, so only a news
+   * trigger is a change a control still owes a read for; a change that lands
+   * while a burst is under way is covered by the read that burst already owes.
+   * `false` also for a disabled burst, which reads nothing at all.
    */
-  trigger(): void {
-    if (!this.enabled) return
+  trigger(): boolean {
+    if (!this.enabled) return false
     if (this.absorbing) {
       // The action's own echo: it announces what the action's read already
       // answered. Keeping the window open while the echo lasts is what makes a
       // storm of one-change-per-marker cost nothing at all.
       this.armAbsorb()
-      return
+      return false
     }
     if (!this.running) {
       this.running = true
       this.left = this.policy.waitsMs
       this.armWindow()
-      return
+      return true
     }
     // Already running and still collecting: this change belongs to the burst
     // being collected, so it postpones that burst's read rather than adding one.
     if (this.window) this.armWindow()
+    return true
   }
 
   /**
-   * A read found the state still moving, so the burst owes the next read. A
-   * read outside any burst — a mount, a press, a decision — starts one, because
-   * a user action that changes the park is worth watching settle. This is also
-   * how a reading that just revealed something gets read, as opposed to a
-   * change that announced it, so an absorption window never applies here.
+   * The control knows it still owes a read: a change that is news has arrived,
+   * or a reading just revealed something only a read can answer. A call outside
+   * any burst starts one. Absorption never applies here — this is not a change
+   * some action caused, it is a read the control already knows it needs.
    */
   next(): void {
     if (this.armed || this.window) return
@@ -246,9 +286,10 @@ export class ReadBurst {
 
   /**
    * Nothing is moving: end the burst and forget it. The last reading stays
-   * published, and the next trigger starts a fresh burst. An action's
-   * absorption window is not the burst's to end — it outlives the read that
-   * settled the state, which is the whole point of it.
+   * published, and the next trigger starts a fresh burst. Two things outlive
+   * this: an action's absorption window, which is about what the action caused
+   * rather than about the state, and the one look it may still owe — see
+   * {@link recheckAfterEcho}.
    */
   stop(): void {
     this.running = false
@@ -326,11 +367,19 @@ export class ReadBurst {
   /**
    * (Re)start the absorption window a client action opened. A hidden page keeps
    * absorbing: this window is about what the action caused, not about what the
-   * page is doing.
+   * page is doing. When the window closes, the one look an unsettled action owes
+   * is taken; the window is restarted by every change it absorbs, so that look
+   * waits for the echo to actually stop.
    */
   private armAbsorb(): void {
     this.cancelAbsorb()
-    this.absorbed = this.clock.set(() => { this.absorbed = undefined }, Math.max(ACTION_ABSORB_MS, 0))
+    this.absorbed = this.clock.set(() => {
+      this.absorbed = undefined
+      if (!this.recheck) return
+      this.recheck = false
+      // A read may already be owed or counting down; the burst never arms two.
+      this.next()
+    }, Math.max(ACTION_ABSORB_MS, 0))
   }
 
   /** Close the absorption window: changes are news again. */

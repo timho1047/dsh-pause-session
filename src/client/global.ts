@@ -24,22 +24,25 @@
  * the session the shell asks with, so a stale address costs an honest answer
  * rather than a control that can never speak again.
  *
- * Nothing announces the flush that settles a park — the marker commands are
- * registered when the pause is pressed, not when the flush resolves — so a
- * transition buys a short bounded burst of reads and then stops (`./burst.ts`).
- * The burst is spent only while the park is settling: work still in flight
- * announces its own end through the registry change that starts the next burst,
- * so watching it from here would be reads spent on a transition that is going to
- * speak for itself. A settled answer is left on screen unread: the panel stays
- * readable and the pill keeps saying what it says, but the browser stops
- * spending host round-trips and log records on a state that has stopped moving.
- * What owes a read is the host's forwarded registry change, the user's own press
- * or decision, and the first read at mount; once an answer is on screen, the
- * shell handing this control another session to ask through is none of those.
- * A press, a decision and an opened panel each read the host as they run, and
- * the changes they set off are that action's own echo: those are absorbed for a
- * short window (`./burst.ts`), so a forwarded change owes a read exactly when
- * something moved that this browser did not do.
+ * Every phase a session reaches announces itself through the registry — a
+ * transition re-registers that session's status verb — so a change is what buys
+ * the next read, and the flush that settles a park is announced like every other
+ * step (`./burst.ts`). A read that finds work still in flight is therefore the
+ * answer to the transition that produced it rather than a reason to keep asking;
+ * what the burst still owes is the delivery of a change, and the rows of a panel
+ * whose own read did not answer. A settled answer is left on screen unread: the
+ * panel stays readable and the pill keeps saying what it says, but the browser
+ * stops spending host round-trips and log records on a state that has stopped
+ * moving. What owes a read is the host's forwarded registry change, the user's
+ * own press or decision, and the first read at mount; once an answer is on
+ * screen, the shell handing this control another session to ask through is none
+ * of those. A press, a decision and an opened panel each read the host as they
+ * run, and the changes they set off are that action's own echo: those are
+ * absorbed for a short window (`./burst.ts`), so a forwarded change owes a read
+ * exactly when something moved that this browser did not do — with one look owed
+ * at the close of that window when the reading the action left is still moving,
+ * which is how a park that reaches its final phase inside the echo window is
+ * still read.
  * @module dsh-safe-stop/client/global
  */
 
@@ -181,6 +184,12 @@ export class SafeStopGlobalControl {
   private latestTriage = 0
   /** Highest read sequence requested: an answer older than it is dropped. */
   private latest = 0
+  /**
+   * Whether a registry change has arrived that no completed read pass has
+   * answered. Set only for a change that is news — an absorbed echo of this
+   * browser's own action is already answered by that action's read.
+   */
+  private owed = false
   /** The bounded burst of reads one transition buys; see `./burst.ts`. */
   private readonly burst: ReadBurst
 
@@ -232,11 +241,14 @@ export class SafeStopGlobalControl {
    * The host's command registry changed: something may have moved, so a burst
    * is owed. The reads run on the burst's own schedule rather than here, which
    * is what coalesces a tick's worth of changes — parking N sessions announces
-   * three registrations each — into one burst.
+   * three registrations each, and a phase change re-registers one more — into
+   * one burst. A change that is this browser's own action's echo owes nothing:
+   * the action read the host as it ran.
    */
   refreshAll(): void {
     if (this.address === undefined || this.lifetime.aborted) return
-    this.burst.trigger()
+    if (!this.burst.trigger()) return
+    this.owed = true
   }
 
   /**
@@ -246,9 +258,14 @@ export class SafeStopGlobalControl {
    */
   private async readAll(): Promise<void> {
     if (this.target() === undefined || this.lifetime.aborted) {
+      this.owed = false
       this.burst.stop()
       return
     }
+    // Cleared before the reads, not after: a change that lands while this pass
+    // is in flight is one this pass cannot have answered, so it survives into
+    // the next read rather than being absorbed into this one.
+    this.owed = false
     await this.readAggregate()
     if (this.store.getSnapshot().panelOpen) await this.readTriage()
     // One burst decision per pass: taken per read, two reads that disagree
@@ -444,21 +461,33 @@ export class SafeStopGlobalControl {
   }
 
   /**
-   * Decide what the burst owes after a read: another look while the park is
-   * settling, and nothing at all while it is working or once it has settled.
+   * Decide what the burst owes after a read: another look while a change this
+   * browser has not answered is outstanding, or while the open panel is still
+   * owed rows, and nothing once neither holds.
    *
-   * A verdict with work in flight is left alone. The park announces the end of
-   * that work by registering or unregistering its marker commands, and that is
-   * the very event that starts the next burst — so watching it from here would
-   * spend a read per wait on a transition that is going to announce itself.
-   * What this control does keep watching is the one transition nothing
-   * announces: a session that has stopped and whose flush has not resolved yet,
-   * where `safe to close` appears only in an answer the browser reads. Once
-   * that answer has arrived, the last reading stays published — the verdict, the
-   * pill and the rows are exactly what the host last reported.
+   * A registered session standing at the park point is left alone: the flush
+   * that settles it announces itself on the command channel like every other
+   * transition, so watching it from here would spend reads on a move that is
+   * going to speak for itself. A verdict that stays `waiting` because a record
+   * is stalled, unresumable or unread is not settling either: nothing in this
+   * process will change it, and a session that starts moving again registers its
+   * markers, which is what asks next.
+   *
+   * The one transition that cannot speak for itself is the one this browser's
+   * own echo window swallowed: a press reads the host, the park reaches its
+   * final phase while the window is still open, and the changes that would have
+   * announced it look exactly like the press's own registrations. An action that
+   * left the park moving therefore asks for one look when that window closes,
+   * and only then. Once nothing is owed, the last reading stays published — the
+   * verdict, the pill and the rows are exactly what the host last reported.
    */
   private follow(): void {
-    if (this.lifetime.aborted || !this.settling()) {
+    if (this.lifetime.aborted) {
+      this.burst.stop()
+      return
+    }
+    if (!this.owed && !this.unansweredPanel()) {
+      if (this.burst.absorbing && this.moving()) this.burst.recheckAfterEcho()
       this.burst.stop()
       return
     }
@@ -466,22 +495,26 @@ export class SafeStopGlobalControl {
   }
 
   /**
-   * Whether anything on screen is still settling: a registered session standing
-   * at the park point with its flush pending, or a listed row in that same
-   * state — or a list still being read — while the panel is open. A verdict that
-   * stays `waiting` because a record is stalled, unresumable or unread is not
-   * settling: nothing in this process will change it, and the park will announce
-   * any session that starts moving again by registering its markers.
+   * Whether the park this control last read still has work on its way — the only
+   * state an action's own echo could be hiding a transition behind. A record
+   * that is stalled, unresumable or unread is not moving: nothing in this
+   * process will finish it.
    */
-  private settling(): boolean {
+  private moving(): boolean {
+    const current = this.store.getSnapshot().global
+    return current?.kind === 'reported'
+      && (current.status.draining.length > 0 || current.status.parking > 0)
+  }
+
+  /**
+   * Whether the open panel is still owed its rows. Opening the panel reads them,
+   * so this holds only after a read that did not answer — the one debt no change
+   * created, and the one place a retry is the difference between an empty panel
+   * and the facts the host has. It is bounded by the burst like everything else.
+   */
+  private unansweredPanel(): boolean {
     const state = this.store.getSnapshot()
-    const current = state.global
-    const held = current?.kind === 'reported' && current.status.parking > 0
-    const listed = state.panelOpen
-      && (state.triage === undefined
-        || state.triage.kind === 'unavailable'
-        || state.triage.rows.some(row => row.phase === 'parking'))
-    return held || listed
+    return state.panelOpen && (state.triage === undefined || state.triage.kind === 'unavailable')
   }
 
   /**
