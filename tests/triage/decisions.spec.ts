@@ -19,9 +19,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { UNATTENDED_TEXT } from '../../src/control.ts'
 import { TRIAGE_UNSHOWN_TEXT, UNKNOWN_OUTCOME_NOTE } from '../../src/triage.ts'
+import { REVIEW_TEXT } from '../../src/resume.ts'
 import { ensureHostEntry } from '../resume/build.ts'
 import { readParkRegistry } from '../registry/read.ts'
-import { turnEnd } from '../gate/loop.ts'
 import { parkAndLeave, recordsUntil, reviveTriageHome, settles, storageOf, until } from './home.ts'
 import type { TriageHome } from './home.ts'
 
@@ -139,7 +139,7 @@ describe('the decisions on one listed session', () => {
     }
   })
 
-  it('opens the session for review without spending a single request', async () => {
+  it('answers the review decision without activating anything or spending a request', async () => {
     const caseRoot = temporaryRoot('dsh-safe-stop-triage-review-')
     await parkAndLeave(caseRoot, 'overnight-review', 'draining')
 
@@ -147,19 +147,18 @@ describe('the decisions on one listed session', () => {
     try {
       const answered = await home.decide('overnight-review', 'review')
       expect(answered.kind, answered.text).toBe('success')
-      const opened = home.ctx.agents.get(SessionId('overnight-review'))
-      expect(opened, 'the decision did not open the session').toBeDefined()
-      // The agent exists so the user can read it; nothing was asked of a model.
-      expect(opened!.status).toBe('idle')
+      expect(answered.text).toBe(REVIEW_TEXT)
+      // Opening a session to read it is the user's own action in their session
+      // history; this decision must not start an agent on their behalf, and
+      // must not ask a model anything.
+      expect(home.ctx.agents.get(SessionId('overnight-review'))).toBeUndefined()
       expect(home.provider.requests).toHaveLength(0)
       expect(home.seen).toHaveLength(0)
       await settles()
+      expect(home.ctx.agents.get(SessionId('overnight-review'))).toBeUndefined()
       expect(home.provider.requests).toHaveLength(0)
-      // Opening it still repaired the log the way any cold read does, so what
-      // the user sees is the balanced transcript rather than a dangling step.
-      expect(turnEnd(opened!)).toEqual({ turn: 1, reason: { kind: 'interrupted' } })
-      // Opening it is not releasing it: the record is what keeps the session
-      // from running on its own later, so it stays.
+      // It writes nothing either: the record is what keeps the session from
+      // running on its own later, so it stays exactly as it was.
       await recordsUntil(caseRoot, [['overnight-review', 'draining']])
     } finally {
       await home.ctx.fiber.dispose()
@@ -198,6 +197,11 @@ describe('the decisions on one listed session', () => {
       const answered = await home.run('/safe-triage-continue overnight-unshown')
       expect(answered.kind).toBe('error')
       expect(answered.text).toBe(TRIAGE_UNSHOWN_TEXT)
+      // The goal switch rides the same binding: it changes durable state of a
+      // parked session, so a row nobody was shown is not a target for it either.
+      const switched = await home.run('/safe-triage-goal overnight-unshown')
+      expect(switched.kind).toBe('error')
+      expect(switched.text).toBe(TRIAGE_UNSHOWN_TEXT)
       await settles()
       expect(home.ctx.agents.get(SessionId('overnight-unshown'))).toBeUndefined()
       expect(home.provider.requests).toHaveLength(0)

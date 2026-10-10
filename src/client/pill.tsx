@@ -29,7 +29,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type { TriageAction } from '../shared.js'
 import { addressingSession } from './global.js'
 import type { GlobalStopState } from './global.js'
-import { globalStopView, triageView, TRIAGE_ACTION_VIEWS } from './view.js'
+import { globalStopView, triageView, TRIAGE_ACTION_VIEWS, TRIAGE_GOAL_VIEW } from './view.js'
 import type { TriageRowView } from './view.js'
 import { CaveatIcon, ChevronIcon, PauseIcon, ResumeIcon } from './icons.js'
 import styles from './button.module.css'
@@ -92,6 +92,17 @@ function TriageSessionRow(props: {
             {t(action.labelKey)}
           </button>
         ))}
+        {/* A switch, not a decision: it says what the next resume of this
+            session may spend, and the host's own reading is its state. */}
+        <button
+          type="button"
+          className={styles.dsssPillAction}
+          aria-label={t(TRIAGE_GOAL_VIEW.ariaKey)}
+          aria-pressed={row.rearmGoal}
+          onClick={() => { decide(row.sessionId, TRIAGE_GOAL_VIEW.action) }}
+        >
+          {t(TRIAGE_GOAL_VIEW.labelKey)}
+        </button>
       </div>
     </li>
   )

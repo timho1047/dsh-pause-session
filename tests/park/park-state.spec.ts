@@ -15,9 +15,10 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
+import { SessionId } from '@deepseek-ai/dsh-session'
 import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import {
-  decodeParkStatus, PAUSE_COMMAND, RESUME_COMMAND, RESUME_DEFINITION_ID, STATUS_COMMAND,
+  decodeGlobalStatus, decodeParkStatus, PAUSE_COMMAND, RESUME_COMMAND, RESUME_DEFINITION_ID, STATUS_COMMAND,
   STATUS_DEFINITION_ID,
 } from '../../src/shared.ts'
 import type { ParkStatus } from '../../src/shared.ts'
@@ -225,8 +226,7 @@ describe('park state: what the control reports between the press and the park', 
     }
   })
 
-  it('never reports "safe" before the session-level flush resolves', async () => {
-    const loop = await mountGatedLoop('park-flush', [])
+  it('never reports "safe" before the session-level flush resolves', async () => {    const loop = await mountGatedLoop('park-flush', [])
     const { ctx, agent } = loop
     liveSession(loop, agent)
     const flush = heldFlush(ctx)
@@ -247,8 +247,92 @@ describe('park state: what the control reports between the press and the park', 
     }
   })
 
-  it('reports a failed flush instead of calling the session clean', async () => {
-    const loop = await mountGatedLoop('park-flush-failed', [])
+  it('publishes a phase only once the registry has recorded it', async () => {
+    const loop = await mountGatedLoop('park-durable', [], { heldWrites: true })
+    const { ctx, agent } = loop
+    liveSession(loop, agent)
+    const held = loop.held
+    if (held === undefined) throw new Error('safe-stop: this case asked for held registry writes')
+    try {
+      // The press is a durable promise: it answers only after `draining` is on
+      // the medium, and the move to `parking` is the write after that.
+      const pressing = control(ctx, agent, PAUSE_COMMAND)
+      await held.untilRequested(1)
+      expect(await published(ctx, agent)).toBeUndefined()
+      held.release(0)
+      await pressing
+      await held.untilRequested(2)
+
+      // Standing still, with the write that would record `parking` still in
+      // flight. What the browser can read is the last phase the registry
+      // confirmed: an answer that ran ahead of the record would claim a park
+      // that a crash at this instant erases.
+      expect(await published(ctx, agent)).toEqual({ phase: 'draining', safe: false, runningTools: [] })
+
+      held.release(1)
+      await phaseBecomes(ctx, agent, 'parking')
+      held.release(2)
+      await phaseBecomes(ctx, agent, 'safe')
+    } finally {
+      // A case that fails before releasing must not leave the plugin's writes
+      // queued behind it.
+      held.release(0)
+      held.release(1)
+      held.release(2)
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('never records "safe" for a session that left the store before its flush', async () => {
+    const loop = await mountGatedLoop('park-vanished', [], { heldWrites: true })
+    const { ctx } = loop
+    const held = loop.held
+    if (held === undefined) throw new Error('safe-stop: this case asked for held registry writes')
+    const target = SessionId('park-vanished-target')
+    // A session with a handle: the spec can take it away mid-press, which is
+    // what closing a session the user just paused looks like to this plugin.
+    const created = await ctx.agents.create({
+      sessionId: target,
+      agentOptions: { provider: 'fake', model: 'fake' },
+    })
+    try {
+      const pressing = control(ctx, created.agent, PAUSE_COMMAND).catch(() => {})
+      await held.untilRequested(1)
+      // The session leaves the store while the press is still recording itself.
+      await created.dispose()
+      held.release(0)
+      await pressing
+      await until(() => held.requested.length >= 2)
+
+      // The park point was reached with nothing live behind it. There is no
+      // session to flush, so this process cannot call the session clean: the
+      // record may only say that it stood still and the flush never happened.
+      expect(held.requested.map(entry => (entry.value as { phase: string }).phase))
+        .toEqual(['draining', 'parking'])
+
+      // And the report says the same: this session will not finish parking in
+      // this process, which is a fact the user is owed rather than a "still
+      // finishing" that never ends.
+      const answered = await ctx.commands.execute(loop.agent, '/safe-state-all', [], new AbortController().signal)
+      const text = answered?.result.kind === 'success' ? answered.result.text : undefined
+      expect(text === undefined ? undefined : decodeGlobalStatus(text)).toMatchObject({
+        verdict: 'waiting',
+        registered: 1,
+        safe: 0,
+        draining: [],
+        stalled: ['park-vanished-target'],
+      })
+    } finally {
+      // A case that fails before releasing must not leave the plugin's writes
+      // queued behind it.
+      held.release(0)
+      held.release(1)
+      held.release(2)
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('reports a failed flush instead of calling the session clean', async () => {    const loop = await mountGatedLoop('park-flush-failed', [])
     const { ctx, agent } = loop
     liveSession(loop, agent)
     // A durability peer whose checkpoint always fails. A failed flush is the

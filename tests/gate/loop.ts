@@ -22,6 +22,8 @@ import { apply, inject, name } from '../../src/index.ts'
 import type { ScriptEntry } from '../assumptions/fake-provider.ts'
 import { mountFakeLoop } from '../assumptions/loop-harness.ts'
 import type { FakeLoop } from '../assumptions/loop-harness.ts'
+import { mountHeldParkStorage } from '../registry/held.ts'
+import type { HeldWrites } from '../registry/held.ts'
 import { mountParkStorage } from '../registry/storage.ts'
 
 /** The spike's loop plus the plugin under test and the registry it drives. */
@@ -34,18 +36,21 @@ export interface GatedLoop extends FakeLoop {
   readonly plugin: { dispose(): Promise<void> }
   /** Directory this loop's durable park registry lives in. */
   readonly storageRoot: string
+  /** The registry's write queue, when the spec asked to hold writes open. */
+  readonly held?: HeldWrites
 }
 
 /** Mount the loop, the command registry, the storage the plugin needs, and the plugin under test. */
 export async function mountGatedLoop(
   id: string,
   script: ScriptEntry[],
-  options: { idleTimeoutMs?: number } = {},
+  options: { idleTimeoutMs?: number; heldWrites?: boolean } = {},
 ): Promise<GatedLoop> {
   const loop = await mountFakeLoop(id, script, options)
   const storageRoot = mkdtempSync(join(tmpdir(), 'dsh-safe-stop-loop-'))
   loop.ctx.effect(() => () => rmSync(storageRoot, { recursive: true, force: true }), 'spec: registry root')
-  await mountParkStorage(loop.ctx, storageRoot)
+  const held = options.heldWrites === true ? await mountHeldParkStorage(loop.ctx, storageRoot) : undefined
+  if (held === undefined) await mountParkStorage(loop.ctx, storageRoot)
   const seen: GenerateOptions[] = []
   const waiters = new Map<number, () => void>()
   // Upstream of the gate: the request is recorded when the loop builds it, not
@@ -62,6 +67,7 @@ export async function mountGatedLoop(
     seen,
     plugin,
     storageRoot,
+    ...held === undefined ? {} : { held },
     requestSeen: async (count: number) => {
       if (seen.length >= count) return
       await new Promise<void>((resolve) => { waiters.set(count, resolve) })

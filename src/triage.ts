@@ -1,7 +1,7 @@
 /**
  * The morning decision list: every session that did not stop cleanly, the facts
- * its own log carries about where it stopped, and the four decisions the user
- * can take on it.
+ * its own log carries about where it stopped, and the listed verbs the user can
+ * take on it.
  *
  * A session gets here by NOT being on the clean path. A record whose phase is
  * `safe` is woken silently by `./resume.ts` and never appears here; the other
@@ -34,12 +34,20 @@
  * recent read published to the calling session: the caller's own read is what
  * makes a target actionable. Anything else is refused, not looked up.
  *
- * THREE OF THE FOUR DECISIONS PUT THE SESSION BACK ON THE CLEAN PATH. Continue,
- * continue with the note, and review all go through `ResumePath.resumeSession`,
- * so the durable record is dropped before the gate opens there too; review
- * differs only in delivering no wake input and spending no request. Leave
- * writes nothing at all: the record stays, the session stays held, and the row
- * is still on tomorrow's list.
+ * TWO OF THE FIVE VERBS PUT THE SESSION BACK ON THE CLEAN PATH. Continue and
+ * continue-with-the-note go through `ResumePath.decideUnclean`, which activates
+ * the session, wakes it and drops the durable record before the gate opens.
+ *
+ * THE OTHER THREE TOUCH NOTHING. Leave writes nothing at all: the record stays,
+ * the session stays held, and the row is still on tomorrow's list. Review
+ * answers without activating anything or writing anything — opening a session
+ * to read it is the user's own action in their session history, and starting an
+ * agent on their behalf is precisely what they declined. Goal flips the row's
+ * own re-arm opt-out: it is the user path for the one thing a resume can spend
+ * without the user watching it, and it takes effect on whatever resume comes
+ * next. All five carry the same binding — the row must be one this caller was
+ * shown — because each changes, or declines to change, durable state of a
+ * parked session.
  * @module dsh-safe-stop/triage
  */
 
@@ -49,7 +57,7 @@ import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
 import type { CommandResult } from '@deepseek-ai/dsh-commands'
 import { derivedHistory, owesReply, routeNamed } from './history.js'
-import type { ParkRegistry } from './registry.js'
+import type { ParkRegistry, ParkedSession } from './registry.js'
 import type { ResumePath } from './resume.js'
 import { describeError } from './shared.js'
 import type { TriageAction, TriageList, TriageRow, TriageTrace } from './shared.js'
@@ -95,6 +103,12 @@ interface ColdRead {
   /** The events exactly as they are stored: no repair, no synthesis. */
   readonly events: readonly SessionEvent[]
 }
+
+/**
+ * One registry entry this list owns: every park outcome but `safe`, which is
+ * the silent path's business and never appears here.
+ */
+type ListedPark = Omit<ParkedSession, 'phase'> & { readonly phase: TriageRow['phase'] }
 
 /**
  * Events that are not the session's own story: the bookkeeping of the pause
@@ -165,19 +179,16 @@ function unansweredCalls(events: readonly SessionEvent[]): TriageTrace[] {
 /**
  * One row's facts, as the session's own log reports them.
  * @param ctx - host context carrying the registered message projections.
- * @param sessionId - the listed session.
- * @param phase - the durable park outcome.
- * @param updatedAt - when that outcome was written.
+ * @param entry - the durable park record this row is built from.
  * @param stored - the events exactly as they are stored.
  * @returns the row, ready to publish.
  */
 function rowOf(
   ctx: Context,
-  sessionId: SessionId,
-  phase: TriageRow['phase'],
-  updatedAt: number,
+  entry: ListedPark,
   stored: readonly SessionEvent[],
 ): TriageRow {
+  const { sessionId, phase, updatedAt, rearmGoal } = entry
   // The stop position is the last event the log actually ends on, minus the
   // bookkeeping that only says how the pause itself was requested.
   const last = [...stored].reverse().find(event => !BOOKKEEPING_EVENTS.has(event.type))
@@ -200,6 +211,7 @@ function rowOf(
     ...last === undefined ? {} : { lastEvent: last.type, ...positionOf(last) },
     traces,
     owed,
+    rearmGoal,
     // Two facts have to hold before this host can hand the session its owed
     // request: the log must name the route the wake would be addressed to, and
     // there must be an answer still owed for the wake to ask for.
@@ -219,7 +231,7 @@ export interface TriageListService {
    * Carry out one decision on one listed session, for the caller that read it.
    * @param caller - the session the decision was addressed to.
    * @param sessionId - the listed session to act on.
-   * @param action - which of the four decisions was taken.
+   * @param action - which of the listed decisions was taken.
    * @returns the outcome for whoever asked.
    */
   decide(caller: SessionId, sessionId: SessionId, action: TriageAction): Promise<CommandResult>
@@ -245,21 +257,31 @@ export function mountTriageList(ctx: Context, registry: ParkRegistry, resumePath
    */
   const shown = new Map<SessionId, ReadonlySet<string>>()
 
-  const readable = async (sessionId: SessionId, phase: TriageRow['phase'], updatedAt: number): Promise<TriageRow> => {
-    const read = await coldRead(ctx, sessionId)
+  const readable = async (entry: ListedPark): Promise<TriageRow> => {
+    const read = await coldRead(ctx, entry.sessionId)
     // A log this host could not read says so. An empty row would claim the
     // session left no traces, which is precisely the verdict nobody has.
     if (read === undefined) {
-      return { sessionId: String(sessionId), phase, updatedAt, reading: 'unreadable', traces: [], owed: false, wakeable: false }
+      return {
+        sessionId: String(entry.sessionId),
+        phase: entry.phase,
+        updatedAt: entry.updatedAt,
+        reading: 'unreadable',
+        traces: [],
+        owed: false,
+        wakeable: false,
+        rearmGoal: entry.rearmGoal,
+      }
     }
-    return rowOf(ctx, sessionId, phase, updatedAt, read.events)
+    return rowOf(ctx, entry, read.events)
   }
 
   /**
-   * One decision, as the resume path's own verbs plus the one local verb that
-   * changes nothing. Review is `resumeSession` with no wake: the session comes
-   * back from its stored log so it can be looked at, and no request is built
-   * because no input is delivered.
+   * One decision, as the resume path's own verbs plus the two local verbs that
+   * change nothing but the record. Review is the list's own "do not run it"
+   * answer: it activates nothing and writes nothing, so the park is exactly as
+   * it was. The goal toggle is the user path for the one thing a resume can
+   * spend unasked.
    */
   const decide = async (caller: SessionId, sessionId: SessionId, action: TriageAction): Promise<CommandResult> => {
     if (!(shown.get(caller)?.has(String(sessionId)) ?? false)) return { kind: 'error', text: TRIAGE_UNSHOWN_TEXT }
@@ -270,9 +292,10 @@ export function mountTriageList(ctx: Context, registry: ParkRegistry, resumePath
       return { kind: 'error', text: TRIAGE_NOT_LISTED_TEXT }
     }
     if (action === 'leave') return { kind: 'success', text: TRIAGE_LEFT_TEXT }
-    // Review is its own kind of decision, not a wake-less resume: it opens the
-    // session and leaves the park exactly as it was, so the row is still there
-    // for tomorrow and nothing has been continued on the user's behalf.
+    if (action === 'goal') return await resumePath.setRearmGoal(sessionId, !record.rearmGoal)
+    // Review is its own kind of decision, not a wake-less resume: it leaves the
+    // park exactly as it was, so the row is still there for tomorrow and
+    // nothing has been continued — or even activated — on the user's behalf.
     if (action === 'review') return (await resumePath.decideUnclean(sessionId, { kind: 'none' }, 'review')).answer
     const wake: WakeOf = action === 'continue' ? { kind: 'silent' } : { kind: 'message', text: UNKNOWN_OUTCOME_NOTE }
     return (await resumePath.decideUnclean(sessionId, wake, 'release')).answer
@@ -280,9 +303,8 @@ export function mountTriageList(ctx: Context, registry: ParkRegistry, resumePath
 
   return {
     read: async (caller) => {
-      const rows = await Promise.all(registry.list().flatMap(entry => entry.phase === 'safe'
-        ? []
-        : [readable(entry.sessionId, entry.phase, entry.updatedAt)]))
+      const rows = await Promise.all(registry.list()
+        .flatMap(entry => entry.phase === 'safe' ? [] : [readable({ ...entry, phase: entry.phase })]))
       shown.set(caller, new Set(rows.map(row => row.sessionId)))
       return { rows }
     },

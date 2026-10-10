@@ -26,9 +26,11 @@ import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import {
   decodeGlobalStatus, decodeTriageList, RESUME_ALL_COMMAND, STATE_ALL_COMMAND, STOP_ALL_COMMAND,
-  TRIAGE_COMMAND, TRIAGE_CONTINUE_COMMAND, TRIAGE_LEAVE_COMMAND, TRIAGE_NOTE_COMMAND, TRIAGE_REVIEW_COMMAND,
+  TRIAGE_COMMAND, TRIAGE_CONTINUE_COMMAND, TRIAGE_GOAL_COMMAND, TRIAGE_LEAVE_COMMAND, TRIAGE_NOTE_COMMAND,
+  TRIAGE_REVIEW_COMMAND,
 } from '../shared.js'
 import type { GlobalStatus, TriageAction, TriageRow } from '../shared.js'
+import { globalStopView } from './view.js'
 
 /** What the whole-app control knows: the host's answer, or that it could not ask. */
 export type GlobalReading =
@@ -52,12 +54,13 @@ export interface GlobalStopState {
 
 const INITIAL: GlobalStopState = { global: undefined, panelOpen: false, triage: undefined }
 
-/** The command one decision runs, named from the one vocabulary the host registers. */
+/** The command one listed verb runs, named from the one vocabulary the host registers. */
 export const TRIAGE_DECISION_COMMAND: Readonly<Record<TriageAction, string>> = {
   continue: TRIAGE_CONTINUE_COMMAND,
   note: TRIAGE_NOTE_COMMAND,
   review: TRIAGE_REVIEW_COMMAND,
   leave: TRIAGE_LEAVE_COMMAND,
+  goal: TRIAGE_GOAL_COMMAND,
 }
 
 /**
@@ -163,26 +166,31 @@ export class SafeStopGlobalControl {
   }
 
   /**
-   * Take one decision on one listed session, addressed through the session the
-   * user is on. The list is read first, because the host acts only on rows it
-   * has shown the calling session, and read again afterwards because the host's
-   * answer — not this control's assumption — is what the next render shows.
-   * @param sessionId - the listed session to decide on.
-   * @param action - which of the four decisions was taken.
+   * Take one listed verb on one listed session, addressed through the session
+   * the user is on. The list is read first, because the host acts only on rows
+   * it has shown the calling session, and read again afterwards because the
+   * host's answer — not this control's assumption — is what the next render
+   * shows: a decision can release a session, and the goal switch changes what
+   * the row itself says.
+   * @param sessionId - the listed session to act on.
+   * @param action - which listed verb was taken.
    */
   async decide(sessionId: string, action: TriageAction): Promise<void> {
     const address = this.address
     if (address === undefined) return
     await this.refreshTriage()
     await this.commands.execute(address, `/${TRIAGE_DECISION_COMMAND[action]} ${sessionId}`, [], this.lifetime)
+    await this.refreshTriage()
     // A decision can release a session, which the whole-app verdict reports.
     await this.refresh(address)
   }
 
   /**
-   * Press the control: park everything, or release everything the park owns.
+   * Press the pill: park everything, or release everything the park owns.
    * Which one it is comes from the host's own last answer, never from a local
-   * flip; the state shown afterwards is the host's answer again.
+   * flip; the state shown afterwards is the host's answer again. A reading the
+   * view does not turn into a verb — every registered session is one the host
+   * will not wake — is not pressed at all.
    * @param sessionId - the session to address the verb to.
    * @returns after the control re-reads the host.
    */
@@ -191,7 +199,9 @@ export class SafeStopGlobalControl {
     // Nothing to press against: a state that could not be read is not a state
     // this control may act on.
     if (current === undefined || current.kind !== 'reported') return
-    const line = current.status.verdict === 'idle' ? `/${STOP_ALL_COMMAND}` : `/${RESUME_ALL_COMMAND}`
+    const action = globalStopView(current).action
+    if (action === 'none') return
+    const line = action === 'stop-all' ? `/${STOP_ALL_COMMAND}` : `/${RESUME_ALL_COMMAND}`
     const executed = await this.commands.execute(sessionId, line, [], this.lifetime)
     if (!executed.ok) {
       this.publish({ kind: 'unavailable' })

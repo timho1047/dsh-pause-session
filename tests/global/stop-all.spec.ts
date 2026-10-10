@@ -11,10 +11,13 @@
 
 import { afterAll, describe, expect, it } from 'vitest'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { SessionId } from '@deepseek-ai/dsh-session'
 import { textResponse } from '../assumptions/fake-provider.ts'
 import { RESUME_DEFINITION_ID } from '../../src/shared.ts'
 import { readParkRegistry } from '../registry/read.ts'
-import { cleanRoots, mountGlobalHome, storageOf, temporaryRoot, toolCallResponse, until, untilAsync } from './home.ts'
+import {
+  blockingScript, cleanRoots, mountGlobalHome, storageOf, temporaryRoot, toolCallResponse, until, untilAsync,
+} from './home.ts'
 
 /** The route's script for a case whose session blocks in a tool. */
 const BLOCKING_SCRIPT = [toolCallResponse('call-1', 'gated', { id: '1' }), textResponse('after the tool')]
@@ -73,6 +76,55 @@ describe('one press over every running session tree', () => {
       expect(status.verdict).toBe('waiting')
       expect(status.registered).toBe(2)
       expect(status.draining).toEqual(['busy-root'])
+    } finally {
+      home.blocking.releaseAll()
+      await home.ctx.fiber.dispose()
+    }
+  })
+
+  it('leaves a tree member that is not live alone, and still reaches safe', async () => {
+    const caseRoot = temporaryRoot('dsh-safe-stop-global-inactive-', temporaryRoots)
+    const home = await mountGlobalHome(caseRoot, { script: blockingScript() })
+    try {
+      const parent = await home.create('busy-parent')
+      // A child that already finished its run: its log is durable and its agent
+      // is gone, which is what most catalog rows look like by the evening.
+      const child = await home.ctx.agents.create({
+        sessionId: SessionId('finished-child'),
+        agentOptions: { provider: 'fake', model: 'fake' },
+      })
+      const childCreatedAt = child.agent.session.header.createdAt
+      child.agent.followup(ask('child work'))
+      await untilAsync(async () => home.blocking.started() === 1, 'the child tool in flight')
+      home.blocking.release(0)
+      await child.agent.whenIdle()
+      await home.ctx.sessions.flush(child.agent.session)
+      await child.dispose()
+      parent.session.append('subagent/catalog', {
+        version: 0,
+        childId: SessionId('finished-child'),
+        childCreatedAt,
+        mode: 'continuable',
+        label: 'finished child',
+      })
+
+      parent.followup(ask('parent work'))
+      await untilAsync(async () => home.blocking.started() === 2, 'the parent tool in flight')
+      expect((await home.run(parent, 'safe-stop-all')).kind).toBe('success')
+
+      // The tree walk names the finished child, and the press leaves it alone:
+      // it has nothing to hold and no session-level flush to run, so a record
+      // for it could only be a `safe` no flush backs — the clean path would
+      // silently resume it in the morning — or a phase that never settles,
+      // which would keep "safe to close" from ever appearing.
+      expect((await readParkRegistry(storageOf(caseRoot))).map(entry => String(entry.sessionId)))
+        .toEqual(['busy-parent'])
+
+      home.blocking.release(1)
+      await untilAsync(async () => (await home.status(parent)).verdict === 'safe', 'the park the tree can reach')
+      expect(await readParkRegistry(storageOf(caseRoot))).toEqual([
+        { sessionId: SessionId('busy-parent'), phase: 'safe', rearmGoal: true, updatedAt: expect.any(Number) },
+      ])
     } finally {
       home.blocking.releaseAll()
       await home.ctx.fiber.dispose()

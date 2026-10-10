@@ -25,12 +25,13 @@
  * The "safe to close" phase appears only after that flush resolves.
  *
  * Every phase a pause reaches is written to the durable registry before it is
- * published, so a restart re-holds exactly the sessions the last process left
- * parked — and a phase that could not be recorded is never shown as cleaner
- * than the record says.
+ * published — including the move into `parking`, which the status command may
+ * therefore never serve ahead of the record. A restart re-holds exactly the
+ * sessions the last process left parked, and a phase that could not be recorded
+ * is never shown as cleaner than the record says.
  *
  * A park verb changes state, so it acts only on a person's command: a command
- * dispatched from inside a model turn is refused. The decision verbs add the
+ * dispatched from inside a model turn is refused. The listed verbs add the
  * one binding their target needs — the row must be one the calling session was
  * shown — and that rule lives with the list (`./triage.ts`).
  * @module dsh-safe-stop/control
@@ -58,9 +59,9 @@ import {
   describeError, encodeParkStatus, encodeTriageList, PAUSE_COMMAND, PAUSE_DEFINITION_ID, RESUME_ALL_COMMAND,
   RESUME_ALL_DEFINITION_ID, RESUME_COMMAND, RESUME_DEFINITION_ID, STATE_ALL_COMMAND, STATE_ALL_DEFINITION_ID,
   STATUS_COMMAND, STATUS_DEFINITION_ID, STOP_ALL_COMMAND, STOP_ALL_DEFINITION_ID, TRIAGE_COMMAND,
-  TRIAGE_CONTINUE_COMMAND, TRIAGE_CONTINUE_DEFINITION_ID, TRIAGE_DEFINITION_ID, TRIAGE_LEAVE_COMMAND,
-  TRIAGE_LEAVE_DEFINITION_ID, TRIAGE_NOTE_COMMAND, TRIAGE_NOTE_DEFINITION_ID, TRIAGE_REVIEW_COMMAND,
-  TRIAGE_REVIEW_DEFINITION_ID,
+  TRIAGE_CONTINUE_COMMAND, TRIAGE_CONTINUE_DEFINITION_ID, TRIAGE_DEFINITION_ID, TRIAGE_GOAL_COMMAND,
+  TRIAGE_GOAL_DEFINITION_ID, TRIAGE_LEAVE_COMMAND, TRIAGE_LEAVE_DEFINITION_ID, TRIAGE_NOTE_COMMAND,
+  TRIAGE_NOTE_DEFINITION_ID, TRIAGE_REVIEW_COMMAND, TRIAGE_REVIEW_DEFINITION_ID,
 } from './shared.js'
 import type { ParkPhase, ParkStatus } from './shared.js'
 
@@ -128,10 +129,12 @@ async function sessionReadable(ctx: Context, sessionId: SessionId): Promise<bool
 /** One session's park in progress. */
 interface ParkMark {
   /**
-   * The only phase this machine walks forward through. `draining` is the state
-   * a press creates; the first moment nothing is left to drain moves it to
-   * `parking`, and the session-level flush resolves it to `safe` — or to
-   * `flush-failed`, which must never be reported as clean.
+   * The phase the durable registry confirms for this session — the only phase
+   * ever published. `draining` is the state a press creates; the first moment
+   * nothing is left to drain moves it to `parking`, and the session-level flush
+   * resolves it to `safe` — or to `flush-failed`, which must never be reported
+   * as clean. It is written by `commit` and by nothing else, so the answer the
+   * status command serves can never run ahead of what is on disk.
    */
   phase: ParkPhase
   /**
@@ -149,6 +152,12 @@ interface ParkMark {
    * unclean entry into a false "clean".
    */
   origin: 'press' | 'registry'
+  /**
+   * Whether a move out of `draining` is already in flight. The mark keeps
+   * answering with its last durable phase until that write lands, and the flag
+   * keeps a second look from starting a second flush for the same park.
+   */
+  advancing: boolean
 }
 
 /** The status one mark reports right now. */
@@ -306,52 +315,68 @@ export function installSessionControl(
 
   /**
    * Walk one session's mark as far forward as its current activity allows.
+   *
+   * The move is published by `settle`, once the write that makes `parking`
+   * durable has resolved; until then the mark keeps answering with `draining`,
+   * which is less than the truth rather than more than the record can back.
    * @param sessionId - the marked session to re-derive.
-   * @returns whether this call moved the mark into `parking` (and so owes a flush).
+   * @returns whether this call moved the mark out of `draining` (and so owes a flush).
    */
   const advance = (sessionId: SessionId): boolean => {
     const mark = marks.get(sessionId)
-    if (mark === undefined || mark.phase !== 'draining') return false
+    if (mark === undefined || mark.phase !== 'draining' || mark.advancing) return false
     // An adopted mark reports the outcome of the episode that ended with the
     // previous process; this process may hold the session, but it does not get
     // to rewrite that outcome.
     if (mark.origin === 'registry') return false
     if (!parked(sessionId)) return false
-    // Published now, recorded by `settle`: a mark that claims less than the
-    // truth is the safe direction while the write is in flight.
-    mark.phase = 'parking'
+    mark.advancing = true
     return true
   }
 
   /**
    * Flush a parked session at the session level and publish what actually
-   * happened. The flush is the promise that survives a crash: a handle's own
-   * flush would leave the routed live buffer — the pending input — in memory.
+   * happened.
+   *
+   * The flush is the promise that survives a crash: a handle's own flush would
+   * leave the routed live buffer — the pending input — in memory. `safe` is
+   * therefore reserved for a flush this process ran and that resolved; a
+   * session that is no longer in the store cannot be flushed at all, so its
+   * park stops at the phase that says the flush never happened.
    */
   const settle = async (sessionId: SessionId, attempt: number): Promise<void> => {
     const mark = marks.get(sessionId)
     if (mark === undefined || mark.generation !== attempt) return
+    /** Whether this attempt still owns the mark: a cancel or a newer press replaces or drops it. */
+    const owned = (): boolean => marks.get(sessionId) === mark && mark.generation === attempt
     const session = ctx.sessions.get(sessionId)
-    // Nothing live to flush: the session left the store, so there is no durable
-    // promise left to keep either.
-    if (session === undefined) {
-      await commit(sessionId, mark, 'safe')
-      return
-    }
-    // "Stopped, flush pending" is the state a crash during this flush leaves
-    // behind, and it must be on disk before the flush starts.
-    await commit(sessionId, mark, 'parking')
-    if (mark.generation !== attempt) return
     try {
-      await ctx.sessions.flush(session)
-    } catch (error: unknown) {
-      if (mark.generation !== attempt) return
-      ctx.logger.warn(`safe-stop: flush failed for "${sessionId}": ${describeError(error)}`)
-      await commit(sessionId, mark, 'flush-failed')
-      return
+      if (session === undefined) {
+        // Nothing live to flush. The park point was reached and nothing about
+        // this session is in memory, but no session-level flush can be run for
+        // it either — so this process cannot call it clean.
+        await commit(sessionId, mark, 'parking')
+        return
+      }
+      // "Stopped, flush pending" is the state a crash during this flush leaves
+      // behind, and it must be on disk before the flush starts.
+      await commit(sessionId, mark, 'parking')
+      if (!owned()) return
+      try {
+        await ctx.sessions.flush(session)
+      } catch (error: unknown) {
+        if (!owned()) return
+        ctx.logger.warn(`safe-stop: flush failed for "${sessionId}": ${describeError(error)}`)
+        await commit(sessionId, mark, 'flush-failed')
+        return
+      }
+      if (!owned()) return
+      await commit(sessionId, mark, 'safe')
+    } finally {
+      // A later look may retry a park whose phase write failed; a mark that got
+      // past `draining` is not advanced again whatever happened here.
+      if (marks.get(sessionId) === mark && mark.phase === 'draining') mark.advancing = false
     }
-    if (mark.generation !== attempt) return
-    await commit(sessionId, mark, 'safe')
   }
 
   /** Look at one marked session and act on what it is doing. */
@@ -369,14 +394,27 @@ export function installSessionControl(
    * back here rather than left as one a restart silently forgets. A session a
    * pause already owns is left exactly where it is — including one adopted
    * from an earlier process, whose outcome is not this process's to re-derive.
+   *
+   * A session with nothing live is left alone entirely. It has no request to
+   * hold and no session-level flush to run, so a record for it could only be
+   * one of two lies: `safe`, a park that never happened but that the clean path
+   * would silently resume, or a phase that never settles, which would keep
+   * "safe to close" from ever appearing. Registering the running tree therefore
+   * means registering the members a pause can actually hold and flush.
    * @param sessionId - the session to pause.
    * @returns whether the session is now paused, with a durable record behind it.
    */
   const press = async (sessionId: SessionId): Promise<boolean> => {
+    if (ctx.sessions.get(sessionId) === undefined) return true
     if (!gate.pause(sessionId)) return true
-    const mark: ParkMark = { phase: 'draining', generation: ++generation, origin: 'press' }
+    const mark: ParkMark = { phase: 'draining', generation: ++generation, origin: 'press', advancing: false }
     marks.set(sessionId, mark)
-    if (await commit(sessionId, mark, 'draining')) return true
+    if (await commit(sessionId, mark, 'draining')) {
+      // Whatever this process could not hold earlier is moot now: the session
+      // is live and the press owns it.
+      unheld.delete(sessionId)
+      return true
+    }
     drop(sessionId)
     gate.resume(sessionId)
     return false
@@ -447,8 +485,9 @@ export function installSessionControl(
       phase: mark.phase,
       // An adopted mark reports the outcome of the episode that ended with the
       // previous process, and a failed flush is already final: neither walks
-      // any further here.
-      moving: mark.origin === 'press' && mark.phase !== 'flush-failed',
+      // any further here. Neither does a session that left the store — there is
+      // no flush left to run for it, so it will not finish in this process.
+      moving: mark.origin === 'press' && mark.phase !== 'flush-failed' && ctx.sessions.get(sessionId) !== undefined,
     }])),
     unheld: () => unheld,
   })
@@ -535,6 +574,15 @@ export function installSessionControl(
       description: 'Leave a listed Session paused for today: <session id>',
       handler: decide('leave'),
     })
+    // The one listed verb that is not a resume: it flips whether the next
+    // resume of that session may re-open its goal, which is the only thing a
+    // resume spends without the user watching it.
+    yield ctx.commands.register({
+      definitionId: CommandDefinitionId(TRIAGE_GOAL_DEFINITION_ID),
+      name: TRIAGE_GOAL_COMMAND,
+      description: 'Turn a listed Session\'s goal re-arm on or off: <session id>',
+      handler: decide('goal'),
+    })
     yield gate.onChange(sessionId => { sync(sessionId) })
     // A request arriving at (or leaving) the gate is the moment a session can
     // become parked. The notification lands inside the request path, so the
@@ -579,7 +627,12 @@ export function installSessionControl(
           continue
         }
         if (gate.pause(entry.sessionId)) {
-          marks.set(entry.sessionId, { phase: entry.phase, generation: ++generation, origin: 'registry' })
+          marks.set(entry.sessionId, {
+            phase: entry.phase,
+            generation: ++generation,
+            origin: 'registry',
+            advancing: false,
+          })
         }
         publish(entry.sessionId)
       }

@@ -56,6 +56,9 @@ export const TRIAGE_REVIEW_COMMAND = 'safe-triage-review'
 /** Command that leaves one session from the decision list exactly as it is. */
 export const TRIAGE_LEAVE_COMMAND = 'safe-triage-leave'
 
+/** Command that turns one listed session's goal re-arm on or off. */
+export const TRIAGE_GOAL_COMMAND = 'safe-triage-goal'
+
 /** Stable definition id of the pause command, matched by identity rather than by copy. */
 export const PAUSE_DEFINITION_ID = 'dsh-safe-stop/pause'
 
@@ -88,6 +91,9 @@ export const TRIAGE_REVIEW_DEFINITION_ID = 'dsh-safe-stop/triage-review'
 
 /** Stable definition id of the decision-list "leave it alone today" verb. */
 export const TRIAGE_LEAVE_DEFINITION_ID = 'dsh-safe-stop/triage-leave'
+
+/** Stable definition id of the decision-list goal re-arm toggle. */
+export const TRIAGE_GOAL_DEFINITION_ID = 'dsh-safe-stop/triage-goal'
 
 /** First token of every encoded status, so a descriptor is never parsed by accident. */
 export const STATUS_PREFIX = 'safe-stop: '
@@ -399,6 +405,12 @@ export interface TriageRow {
   /** Whether the stored log ends owing the model an answer. */
   readonly owed: boolean
   /**
+   * Whether resuming this session may re-open its goal. Re-arming is what makes
+   * a resumed goal spend its owner's rounds, so it is a per-session choice the
+   * row shows and the list can flip.
+   */
+  readonly rearmGoal: boolean
+  /**
    * Whether the host could hand this session its owed request at all: a log it
    * could not read, or one whose last request recorded no route, cannot be
    * woken — which is a fact about the entry, not a refusal of the user's choice.
@@ -412,14 +424,22 @@ export interface TriageList {
   readonly rows: readonly TriageRow[]
 }
 
-/** The four decisions the list offers for one row. */
-export const TRIAGE_ACTIONS = ['continue', 'note', 'review', 'leave'] as const
+/**
+ * The decisions the list offers for one row. The first four carry the row out;
+ * `goal` changes what the next resume may spend without touching the park
+ * itself.
+ */
+export const TRIAGE_ACTIONS = ['continue', 'note', 'review', 'leave', 'goal'] as const
 
 /** One decision the list offers. */
 export type TriageAction = (typeof TRIAGE_ACTIONS)[number]
 
 /** How one row is spelled in the published list; the wake field's state when the host can hand over the owed request. */
 const WAKE_YES = 'yes'
+
+/** The two states of one row's goal re-arm field. */
+const GOAL_ON = 'on'
+const GOAL_OFF = 'off'
 
 /** One row's traces, as a list of `tool/callId` items. */
 function encodeTraces(traces: readonly TriageTrace[]): string {
@@ -467,6 +487,7 @@ export function encodeTriageList(list: TriageList): string {
       + `; tools: ${row.reading === 'unreadable' || row.traces.length === 0 ? EMPTY_FIELD : encodeNames(row.traces.map(trace => trace.tool))}`
       + `; owed: ${row.owed ? WAKE_YES : 'no'}`
       + `; wake: ${row.wakeable ? WAKE_YES : 'no'}`
+      + `; goal: ${row.rearmGoal ? GOAL_ON : GOAL_OFF}`
   }, head)
 }
 
@@ -510,6 +531,9 @@ export function decodeTriageList(text: string): TriageList | undefined {
       traces: reading === 'unreadable' ? [] : decodeTraces(fieldOf(fields, 'traces')),
       owed: fieldOf(fields, 'owed') === WAKE_YES,
       wakeable: fieldOf(fields, 'wake') === WAKE_YES,
+      // A list published before this field existed reads as the product
+      // default: a goal session comes back running its rounds.
+      rearmGoal: fieldOf(fields, 'goal') !== GOAL_OFF,
     })
     fields = []
   }

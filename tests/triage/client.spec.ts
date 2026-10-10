@@ -14,9 +14,9 @@ import { describe, expect, it } from 'vitest'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { SafeStopGlobalControl, TRIAGE_DECISION_COMMAND } from '../../src/client/global.ts'
 import type { TriageReading } from '../../src/client/global.ts'
-import { globalStopView, triageView } from '../../src/client/view.ts'
+import { globalStopView, triageView, TRIAGE_GOAL_VIEW } from '../../src/client/view.ts'
 import {
-  decodeTriageList, encodeGlobalStatus, encodeTriageList, STATE_ALL_COMMAND, TRIAGE_COMMAND,
+  decodeTriageList, encodeGlobalStatus, encodeTriageList, STATE_ALL_COMMAND, TRIAGE_COMMAND, TRIAGE_GOAL_COMMAND,
 } from '../../src/shared.ts'
 import type { GlobalStatus, TriageList, TriageRow } from '../../src/shared.ts'
 
@@ -35,6 +35,7 @@ function row(overrides: Partial<TriageRow> = {}): TriageRow {
     traces: [{ tool: 'gated', callId: 'call-slow' }],
     owed: true,
     wakeable: true,
+    rearmGoal: true,
     ...overrides,
   }
 }
@@ -138,7 +139,7 @@ describe('the decision list in the browser', () => {
     expect(view.rows[2]).toMatchObject({ readable: true, wakeable: false, unknownTools: [] })
   })
 
-  it('runs one decision per action, addressed through the session the user is on', async () => {
+  it('runs one listed verb per action, addressed through the session the user is on', async () => {
     const { commands, host } = hostDouble()
     const control = new SafeStopGlobalControl(commands, new AbortController().signal)
     await control.refresh(ADDRESS)
@@ -146,18 +147,36 @@ describe('the decision list in the browser', () => {
     await control.refreshTriage()
     host.lines.length = 0
 
-    for (const action of ['continue', 'note', 'review', 'leave'] as const) {
+    for (const action of ['continue', 'note', 'review', 'leave', 'goal'] as const) {
       host.rows = [row({ sessionId: `session-${action}` })]
       await control.decide(`session-${action}`, action)
       // The read comes first: the host acts only on a row it has shown the
       // session the decision is addressed to, and that read is what shows it.
+      // It comes again afterwards because the host's answer is what the panel
+      // shows next — a verb can take a row off the list, or flip what it says.
       expect(host.lines).toEqual([
         `/${TRIAGE_COMMAND}`,
         `/${TRIAGE_DECISION_COMMAND[action]} session-${action}`,
+        `/${TRIAGE_COMMAND}`,
         `/${STATE_ALL_COMMAND}`,
       ])
       host.lines.length = 0
     }
+  })
+
+  it('carries the goal re-arm state the host reported, and its switch verb', () => {
+    const view = triageView({
+      kind: 'reported',
+      rows: [row({ rearmGoal: false }), row({ sessionId: 'armed-session' })],
+    })
+    expect(view.rows[0]?.rearmGoal).toBe(false)
+    expect(view.rows[1]?.rearmGoal).toBe(true)
+    expect(TRIAGE_GOAL_VIEW).toEqual({
+      action: 'goal',
+      labelKey: 'triage.goal',
+      ariaKey: 'triage.goal.aria',
+    })
+    expect(TRIAGE_DECISION_COMMAND.goal).toBe(TRIAGE_GOAL_COMMAND)
   })
 
   it('shows the panel entry point only when the host says something did not stop cleanly', () => {

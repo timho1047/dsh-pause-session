@@ -291,9 +291,35 @@ describe('the whole-app view', () => {
     ])
   })
 
-  it('gives a park nobody can finish its own headline', () => {
+  it('gives a park nobody can finish its own headline and no release to press', () => {
     const view = globalStopView({ kind: 'reported', status: status({ safe: 0, draining: [], stalled: ['late'] }) })
-    expect(view).toMatchObject({ labelKey: 'all.unclean', detail: '1', action: 'resume-all' })
+    expect(view).toMatchObject({
+      labelKey: 'all.unclean',
+      detail: '1',
+      // Every registered session is one the host will not wake, so the control
+      // offers no action at all rather than one the host would refuse — and the
+      // accessible name says which fact stops it.
+      action: 'none',
+      enabled: false,
+      ariaKey: 'all.unclean.aria',
+    })
+    expect(view.caveats).toEqual([{ key: 'all.caveat.stalled', names: ['late'] }])
+  })
+
+  it('runs no verb for a reading its own view does not turn into one', async () => {
+    const { commands, host } = hostDouble()
+    const control = new SafeStopGlobalControl(commands, new AbortController().signal)
+    // The whole park is held, and none of it can be woken from here: the same
+    // shape the pill refuses to press.
+    host.answered = status({ verdict: 'waiting', safe: 0, draining: [], stalled: ['late'] })
+    await control.refresh(ADDRESS)
+    expect(globalStopView(readingOf(control)).action).toBe('none')
+
+    const before = host.lines.length
+    await control.toggle(ADDRESS)
+    // Not even a read: the control has nothing to press, so it presses nothing.
+    expect(host.lines.slice(before)).toEqual([])
+    expect(readingOf(control)).toEqual({ kind: 'reported', status: host.answered })
   })
 
   it('names a missing surface instead of listing everything it blinds', () => {

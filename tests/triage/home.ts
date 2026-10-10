@@ -18,6 +18,8 @@ import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import CommandRuntime from '@deepseek-ai/dsh-commands'
 import type { CommandResult } from '@deepseek-ai/dsh-commands'
+import GoalService from '@deepseek-ai/dsh-goal'
+import * as GoalRoundDriver from '@deepseek-ai/dsh-goal-round-driver'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
@@ -25,8 +27,8 @@ import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deep
 import type { AgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import { apply, Config, inject, name } from '../../src/index.ts'
-import { decodeTriageList, TRIAGE_COMMAND } from '../../src/shared.ts'
-import type { TriageAction, TriageList } from '../../src/shared.ts'
+import { decodeGlobalStatus, decodeTriageList, STATE_ALL_COMMAND, TRIAGE_COMMAND } from '../../src/shared.ts'
+import type { GlobalStatus, ParkPhase, TriageAction, TriageList } from '../../src/shared.ts'
 import { FakeProvider, textResponse } from '../assumptions/fake-provider.ts'
 import { readParkRegistry } from '../registry/read.ts'
 import { mountParkStorage } from '../registry/storage.ts'
@@ -93,7 +95,9 @@ export interface TriageHome {
   run(line: string): Promise<CommandResult>
   /** Read the decision list through the verb the browser half executes. */
   triage(): Promise<TriageList>
-  /** Take one of the four decisions on one listed session. */
+  /** Read the whole-app aggregate through the verb the browser half executes. */
+  status(): Promise<GlobalStatus>
+  /** Take one of the listed verbs on one listed session. */
   decide(sessionId: string, action: TriageAction): Promise<CommandResult>
 }
 
@@ -101,6 +105,8 @@ export interface TriageHome {
 export interface TriageHomeOptions {
   /** Provider route the parked sessions recorded; the morning must serve the same one. */
   readonly route?: string
+  /** Mount the goal service and its round driver, for the cases a goal is part of. */
+  readonly goals?: boolean
 }
 
 /**
@@ -115,6 +121,10 @@ export async function reviveTriageHome(caseRoot: string, options: TriageHomeOpti
   await ctx.plugin(JsonlSessionPersistence, { root: sessionRootOf(caseRoot), compression: 'none' })
   await ctx.plugin(CommandRuntime)
   await mountParkStorage(ctx, storageOf(caseRoot))
+  if (options.goals === true) {
+    await ctx.plugin(GoalService)
+    await ctx.plugin(GoalRoundDriver)
+  }
   // The tool the child's session called has to exist here too, or its own
   // tool-history projection reports the call's tool as removed.
   ctx.tools.register(defineContentToolFixture({
@@ -156,6 +166,12 @@ export async function reviveTriageHome(caseRoot: string, options: TriageHomeOpti
       const list = answer.text === undefined ? undefined : decodeTriageList(answer.text)
       if (list === undefined) throw new Error(`safe-stop: the decision list answered in an unknown vocabulary: ${String(answer.text)}`)
       return list
+    },
+    status: async () => {
+      const answer = await run(`/${STATE_ALL_COMMAND}`)
+      const status = answer.text === undefined ? undefined : decodeGlobalStatus(answer.text)
+      if (status === undefined) throw new Error(`safe-stop: the aggregate answered in an unknown vocabulary: ${String(answer.text)}`)
+      return status
     },
     decide: async (sessionId, action) => {
       // The browser reads the list before it decides a row, and that read is
@@ -217,6 +233,6 @@ export async function records(root: string): Promise<[string, string][]> {
  * @param sessionId - the session id to record.
  * @param phase - the park outcome to record.
  */
-export async function recordParkWithoutLog(caseRoot: string, sessionId: string, phase: 'draining' | 'parking' | 'flush-failed'): Promise<void> {
+export async function recordParkWithoutLog(caseRoot: string, sessionId: string, phase: ParkPhase): Promise<void> {
   await writeParkRecord(storageOf(caseRoot), sessionId, phase)
 }

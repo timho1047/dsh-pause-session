@@ -25,7 +25,10 @@
  * Only a cleanly parked session takes this path. A record that never reached
  * the park point, or whose flush did not finish, describes work whose durable
  * state nobody knows; waking it would spend its owner's money on a guess, and
- * deciding those sessions is the morning list's job, not this path's.
+ * deciding those sessions is the morning list's job, not this path's. That
+ * holds whether or not the recorded session happens to be live in this process:
+ * liveness is not the park outcome, and a session can be live without ever
+ * having stopped.
  * @module dsh-safe-stop/resume
  */
 
@@ -70,9 +73,9 @@ export const WAKE_MARKER = '[safe-stop: resumed from a pause]'
  * - `message`: the decision list's "continue, and say the tool outcome is
  *   unknown" — user-visible text on the wire by construction, and the only
  *   resume that is not invisible.
- * - `none`: no wake at all. The session comes back from its stored log and
- *   nothing is asked of the model, which is what "open it for me to look at"
- *   costs: no request, nothing spent.
+ * - `none`: no wake at all. This is what "leave it for me to read" costs: the
+ *   session is not activated, nothing is asked of the model, and the park is
+ *   exactly as it was.
  */
 export type WakeRequest =
   | { readonly kind: 'silent' }
@@ -95,6 +98,15 @@ export const NOT_PARKED_TEXT = 'safe-stop has no pause recorded for this session
 /** Result copy for a session that is parked but could not be loaded back. */
 export const ACTIVATION_FAILED_TEXT = 'safe-stop could not open this session from its stored log, so it stayed paused.'
 
+/**
+ * Result copy for the review decision. It is the one answer that promises
+ * nothing happened, because opening a session to read it is the user's own
+ * action in their session list — and activating its agent here would start a
+ * session they asked only to look at.
+ */
+export const REVIEW_TEXT = 'safe-stop did not activate this session: it is still parked, and nothing was sent to a model.'
+  + ' Open it from your session list when you want to read it.'
+
 /** Result copy for a change the durable registry refused to record. */
 export const UNRECORDED_TEXT = 'safe-stop could not write the pause registry, so it did not change the pause state.'
 
@@ -103,7 +115,7 @@ export const REARM_GOAL_ON_TEXT = 'safe-stop will re-open this session\'s goal w
 export const REARM_GOAL_OFF_TEXT = 'safe-stop will leave this session\'s goal closed when it resumes it.'
 
 /** Why one record did not produce a running session. */
-export type ResumeRefusal = 'not-parked' | 'not-clean' | 'activation-failed' | 'unrecorded'
+export type ResumeRefusal = 'not-parked' | 'not-clean' | 'activation-failed' | 'unrecorded' | 'not-activated'
 
 /** What one resume attempt did. */
 export interface ResumeOutcome {
@@ -161,7 +173,10 @@ export interface ResumePath {
    * exists to carry out. Same release order, same wake vocabulary.
    * @param sessionId - the listed session to bring back.
    * @param request - which wake the decision delivers; see {@link WakeRequest}.
-   * @param finalize - whether the decision continues the session (`'release'`) or only opens it (`'review'`).
+   * @param finalize - whether the decision continues the session (`'release'`)
+   * or only answers it (`'review'`). A review activates nothing and writes
+   * nothing: opening a session to read it is the user's own action, not this
+   * plugin's.
    * @param parentId - the direct parent a batch release already brought back, when there is one.
    * @returns what happened, and the copy for whoever asked.
    */
@@ -292,12 +307,11 @@ export function installResumePath(
    * stopped in front of. The pause is not released until the durable record is
    * gone, so a record that cannot be dropped leaves the session parked rather
    * than silently running.
+   *
+   * Activation is what makes a session run again, so nothing but a resume does
+   * it: the review answer never reaches this function.
    * @param sessionId - the parked session to bring back.
    * @param request - which wake the decision delivers; see {@link WakeRequest}.
-   * @param finalize - whether this resume ends the park (`'release'`) or only
-   * opens the session for reading (`'review'`). Only a release drops the durable
-   * record and opens the gate; a review leaves both exactly as they were,
-   * because the session has not been continued and is still held.
    * @param rearm - whether the record's goal opt-out allows re-opening its goal.
    * @param parentId - the direct parent a batch release already brought back,
    * when there is one. A subagent child resumed under its live parent is the
@@ -307,13 +321,9 @@ export function installResumePath(
   const activate = async (
     sessionId: SessionId,
     request: WakeRequest,
-    finalize: 'release' | 'review',
     rearm: boolean,
     parentId?: SessionId,
   ): Promise<ResumeAttempt> => {
-    // Continuing a session is what may spend its goal's rounds; opening one to
-    // look at it is not, so a review never re-opens a goal either.
-    const mayRearm = finalize === 'release' && rearm
     const parent = parentId === undefined ? undefined : ctx.agents.get(parentId)
     let agent: Agent
     try {
@@ -334,17 +344,12 @@ export function installResumePath(
     }
     ensureRoute(agent)
     // Delivered while the pause still holds the gate, so the request it builds
-    // waits there and leaves only once the durable record does. `none` builds
-    // no request at all: the session is open for reading, and the model is owed
-    // nothing new.
+    // waits there and leaves only once the durable record does.
     // Whether that produced a wake says nothing about the release. A wake can
     // be refused because the log owes no answer at all (a session parked while
     // idle) or because the loop was already running; the user's decision to
     // continue is what releases the session in every one of those cases.
     wake(agent, request)
-    // A review ends here: the session is open and held, and the record that
-    // holds it is still the user's to decide on.
-    if (finalize === 'review') return { sessionId, resumed: true, answer: { kind: 'success', text: RESUMED_TEXT } }
     try {
       await registry.forget(sessionId)
     } catch (error: unknown) {
@@ -352,7 +357,7 @@ export function installResumePath(
       return { sessionId, resumed: false, refusal: 'unrecorded', answer: { kind: 'error', text: UNRECORDED_TEXT } }
     }
     gate.resume(sessionId)
-    if (mayRearm) rearmGoal(agent)
+    if (rearm) rearmGoal(agent)
     return { sessionId, resumed: true, answer: { kind: 'success', text: RESUMED_TEXT } }
   }
 
@@ -362,12 +367,20 @@ export function installResumePath(
    * This is the morning list's own entry point, and it exists precisely because
    * the clean path must keep refusing these records: the refusal is the clean
    * path's guarantee, not a guard this entry can borrow. A user who has read the
-   * row and chosen one of the three decisions that resume it has made the
-   * decision the clean path is not allowed to make for them. The release order
-   * is the same one: the durable record goes first, then the gate — so a record
-   * that cannot be dropped leaves the session parked.
+   * row and chosen one of the decisions that resume it has made the decision the
+   * clean path is not allowed to make for them. The release order is the same
+   * one: the durable record goes first, then the gate — so a record that cannot
+   * be dropped leaves the session parked.
+   *
+   * A record this process holds no gate for is still this list's to clear: the
+   * session is live, so the decision's own wake is what asks for its request,
+   * and dropping the record is what stops a later process from re-holding a
+   * session the user has already decided.
    * @param sessionId - the listed session to bring back.
    * @param request - which wake the decision delivers; see {@link WakeRequest}.
+   * @param finalize - whether the decision continues the session (`'release'`)
+   * or only answers it (`'review'`); a review activates nothing and writes
+   * nothing.
    * @param parentId - the direct parent a batch release already brought back, when there is one.
    * @returns what happened, and the copy for whoever asked.
    */
@@ -381,11 +394,29 @@ export function installResumePath(
     if (record === undefined) {
       return { sessionId, resumed: false, refusal: 'not-parked', answer: { kind: 'success', text: NOT_PARKED_TEXT } }
     }
+    // Opening a session to read it is the user's own action in their session
+    // list; this decision only answers, so it never activates an agent and
+    // never writes. That is what makes it the safe choice on a session whose
+    // side effects may already have happened.
+    if (finalize === 'review') {
+      return { sessionId, resumed: false, refusal: 'not-activated', answer: { kind: 'success', text: REVIEW_TEXT } }
+    }
     const live = ctx.agents.get(sessionId)
-    if (live === undefined) return await activate(sessionId, request, finalize, record.rearmGoal, parentId)
+    if (live === undefined) return await activate(sessionId, request, record.rearmGoal, parentId)
     if (!gate.isPaused(sessionId)) {
-      // Something else already released this session; there is nothing this
-      // path could do that would not be a second resume.
+      // This process holds nothing for the session — its record was found
+      // unreadable at mount, or something else already released it. The session
+      // is live, so the decision's own wake is what asks for the request it is
+      // owed, and the record goes on the release path's own order.
+      ensureRoute(live)
+      wake(live, request)
+      try {
+        await registry.forget(sessionId)
+      } catch (error: unknown) {
+        ctx.logger.warn(`safe-stop: could not drop "${sessionId}" from the pause registry: ${describeError(error)}`)
+        return { sessionId, resumed: false, refusal: 'unrecorded', answer: { kind: 'error', text: UNRECORDED_TEXT } }
+      }
+      if (record.rearmGoal) rearmGoal(live)
       return { sessionId, resumed: true, answer: { kind: 'success', text: RESUMED_TEXT } }
     }
     const adopted = deps.adopted(sessionId)
@@ -396,7 +427,6 @@ export function installResumePath(
       ensureRoute(live)
       wake(live, request)
     }
-    if (finalize === 'review') return { sessionId, resumed: true, answer: { kind: 'success', text: RESUMED_TEXT } }
     const released = await deps.release(sessionId, RESUMED_TEXT)
     if (released.kind === 'error') {
       return { sessionId, resumed: false, refusal: 'unrecorded', answer: released }
@@ -405,17 +435,56 @@ export function installResumePath(
     return { sessionId, resumed: true, answer: released }
   }
 
+  /**
+   * Resume one recorded session: the clean path's only entry point.
+   *
+   * The clean-only rule holds on every branch, live or not: a record that is
+   * not `safe` is not a park that finished, so this path neither wakes it nor
+   * drops it — whoever holds it stays held, and the row reaches the morning
+   * list. A pause this process pressed itself is not a record at all: taking it
+   * back is the press's own undo, and it delivers no wake.
+   * @param sessionId - the recorded session to resume.
+   * @param request - which wake this resume delivers; see {@link WakeRequest}.
+   * @param parentId - the direct parent a batch release already brought back, when there is one.
+   * @returns what happened, and the copy for whoever asked.
+   */
   const resumeSession = async (sessionId: SessionId, request: WakeRequest, parentId?: SessionId): Promise<ResumeAttempt> => {
     const record = registry.get(sessionId)
     const live = ctx.agents.get(sessionId)
 
     if (live !== undefined) {
       if (!gate.isPaused(sessionId)) {
-        // Something else already released this session; there is nothing this
-        // path could do that would not be a second resume.
+        // This process holds nothing here. An unclean record belongs to the
+        // morning list, and refusing it here is what keeps it there.
+        if (record !== undefined && record.phase !== 'safe') {
+          return { sessionId, resumed: false, refusal: 'not-clean', answer: { kind: 'error', text: UNCLEAN_TEXT } }
+        }
+        if (record === undefined) {
+          return { sessionId, resumed: false, refusal: 'not-parked', answer: { kind: 'success', text: NOT_PARKED_TEXT } }
+        }
+        // A clean record nothing is holding any more: the session is already
+        // back (it became readable after this mount could not hold it), so the
+        // park is over. The record goes first — a park this process cannot drop
+        // is not one it may continue — and then the session is handed the
+        // request it stopped in front of, which is this path's own job.
+        try {
+          await registry.forget(sessionId)
+        } catch (error: unknown) {
+          ctx.logger.warn(`safe-stop: could not drop "${sessionId}" from the pause registry: ${describeError(error)}`)
+          return { sessionId, resumed: false, refusal: 'unrecorded', answer: { kind: 'error', text: UNRECORDED_TEXT } }
+        }
+        ensureRoute(live)
+        wake(live, request)
+        if (record.rearmGoal) rearmGoal(live)
         return { sessionId, resumed: true, answer: { kind: 'success', text: RESUMED_TEXT } }
       }
+      // A pause this process did NOT press is another process's verdict: only a
+      // finished park may be woken from it. A press of this process's own is
+      // the pause the user is taking back, and it delivers no wake either way.
       const adopted = deps.adopted(sessionId)
+      if (adopted && record !== undefined && record.phase !== 'safe') {
+        return { sessionId, resumed: false, refusal: 'not-clean', answer: { kind: 'error', text: UNCLEAN_TEXT } }
+      }
       // An adopted pause with nothing standing at the gate has no continuation
       // to release: the process that built that request is gone.
       if (adopted) {
@@ -440,7 +509,7 @@ export function installResumePath(
     if (record.phase !== 'safe') {
       return { sessionId, resumed: false, refusal: 'not-clean', answer: { kind: 'error', text: UNCLEAN_TEXT } }
     }
-    return await activate(sessionId, request, 'release', record.rearmGoal, parentId)
+    return await activate(sessionId, request, record.rearmGoal, parentId)
   }
 
   /**

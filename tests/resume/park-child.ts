@@ -13,6 +13,9 @@
 //                resumed request is compared against on the wire.
 //   goal         a live goal, one ordinary turn finished, then parked with
 //                nothing pending.
+//   goal-draining a live goal, then a tool in flight when the process dies: the
+//                goal a morning decision would otherwise re-arm sits on a park
+//                that never finished.
 //   tool-result  paused with a tool in flight, which then finished, so the
 //                request standing at the gate is the one that answers the tool
 //                results — the park point the whole gate exists for.
@@ -97,10 +100,10 @@ await ctx.plugin(CommandRuntime)
 await mountParkStorage(ctx, registryRoot)
 // Mounted before the agent exists: the goal projection has to be registered
 // while the session that will carry the goal is still being created.
-if (mode === 'goal') await ctx.plugin(GoalService)
+if (mode === 'goal' || mode === 'goal-draining') await ctx.plugin(GoalService)
 const harness = await mountAgentLoopTestHarness(ctx)
 
-const provider = new FakeProvider(mode === 'draining' || mode === 'tool-result'
+const provider = new FakeProvider(mode === 'draining' || mode === 'tool-result' || mode === 'goal-draining'
   ? [toolCallResponse('call-1', 'gated', { id: '1' }), textResponse('after the tool'), textResponse('woken answer')]
   : mode === 'pair'
     ? [pairCallResponse(['call-fast', 'call-slow'], 'gated'), textResponse('resumed after the tools'), textResponse('woken answer')]
@@ -123,7 +126,7 @@ let flushEntered = false
 /** `pair` only: whether the first call's result is durably recorded and the second is still running. */
 let fastDone = false
 let slowStarted = false
-if (mode === 'draining' || mode === 'tool-result') {
+if (mode === 'draining' || mode === 'tool-result' || mode === 'goal-draining') {
   ctx.tools.register(defineContentToolFixture({
     name: 'gated',
     description: 'blocks until the child lets it finish',
@@ -227,7 +230,8 @@ if (mode === 'clean') {
   releaseTool()
   await until(() => seen.length === 2, 'the request answering the tool results')
   await untilPhase('safe to close')
-} else if (mode === 'draining') {
+} else if (mode === 'draining' || mode === 'goal-draining') {
+  if (mode === 'goal-draining') ctx.goals.create(agent, { objective: GOAL_OBJECTIVE })
   agent.followup(createUserMessage({ content: [{ type: 'text', text: 'run the tool' }], source: { kind: 'user' } }))
   await until(() => toolStarted, 'the tool in flight')
   await pause()

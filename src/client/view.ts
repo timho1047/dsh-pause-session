@@ -95,6 +95,16 @@ export const TRIAGE_ACTION_VIEWS: readonly TriageActionView[] = [
   { action: 'leave', labelKey: 'triage.leave', ariaKey: 'triage.leave.aria' },
 ]
 
+/**
+ * The fifth listed verb, rendered apart from the four decisions: it is a
+ * switch on what the NEXT resume may spend, not a way to decide this row.
+ */
+export const TRIAGE_GOAL_VIEW: TriageActionView = {
+  action: 'goal',
+  labelKey: 'triage.goal',
+  ariaKey: 'triage.goal.aria',
+}
+
 /** One listed session, as the panel renders it. */
 export interface TriageRowView {
   /** Host data, rendered verbatim. */
@@ -109,6 +119,8 @@ export interface TriageRowView {
   readonly wakeable: boolean
   /** Whether the log could be read at all. */
   readonly readable: boolean
+  /** Whether resuming this session may re-open its goal and spend its rounds. */
+  readonly rearmGoal: boolean
 }
 
 /** What the decision-list panel renders. */
@@ -148,6 +160,7 @@ export function triageView(reading: TriageReading | undefined): TriageView {
       unknownTools: row.traces.map(trace => trace.tool),
       wakeable: row.wakeable,
       readable: row.reading === 'read',
+      rearmGoal: row.rearmGoal,
     })),
   }
 }
@@ -199,9 +212,10 @@ export function globalStopView(reading: GlobalReading | undefined): GlobalStopVi
   else if (status.unreadTrees.length > 0) caveats.push({ key: 'all.caveat.unread', names: status.unreadTrees })
   if (status.unresumable.length > 0) caveats.push({ key: 'all.caveat.unresumable', names: status.unresumable })
   const verdict = status.verdict
-  // The stalled names belong on the headline when they are the whole story,
-  // and in the caveats when sessions are also still finishing.
-  if (verdict !== 'safe' && status.stalled.length > 0 && status.draining.length > 0) {
+  // The stalled names are the sessions this process will not wake, so they
+  // belong on the tooltip whenever there are any — as the whole story when
+  // nothing is still moving, and beside the moving ones when there are.
+  if (verdict !== 'safe' && status.stalled.length > 0) {
     caveats.push({ key: 'all.caveat.stalled', names: status.stalled })
   }
   // The whole-app verdict calls these "not safe"; the list is where the user
@@ -222,6 +236,11 @@ export function globalStopView(reading: GlobalReading | undefined): GlobalStopVi
         detail: `${String(status.safe)}/${String(status.registered)}`,
       }
     case 'waiting':
+      // Only a session still on its way can be released from here. When every
+      // registered session is one this process will not wake — an adopted
+      // pause, a failed flush, a record it cannot read — the release would be
+      // an action the host refuses, so the pill states the fact and hands the
+      // user to the list instead of offering it.
       return status.draining.length > 0
         ? {
           ...base,
@@ -232,8 +251,9 @@ export function globalStopView(reading: GlobalReading | undefined): GlobalStopVi
         }
         : {
           ...base,
-          ariaKey: 'all.resume.aria',
-          action: 'resume-all',
+          enabled: false,
+          ariaKey: 'all.unclean.aria',
+          action: 'none',
           labelKey: 'all.unclean',
           detail: String(status.stalled.length),
         }

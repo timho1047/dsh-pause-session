@@ -8,6 +8,10 @@
  * whose flush failed has lost it — with no agent activated, no request sent and
  * no record dropped, which is what routes them to the morning decision list
  * instead of waking them silently.
+ *
+ * The rule is a property of the RECORD, not of whether the session happens to
+ * be live: a session the user has just opened is still one that never parked,
+ * and the same refusal — and the same row — must hold for it.
  * @module dsh-safe-stop/test/resume/unclean-refusal
  */
 
@@ -16,6 +20,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import { decodeTriageList } from '../../src/shared.ts'
 import { readParkRegistry } from '../registry/read.ts'
 import { ensureHostEntry } from './build.ts'
 import { parkAndLeave, resumeAll, reviveHome, settles, storageOf } from './home.ts'
@@ -72,5 +77,40 @@ describe('the clean resume path refuses a session that did not finish parking', 
       ['overnight-parking', 'parking'],
       ['overnight-flush-failed', 'flush-failed'],
     ])
+  })
+
+  it('refuses the same record again once its session is live, and keeps the row for the list', async () => {
+    const caseRoot = temporaryRoot('dsh-safe-stop-resume-live-unclean-')
+    await parkAndLeave(caseRoot, 'overnight-draining-live', 'draining')
+    expect(await records(storageOf(caseRoot))).toEqual([['overnight-draining-live', 'draining']])
+
+    const home = await reviveHome(caseRoot)
+    try {
+      // The user opens the session this morning, which activates its agent. The
+      // park outcome has not changed: the record still says this session never
+      // reached the park point, and being live is not the same as being parked.
+      const opened = (await home.ctx.agents.resume({ resumeSessionId: SessionId('overnight-draining-live') })).agent
+      expect(opened).toBeDefined()
+      expect(home.provider.requests).toHaveLength(0)
+
+      // The whole-app release runs this same path, live or not.
+      expect(await resumeAll(home))
+        .toBe('safe-stop resumed no session; 1 did not stop cleanly and need your decision.')
+      await settles()
+      // Nothing was woken and nothing was released: the one request the park
+      // was holding is still held, and no new one was asked for.
+      expect(home.provider.requests).toHaveLength(0)
+      expect(home.seen).toHaveLength(0)
+
+      // The refusal is what puts the row in front of the user, and it is still
+      // on the list — with the record that holds it.
+      const listed = await home.ctx.commands.execute(home.desk, '/safe-triage', [], new AbortController().signal)
+      const text = listed?.result.kind === 'success' ? listed.result.text : undefined
+      expect(text === undefined ? undefined : decodeTriageList(text)?.rows.map(row => row.sessionId))
+        .toEqual(['overnight-draining-live'])
+      expect(await records(storageOf(caseRoot))).toEqual([['overnight-draining-live', 'draining']])
+    } finally {
+      await home.ctx.fiber.dispose()
+    }
   })
 })

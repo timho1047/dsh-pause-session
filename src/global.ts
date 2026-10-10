@@ -189,8 +189,11 @@ export function mountGlobalStop(
 
   /**
    * Every running session and every descendant of one, minus the sessions this
-   * pause already owns. Descendants are registered whether or not they are
-   * live right now: the tree is the unit the user asked to stop.
+   * pause already owns. Descendants are walked whether or not they are live
+   * right now: the tree is the unit the user asked to stop. A member this host
+   * has no live session for has nothing to hold and nothing to flush, and the
+   * press leaves it alone rather than record a park that could never finish
+   * (see `./control.ts`).
    */
   const runningTargets = async (): Promise<readonly SessionId[]> => {
     const found = new Set<SessionId>()

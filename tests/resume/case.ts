@@ -12,4 +12,4 @@ export const PENDING_INPUT = 'answer the question I asked before you stopped'
 export const GOAL_OBJECTIVE = 'finish the overnight report'
 
 /** How the child leaves the parked session behind. */
-export type ParkMode = 'clean' | 'goal' | 'tool-result' | 'draining' | 'parking' | 'flush-failed'
+export type ParkMode = 'clean' | 'goal' | 'goal-draining' | 'tool-result' | 'draining' | 'parking' | 'flush-failed'
