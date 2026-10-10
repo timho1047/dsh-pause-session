@@ -17,10 +17,22 @@
  * only written once the loop reached the dispatch, so an unanswered one is
  * exactly a tool the real world ran and the log never heard back from. The
  * harness turns each of those into a synthetic `TOOL_OUTCOME_UNKNOWN` error
- * result when it next reads the log; this module derives the same answer with
- * {@link interruptedTurnClosers} instead of writing it back, and `inLog` says
- * which of the two states the marker is in. Nothing here is inferred from the
- * fact that the session is listed.
+ * result when it next reads the log; this module derives the same answer from
+ * the stored events instead of writing it back. Nothing here is inferred from
+ * the fact that the session is listed.
+ *
+ * WHAT THE ROW PROMISES. `wake` says the host can hand this session the request
+ * it owes, and the wake that keeps that promise is `./resume.ts`'s. Both read
+ * one rule from `./history.ts` over the same derivation the loop reads, so a
+ * promise this list publishes is a promise that wake keeps. When the log cannot
+ * be folded into that derivation, the promise is withheld and the reading is
+ * reported; a withheld promise costs a user nothing, a broken one spends their
+ * money.
+ *
+ * WHO MAY DECIDE. A decision names its target as command input, and the command
+ * channel carries no origin of its own, so this list acts only on rows its most
+ * recent read published to the calling session: the caller's own read is what
+ * makes a target actionable. Anything else is refused, not looked up.
  *
  * THREE OF THE FOUR DECISIONS PUT THE SESSION BACK ON THE CLEAN PATH. Continue,
  * continue with the note, and review all go through `ResumePath.resumeSession`,
@@ -32,13 +44,14 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { interruptedTurnClosers } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 // Type-only: the optional `ctx.sessionPersistence` read seam and its handle.
 import type {} from '@deepseek-ai/dsh-session-persistence'
 import type { CommandResult } from '@deepseek-ai/dsh-commands'
+import { derivedHistory, owesReply, routeNamed } from './history.js'
 import type { ParkRegistry } from './registry.js'
 import type { ResumePath } from './resume.js'
+import { describeError } from './shared.js'
 import type { TriageAction, TriageList, TriageRow, TriageTrace } from './shared.js'
 
 /** The route a wake input has to be addressed to; see `./resume.ts`. */
@@ -52,6 +65,14 @@ export const TRIAGE_LEFT_TEXT = 'safe-stop left this session paused; it is still
 
 /** Result copy for a decision aimed at a session that is not on the list. */
 export const TRIAGE_NOT_LISTED_TEXT = 'safe-stop has no unfinished park recorded for this session.'
+
+/**
+ * Result copy for a decision aimed at a row the calling session was not shown.
+ * The list is the only thing that legitimizes a target, so a target nobody read
+ * is refused rather than acted on.
+ */
+export const TRIAGE_UNSHOWN_TEXT = 'safe-stop did not act: this Session has not been shown that row.'
+  + ' Read the list first (/safe-triage).'
 
 /**
  * Model-facing text that goes with a wake when the user chooses to continue
@@ -75,11 +96,6 @@ interface ColdRead {
   readonly events: readonly SessionEvent[]
 }
 
-/** Human-readable failure detail for a log line. */
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
 /**
  * Events that are not the session's own story: the bookkeeping of the pause
  * command the user pressed, and the pending-input splices the inbox writes.
@@ -87,15 +103,6 @@ function describe(error: unknown): string {
  * is not what "where did it stop" means.
  */
 const BOOKKEEPING_EVENTS: ReadonlySet<string> = new Set(['command/run', 'command/done', 'agent/inbox/spliced'])
-
-/**
- * Event types that put a model-visible message on the surface, in the order
- * they arrive. A tool result is one: it is the thing a model answers next when
- * a step was cut off after the tool ran.
- */
-const MESSAGE_EVENTS: ReadonlySet<string> = new Set([
-  'user/message', 'developer/message', 'system/message', 'assistant/message', 'tool/result',
-])
 
 /** The turn and step an event belongs to, when it carries them. */
 function positionOf(event: SessionEvent): { readonly turn?: number; readonly step?: number } {
@@ -119,14 +126,14 @@ async function coldRead(ctx: Context, sessionId: SessionId): Promise<ColdRead | 
   try {
     handle = await persistence.open(sessionId, 'read')
   } catch (error: unknown) {
-    ctx.logger.warn(`safe-stop: could not open the stored log of "${sessionId}": ${describe(error)}`)
+    ctx.logger.warn(`safe-stop: could not open the stored log of "${sessionId}": ${describeError(error)}`)
     return undefined
   }
   try {
     const stored = await handle.read(0, undefined)
     return { events: [...stored.events] }
   } catch (error: unknown) {
-    ctx.logger.warn(`safe-stop: could not read the stored log of "${sessionId}": ${describe(error)}`)
+    ctx.logger.warn(`safe-stop: could not read the stored log of "${sessionId}": ${describeError(error)}`)
     return undefined
   } finally {
     await handle.close()
@@ -156,36 +163,35 @@ function unansweredCalls(events: readonly SessionEvent[]): TriageTrace[] {
 }
 
 /**
- * Whether the events end owing the model an answer: the last thing said on the
- * model-visible surface is not an assistant message.
- */
-function owesReply(events: readonly SessionEvent[]): boolean {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index]
-    if (event === undefined || !MESSAGE_EVENTS.has(event.type)) continue
-    return event.type !== 'assistant/message'
-  }
-  return false
-}
-
-/**
  * One row's facts, as the session's own log reports them.
+ * @param ctx - host context carrying the registered message projections.
  * @param sessionId - the listed session.
  * @param phase - the durable park outcome.
  * @param updatedAt - when that outcome was written.
  * @param stored - the events exactly as they are stored.
  * @returns the row, ready to publish.
  */
-function rowOf(sessionId: SessionId, phase: TriageRow['phase'], updatedAt: number, stored: readonly SessionEvent[]): TriageRow {
+function rowOf(
+  ctx: Context,
+  sessionId: SessionId,
+  phase: TriageRow['phase'],
+  updatedAt: number,
+  stored: readonly SessionEvent[],
+): TriageRow {
   // The stop position is the last event the log actually ends on, minus the
   // bookkeeping that only says how the pause itself was requested.
   const last = [...stored].reverse().find(event => !BOOKKEEPING_EVENTS.has(event.type))
   const traces = unansweredCalls(stored)
-  // Whether an answer is owed, and whether the harness would repair this log at
-  // all, are questions about the balanced transcript: a turn the crash left open
-  // is closed with synthetic closers, and those closers are what a wake answers.
-  const repaired = [...stored, ...interruptedTurnClosers(stored)]
-  const owed = owesReply(repaired)
+  // Whether an answer is owed is the wake's own question, read through the
+  // wake's own rule over the history the harness would derive from this log. A
+  // log this build cannot fold leaves the question unanswerable, and the promise
+  // is withheld rather than guessed.
+  let owed = false
+  try {
+    owed = owesReply(derivedHistory(stored, ctx.sessions.messageProjections))
+  } catch (error: unknown) {
+    ctx.logger.warn(`safe-stop: could not derive the history of "${sessionId}": ${describeError(error)}`)
+  }
   return {
     sessionId: String(sessionId),
     phase,
@@ -197,23 +203,26 @@ function rowOf(sessionId: SessionId, phase: TriageRow['phase'], updatedAt: numbe
     // Two facts have to hold before this host can hand the session its owed
     // request: the log must name the route the wake would be addressed to, and
     // there must be an answer still owed for the wake to ask for.
-    wakeable: owed && stored.some(event => event.type === 'request/header'),
+    wakeable: owed && routeNamed(stored),
   }
 }
 
 /** What mounting the decision list hands back. */
 export interface TriageListService {
   /**
+   * Read the list for one calling session, and record the rows it was shown.
+   * @param caller - the session the read was addressed to.
    * @returns every session that did not stop cleanly, with the facts its own log carries.
    */
-  read(): Promise<TriageList>
+  read(caller: SessionId): Promise<TriageList>
   /**
-   * Carry out one decision on one listed session.
+   * Carry out one decision on one listed session, for the caller that read it.
+   * @param caller - the session the decision was addressed to.
    * @param sessionId - the listed session to act on.
    * @param action - which of the four decisions was taken.
    * @returns the outcome for whoever asked.
    */
-  decide(sessionId: SessionId, action: TriageAction): Promise<CommandResult>
+  decide(caller: SessionId, sessionId: SessionId, action: TriageAction): Promise<CommandResult>
 }
 
 /**
@@ -228,6 +237,14 @@ export interface TriageListService {
  * @returns the list read and the decision verbs.
  */
 export function mountTriageList(ctx: Context, registry: ParkRegistry, resumePath: ResumePath): TriageListService {
+  /**
+   * The rows each calling session was last shown by its own read. A decision
+   * names its target as command input, and the command channel carries no
+   * origin of its own, so this is what ties a target to the list the user read:
+   * only a row this caller has been shown is acted on.
+   */
+  const shown = new Map<SessionId, ReadonlySet<string>>()
+
   const readable = async (sessionId: SessionId, phase: TriageRow['phase'], updatedAt: number): Promise<TriageRow> => {
     const read = await coldRead(ctx, sessionId)
     // A log this host could not read says so. An empty row would claim the
@@ -235,7 +252,7 @@ export function mountTriageList(ctx: Context, registry: ParkRegistry, resumePath
     if (read === undefined) {
       return { sessionId: String(sessionId), phase, updatedAt, reading: 'unreadable', traces: [], owed: false, wakeable: false }
     }
-    return rowOf(sessionId, phase, updatedAt, read.events)
+    return rowOf(ctx, sessionId, phase, updatedAt, read.events)
   }
 
   /**
@@ -244,7 +261,8 @@ export function mountTriageList(ctx: Context, registry: ParkRegistry, resumePath
    * back from its stored log so it can be looked at, and no request is built
    * because no input is delivered.
    */
-  const decide = async (sessionId: SessionId, action: TriageAction): Promise<CommandResult> => {
+  const decide = async (caller: SessionId, sessionId: SessionId, action: TriageAction): Promise<CommandResult> => {
+    if (!(shown.get(caller)?.has(String(sessionId)) ?? false)) return { kind: 'error', text: TRIAGE_UNSHOWN_TEXT }
     const record = registry.get(sessionId)
     // `safe` is not a decision this list owns: that session belongs to the
     // silent path, and acting here would be a second resume.
@@ -261,11 +279,13 @@ export function mountTriageList(ctx: Context, registry: ParkRegistry, resumePath
   }
 
   return {
-    read: async () => ({
-      rows: await Promise.all(registry.list().flatMap(entry => entry.phase === 'safe'
+    read: async (caller) => {
+      const rows = await Promise.all(registry.list().flatMap(entry => entry.phase === 'safe'
         ? []
-        : [readable(entry.sessionId, entry.phase, entry.updatedAt)])),
-    }),
+        : [readable(entry.sessionId, entry.phase, entry.updatedAt)]))
+      shown.set(caller, new Set(rows.map(row => row.sessionId)))
+      return { rows }
+    },
     decide,
   }
 }

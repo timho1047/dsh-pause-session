@@ -55,6 +55,10 @@ describe('the wake content follows the route in use', () => {
         role: 'user',
         content: [{ type: 'text', text: WAKE_MARKER }],
       })
+      // The marker names the plugin that put it there: it lands in the same user
+      // turn as the input the model owes an answer to, and it must be readable
+      // as an aside rather than as part of that input.
+      expect(WAKE_MARKER).toContain('safe-stop')
 
       // On the wire it is visible, and it is still nothing but the marker: it
       // lands as one extra text block in the user turn the model owes an answer

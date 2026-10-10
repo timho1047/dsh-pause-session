@@ -74,8 +74,29 @@ describe('the decision list', () => {
     }
   })
 
-  it('keeps a cleanly parked session off the list and resumes it silently instead', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-triage-clean-')
+  it('reads and decides the exact session whose id carries the list separators', async () => {
+    const caseRoot = temporaryRoot('dsh-safe-stop-triage-separators-')
+    // Session ids are the host's own data, and the published list is the only
+    // place the browser reads a row's target from: an id the encoding folded
+    // would come back as a different name, and the decision would be aimed at
+    // whatever that name happens to be.
+    const sessionId = 'overnight;tools,one'
+    await parkAndLeave(caseRoot, sessionId, 'draining')
+    await recordsUntil(caseRoot, [[sessionId, 'draining']])
+
+    const home = await reviveTriageHome(caseRoot)
+    try {
+      expect((await home.triage()).rows.map(row => row.sessionId)).toEqual([sessionId])
+      const answered = await home.decide(sessionId, 'continue')
+      expect(answered.kind, answered.text).toBe('success')
+      expect(home.ctx.agents.get(SessionId(sessionId))).toBeDefined()
+      await recordsUntil(caseRoot, [])
+    } finally {
+      await home.ctx.fiber.dispose()
+    }
+  })
+
+  it('keeps a cleanly parked session off the list and resumes it silently instead', async () => {    const caseRoot = temporaryRoot('dsh-safe-stop-triage-clean-')
     await parkAndLeave(caseRoot, 'overnight-clean', 'clean')
     await recordsUntil(caseRoot, [['overnight-clean', 'safe']])
 

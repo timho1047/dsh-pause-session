@@ -5,7 +5,10 @@
  * case the clean path refuses — and every decision is driven through the verb
  * the browser half executes, on a morning with no live agent for that session.
  * The differences that matter are the ones the user can see: what reaches the
- * route, what the session log gains, and what stays exactly where it was.
+ * route, what the session log gains, and what stays exactly where it was. A
+ * decision is also a target, so the cases that matter include the ones the host
+ * must refuse: a command no row was shown for, and a wake that must not land in
+ * the log as the user's own words.
  * @module dsh-safe-stop/test/triage/decisions
  */
 
@@ -14,11 +17,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { UNKNOWN_OUTCOME_NOTE } from '../../src/triage.ts'
+import { UNATTENDED_TEXT } from '../../src/control.ts'
+import { TRIAGE_UNSHOWN_TEXT, UNKNOWN_OUTCOME_NOTE } from '../../src/triage.ts'
 import { ensureHostEntry } from '../resume/build.ts'
 import { readParkRegistry } from '../registry/read.ts'
 import { turnEnd } from '../gate/loop.ts'
 import { parkAndLeave, recordsUntil, reviveTriageHome, settles, storageOf, until } from './home.ts'
+import type { TriageHome } from './home.ts'
 
 /** Every temporary root this spec creates, removed once the file settles. */
 const temporaryRoots: string[] = []
@@ -42,6 +47,29 @@ function userText(request: { messages: readonly { role: string; content: readonl
     .join('\n')
 }
 
+/**
+ * The source kind of the last message the session's own stored log holds, read
+ * back through persistence the way any later consumer reads it. This is how the
+ * log answers "who wrote this?": `user` means the human did.
+ */
+async function lastLoggedSource(home: TriageHome, sessionId: string): Promise<string | undefined> {
+  const persistence = home.ctx.get('sessionPersistence')
+  if (persistence === undefined) throw new Error('safe-stop: this home mounts no session persistence')
+  // The log is read through its durable form, so the writer's own checkpoint is
+  // what puts the wake's message in it.
+  const live = home.ctx.sessions.get(SessionId(sessionId))
+  if (live !== undefined) await home.ctx.sessions.flush(live)
+  const handle = await persistence.open(SessionId(sessionId), 'read')
+  try {
+    const stored = await handle.read(0, undefined)
+    const message = [...stored.events].reverse().find(event => event.type === 'user/message')
+    if (message === undefined || message.type !== 'user/message') return undefined
+    return message.data.source.kind
+  } finally {
+    await handle.close()
+  }
+}
+
 describe('the decisions on one listed session', () => {
   it('continues with no note: the clean path\'s own invisible wake', async () => {
     const caseRoot = temporaryRoot('dsh-safe-stop-triage-continue-')
@@ -49,6 +77,9 @@ describe('the decisions on one listed session', () => {
 
     const home = await reviveTriageHome(caseRoot)
     try {
+      // What the row promises is what the decision then does: the list's `wake`
+      // and the wake the resume delivers are one rule read by both.
+      expect((await home.triage()).rows[0]?.wakeable, 'the row promised no wake').toBe(true)
       const answered = await home.decide('overnight-continue', 'continue')
       expect(answered.kind, answered.text).toBe('success')
       const resumed = home.ctx.agents.get(SessionId('overnight-continue'))
@@ -64,6 +95,10 @@ describe('the decisions on one listed session', () => {
       // The tool the process died inside is answered by the harness's own
       // synthetic result before the model sees the step.
       expect(request.messages.some(message => message.role === 'tool')).toBe(true)
+      // The wake is this plugin's, and the session's own log says so: a later
+      // consumer reads the same durable record and cannot mistake it for the
+      // user's words.
+      expect(await lastLoggedSource(home, 'overnight-continue')).toBe('safe-stop')
       // A decision is a release: the next process does not re-hold it.
       await recordsUntil(caseRoot, [])
     } finally {
@@ -93,6 +128,9 @@ describe('the decisions on one listed session', () => {
       // The two facts the product promises, spelled out in the injected text.
       expect(UNKNOWN_OUTCOME_NOTE).toContain('outcome is unknown')
       expect(UNKNOWN_OUTCOME_NOTE).toContain('do not retry it blindly')
+      // The note is synthesized by the plugin on the user's behalf, and the log
+      // keeps that attribution: it is not text the human typed.
+      expect(await lastLoggedSource(home, 'overnight-note')).toBe('safe-stop')
       // The press is durable: the next process does not re-hold a resumed or
       // refused session, and one that was only opened still holds.
       await recordsUntil(caseRoot, [])
@@ -148,14 +186,71 @@ describe('the decisions on one listed session', () => {
     }
   })
 
+  it('refuses a decision on a row this calling session was never shown', async () => {
+    const caseRoot = temporaryRoot('dsh-safe-stop-triage-unshown-')
+    await parkAndLeave(caseRoot, 'overnight-unshown', 'draining')
+
+    const home = await reviveTriageHome(caseRoot)
+    try {
+      // The row is real and listed, but this session never read the list: the
+      // command channel names its target as input, and a name nobody was shown
+      // is not a target. Nothing may be resumed, and nothing may be spent.
+      const answered = await home.run('/safe-triage-continue overnight-unshown')
+      expect(answered.kind).toBe('error')
+      expect(answered.text).toBe(TRIAGE_UNSHOWN_TEXT)
+      await settles()
+      expect(home.ctx.agents.get(SessionId('overnight-unshown'))).toBeUndefined()
+      expect(home.provider.requests).toHaveLength(0)
+      // Reading the list is what makes the same row actionable, and the record
+      // was untouched by the refusal.
+      expect((await home.triage()).rows.map(row => row.sessionId)).toEqual(['overnight-unshown'])
+      const allowed = await home.decide('overnight-unshown', 'continue')
+      expect(allowed.kind, allowed.text).toBe('success')
+      await recordsUntil(caseRoot, [])
+    } finally {
+      await home.ctx.fiber.dispose()
+    }
+  })
+
+  it('refuses a park verb issued from inside a model turn', async () => {
+    const caseRoot = temporaryRoot('dsh-safe-stop-triage-unattended-')
+    await parkAndLeave(caseRoot, 'overnight-unattended', 'draining')
+
+    const home = await reviveTriageHome(caseRoot)
+    try {
+      // The loop runs every model-driven step — tool calls included — under its
+      // own initiator boundary. A model that could decide a park could spend
+      // another session's budget, so these verbs refuse to act inside one.
+      const read = await home.ctx.agents.withInitiator(home.desk, () => home.triage())
+      expect(read.rows.map(row => row.sessionId)).toEqual(['overnight-unattended'])
+      // A read changes nothing, so it stays open to any caller. The decision
+      // does not, even with the row just read under that same turn.
+      const refused = await home.ctx.agents.withInitiator(home.desk, () => home.decide('overnight-unattended', 'continue'))
+      expect(refused.kind).toBe('error')
+      expect(refused.text).toBe(UNATTENDED_TEXT)
+      await settles()
+      expect(home.ctx.agents.get(SessionId('overnight-unattended'))).toBeUndefined()
+      expect(home.provider.requests).toHaveLength(0)
+      await recordsUntil(caseRoot, [['overnight-unattended', 'draining']])
+      // The same decision from a person's channel is what the list is for.
+      const allowed = await home.decide('overnight-unattended', 'continue')
+      expect(allowed.kind, allowed.text).toBe('success')
+      await recordsUntil(caseRoot, [])
+    } finally {
+      await home.ctx.fiber.dispose()
+    }
+  })
+
   it('refuses a decision aimed at a session that is not on the list', async () => {
     const caseRoot = temporaryRoot('dsh-safe-stop-triage-not-listed-')
     await parkAndLeave(caseRoot, 'overnight-clean', 'clean')
 
     const home = await reviveTriageHome(caseRoot)
     try {
-      // A cleanly parked session belongs to the silent path; deciding it here
-      // would be a second resume of a session that is not the list's business.
+      // A cleanly parked session belongs to the silent path, so the list never
+      // shows it — and a decision can only act on a row the caller was shown.
+      // Deciding it here would be a second resume of a session that is not the
+      // list's business.
       const answered = await home.decide('overnight-clean', 'continue')
       expect(answered.kind).toBe('error')
       expect(home.ctx.agents.get(SessionId('overnight-clean'))).toBeUndefined()

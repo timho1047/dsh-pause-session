@@ -25,7 +25,8 @@ import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import {
-  decodeGlobalStatus, decodeTriageList, RESUME_ALL_COMMAND, STATE_ALL_COMMAND, STOP_ALL_COMMAND, TRIAGE_COMMAND,
+  decodeGlobalStatus, decodeTriageList, RESUME_ALL_COMMAND, STATE_ALL_COMMAND, STOP_ALL_COMMAND,
+  TRIAGE_COMMAND, TRIAGE_CONTINUE_COMMAND, TRIAGE_LEAVE_COMMAND, TRIAGE_NOTE_COMMAND, TRIAGE_REVIEW_COMMAND,
 } from '../shared.js'
 import type { GlobalStatus, TriageAction, TriageRow } from '../shared.js'
 
@@ -51,12 +52,12 @@ export interface GlobalStopState {
 
 const INITIAL: GlobalStopState = { global: undefined, panelOpen: false, triage: undefined }
 
-/** The command one decision runs. */
+/** The command one decision runs, named from the one vocabulary the host registers. */
 export const TRIAGE_DECISION_COMMAND: Readonly<Record<TriageAction, string>> = {
-  continue: 'safe-triage-continue',
-  note: 'safe-triage-note',
-  review: 'safe-triage-review',
-  leave: 'safe-triage-leave',
+  continue: TRIAGE_CONTINUE_COMMAND,
+  note: TRIAGE_NOTE_COMMAND,
+  review: TRIAGE_REVIEW_COMMAND,
+  leave: TRIAGE_LEAVE_COMMAND,
 }
 
 /**
@@ -163,16 +164,17 @@ export class SafeStopGlobalControl {
 
   /**
    * Take one decision on one listed session, addressed through the session the
-   * user is on. The list is re-read afterwards because the host's answer — not
-   * this control's assumption — is what the next render shows.
+   * user is on. The list is read first, because the host acts only on rows it
+   * has shown the calling session, and read again afterwards because the host's
+   * answer — not this control's assumption — is what the next render shows.
    * @param sessionId - the listed session to decide on.
    * @param action - which of the four decisions was taken.
    */
   async decide(sessionId: string, action: TriageAction): Promise<void> {
     const address = this.address
     if (address === undefined) return
-    await this.commands.execute(address, `/${TRIAGE_DECISION_COMMAND[action]} ${sessionId}`, [], this.lifetime)
     await this.refreshTriage()
+    await this.commands.execute(address, `/${TRIAGE_DECISION_COMMAND[action]} ${sessionId}`, [], this.lifetime)
     // A decision can release a session, which the whole-app verdict reports.
     await this.refresh(address)
   }

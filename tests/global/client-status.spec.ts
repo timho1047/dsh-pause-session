@@ -216,13 +216,15 @@ describe('the whole-app control state', () => {
 })
 
 describe('the whole-app status encoding', () => {
-  it('round-trips every field, and stays parseable when a name carries the separators', () => {
+  it('round-trips every field, separators and all', () => {
     const spelled = status({
       verdict: 'waiting',
-      registered: 3,
+      registered: 4,
       safe: 1,
       draining: ['overnight'],
-      stalled: ['late; session'],
+      // A name is the host's own data: whatever it holds comes back exactly, so
+      // a row is never looked up under a name that was folded into another.
+      stalled: ['late; session', 'tab\tand\nnewline', '-'],
       unresumable: ['a, b'],
       unreadTrees: ['hidden'],
       jobs: ['bash-1', 'subagent-2'],
@@ -231,16 +233,30 @@ describe('the whole-app status encoding', () => {
     const text = encodeGlobalStatus(spelled)
     const decoded = decodeGlobalStatus(text)
     expect(decoded).toBeDefined()
-    // A name cannot forge a field: the two characters the line separates on are
-    // folded inside it, so everything after it still lands where it belongs.
-    expect(decoded?.stalled).toEqual(['late_ session'])
-    expect(decoded?.unresumable).toEqual(['a_ b'])
+    expect(decoded?.stalled).toEqual(['late; session', 'tab\tand\nnewline', '-'])
+    expect(decoded?.unresumable).toEqual(['a, b'])
     expect(decoded?.draining).toEqual(['overnight'])
     expect(decoded?.unreadTrees).toEqual(['hidden'])
     expect(decoded?.jobs).toEqual(['bash-1', 'subagent-2'])
     expect(decoded?.blind).toEqual(['jobs'])
-    expect(decoded?.registered).toBe(3)
+    expect(decoded?.registered).toBe(4)
     expect(decoded?.safe).toBe(1)
+  })
+
+  it('does not let a name forge a field', () => {
+    // The separators inside a name are escaped, so the only `;` the decoder
+    // splits on is the one the encoder wrote.
+    const text = encodeGlobalStatus(status({
+      verdict: 'waiting',
+      registered: 2,
+      safe: 0,
+      draining: ['forged; stalled: everything; safe: 99'],
+      stalled: [],
+    }))
+    const decoded = decodeGlobalStatus(text)
+    expect(decoded?.draining).toEqual(['forged; stalled: everything; safe: 99'])
+    expect(decoded?.stalled).toEqual([])
+    expect(decoded?.safe).toBe(0)
   })
 
   it('decodes nothing from text that is not a whole-app status', () => {

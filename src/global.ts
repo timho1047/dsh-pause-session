@@ -33,7 +33,7 @@ import type {} from '@deepseek-ai/dsh-subagent'
 import type {} from '@deepseek-ai/dsh-jobs'
 import type { ParkWatch } from './park.js'
 import type { ParkRegistry } from './registry.js'
-import { encodeGlobalStatus } from './shared.js'
+import { describeError, encodeGlobalStatus } from './shared.js'
 import type { GlobalBlindSpot, GlobalStatus, GlobalVerdict, ParkPhase } from './shared.js'
 
 /**
@@ -73,6 +73,12 @@ export interface GlobalStopDeps {
    * @returns every session a live mark owns, with the phase it reports now.
    */
   live(): ReadonlyMap<SessionId, LivePark>
+  /**
+   * @returns every registered session this process could not hold again — a
+   * record whose session cannot be read here, so nothing in this process can
+   * park it, release it, or act on it.
+   */
+  unheld(): ReadonlySet<SessionId>
 }
 
 /** The whole-app park, as the plugin entry drives it. */
@@ -89,7 +95,7 @@ export interface GlobalStop {
   readStatus(): Promise<CommandResult>
 }
 
-/** One session found by a tree walk. */
+/** One session found by a tree walk; cached per park episode. */
 interface TreeWalk {
   /** Catalog descendants of the walked session, direct children and deeper. */
   readonly members: readonly SessionId[]
@@ -97,17 +103,6 @@ interface TreeWalk {
   readonly unresumable: boolean
   /** Whether any branch could not be read, so the tree is not vouched for. */
   readonly unread: boolean
-}
-
-/** The tree facts one registered session is reported with, cached per episode. */
-interface TreeFacts {
-  readonly unresumable: boolean
-  readonly unread: boolean
-}
-
-/** Human-readable failure detail for a log line. */
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }
 
 /**
@@ -131,8 +126,8 @@ export function mountGlobalStop(
    * instead of quietly leaving them out of a park it then calls safe.
    */
   const unrecorded = new Set<SessionId>()
-  /** Per-episode tree facts; an entry lives exactly as long as the park owns it. */
-  const facts = new Map<SessionId, TreeFacts>()
+  /** Per-episode tree walks; an entry lives exactly as long as the park owns it. */
+  const walks = new Map<SessionId, TreeWalk>()
 
   /**
    * Whether a session has unfinished work right now. Three real answers, any
@@ -151,13 +146,22 @@ export function mountGlobalStop(
    * Read one session's subagent tree from the catalog's own descendant rows.
    * The mode on each row is the harness's durable record of whether that child
    * can be resumed after a restart, which is what the report has to name; a
-   * branch that could not be read is `unread`, never assumed clean.
+   * branch that could not be read is `unread`, never assumed clean. One walk is
+   * taken per session per park episode: the answer is a fact about the tree, not
+   * about the moment it was asked.
    */
-  const walkTree = async (root: SessionId): Promise<TreeWalk> => {
+  const walkTree = async (sessionId: SessionId): Promise<TreeWalk> => {
+    const cached = walks.get(sessionId)
+    if (cached !== undefined) return cached
     const subagents = ctx.get('subagents')
-    if (subagents === undefined) return { members: [], unresumable: false, unread: true }
+    if (subagents === undefined) {
+      const absent: TreeWalk = { members: [], unresumable: false, unread: true }
+      walks.set(sessionId, absent)
+      return absent
+    }
+    let walk: TreeWalk
     try {
-      const rows = await subagents.listDescendants(root)
+      const rows = await subagents.listDescendants(sessionId)
       const members: SessionId[] = []
       let unresumable = false
       let unread = false
@@ -174,21 +178,13 @@ export function mountGlobalStop(
         if (row.reason === 'unsupported') unresumable = true
         else unread = true
       }
-      return { members, unresumable, unread }
+      walk = { members, unresumable, unread }
     } catch (error: unknown) {
-      ctx.logger.warn(`safe-stop: could not read the subagent tree of "${root}": ${describe(error)}`)
-      return { members: [], unresumable: false, unread: true }
+      ctx.logger.warn(`safe-stop: could not read the subagent tree of "${sessionId}": ${describeError(error)}`)
+      walk = { members: [], unresumable: false, unread: true }
     }
-  }
-
-  /** The tree facts of one session, computed once per park episode. */
-  const factsOf = async (sessionId: SessionId): Promise<TreeFacts> => {
-    const cached = facts.get(sessionId)
-    if (cached !== undefined) return cached
-    const walk = await walkTree(sessionId)
-    const computed: TreeFacts = { unresumable: walk.unresumable, unread: walk.unread }
-    facts.set(sessionId, computed)
-    return computed
+    walks.set(sessionId, walk)
+    return walk
   }
 
   /**
@@ -202,9 +198,7 @@ export function mountGlobalStop(
     // The roots are fixed before the walk: a descendant discovered here is a
     // member of a tree, not a second tree to walk from.
     for (const root of [...found]) {
-      const walk = await walkTree(root)
-      facts.set(root, { unresumable: walk.unresumable, unread: walk.unread })
-      for (const member of walk.members) found.add(member)
+      for (const member of (await walkTree(root)).members) found.add(member)
     }
     return [...found].filter(sessionId => !deps.isPaused(sessionId))
   }
@@ -237,14 +231,22 @@ export function mountGlobalStop(
     for (const entry of registry.list()) phases.set(entry.sessionId, { phase: entry.phase, moving: false })
     for (const [sessionId, park] of deps.live()) phases.set(sessionId, park)
     for (const sessionId of unrecorded) phases.set(sessionId, { phase: 'draining', moving: false })
-    // Facts are per episode: a session the park no longer owns drops its entry,
+    const unheld = deps.unheld()
+    // Walks are per episode: a session the park no longer owns drops its entry,
     // so a later press reads the tree again instead of reporting a stale one.
-    for (const sessionId of [...facts.keys()]) if (!phases.has(sessionId)) facts.delete(sessionId)
+    for (const sessionId of [...walks.keys()]) if (!phases.has(sessionId)) walks.delete(sessionId)
 
     let safe = 0
     const draining: string[] = []
     const stalled: string[] = []
     for (const [sessionId, park] of phases) {
+      // A record this process could not hold is not a park here, whatever its
+      // durable phase says: nothing is standing at the gate for it, so counting
+      // it as safe would promise a hold that does not exist.
+      if (unheld.has(sessionId)) {
+        stalled.push(String(sessionId))
+        continue
+      }
       if (park.phase === 'safe') {
         safe += 1
         continue
@@ -256,7 +258,7 @@ export function mountGlobalStop(
     const unresumable: string[] = []
     const unreadTrees: string[] = []
     for (const sessionId of phases.keys()) {
-      const tree = await factsOf(sessionId)
+      const tree = await walkTree(sessionId)
       if (tree.unresumable) unresumable.push(String(sessionId))
       if (tree.unread) unreadTrees.push(String(sessionId))
     }

@@ -12,6 +12,7 @@
 import { afterAll, describe, expect, it } from 'vitest'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { readParkRegistry } from '../registry/read.ts'
+import { writeParkRecord } from '../registry/write.ts'
 import {
   blockingScript, cleanRoots, mountGlobalHome, settles, storageOf, temporaryRoot, untilAsync,
 } from './home.ts'
@@ -142,6 +143,33 @@ describe('the aggregate answer', () => {
       expect(status.blind).toEqual(['trees'])
       expect(status.unreadTrees).toEqual(['no-subagent-service'])
       expect(status.verdict).toBe('waiting')
+    } finally {
+      home.blocking.releaseAll()
+      await home.ctx.fiber.dispose()
+    }
+  })
+
+  it('names a record it could not hold instead of counting it as parked', async () => {
+    const caseRoot = temporaryRoot('dsh-safe-stop-agg-unheld-', temporaryRoots)
+    // A durable record with no session log behind it — the child killed inside
+    // a tool whose log never materialized. The record is real; the session is
+    // not readable, so this process cannot hold it, park it, or clear it.
+    await writeParkRecord(storageOf(caseRoot), 'gone-session', 'safe')
+
+    const home = await mountGlobalHome(caseRoot, { script: blockingScript() })
+    try {
+      const reader = await home.create('reader')
+      const status = await home.status(reader)
+      // Its durable phase says "safe", and the report still may not: nothing in
+      // this process is holding it, so "safe to close" would promise a hold
+      // that does not exist.
+      expect(status.registered).toBe(1)
+      expect(status.safe).toBe(0)
+      expect(status.stalled).toEqual(['gone-session'])
+      expect(status.verdict).toBe('waiting')
+      // Reported, not dropped: the durable record is exactly where it was.
+      expect((await readParkRegistry(storageOf(caseRoot))).map(entry => [String(entry.sessionId), entry.phase]))
+        .toEqual([['gone-session', 'safe']])
     } finally {
       home.blocking.releaseAll()
       await home.ctx.fiber.dispose()

@@ -25,12 +25,12 @@ import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deep
 import type { AgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import { apply, Config, inject, name } from '../../src/index.ts'
-import { openParkRegistry } from '../../src/registry.ts'
 import { decodeTriageList, TRIAGE_COMMAND } from '../../src/shared.ts'
 import type { TriageAction, TriageList } from '../../src/shared.ts'
 import { FakeProvider, textResponse } from '../assumptions/fake-provider.ts'
 import { readParkRegistry } from '../registry/read.ts'
 import { mountParkStorage } from '../registry/storage.ts'
+import { writeParkRecord } from '../registry/write.ts'
 import type { ParkMode } from '../resume/case.ts'
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -157,7 +157,12 @@ export async function reviveTriageHome(caseRoot: string, options: TriageHomeOpti
       if (list === undefined) throw new Error(`safe-stop: the decision list answered in an unknown vocabulary: ${String(answer.text)}`)
       return list
     },
-    decide: async (sessionId, action) => await run(`/safe-triage-${action} ${sessionId}`),
+    decide: async (sessionId, action) => {
+      // The browser reads the list before it decides a row, and that read is
+      // what shows this session the row the host then acts on.
+      await run(`/${TRIAGE_COMMAND}`)
+      return await run(`/safe-triage-${action} ${sessionId}`)
+    },
   }
 }
 
@@ -213,12 +218,5 @@ export async function records(root: string): Promise<[string, string][]> {
  * @param phase - the park outcome to record.
  */
 export async function recordParkWithoutLog(caseRoot: string, sessionId: string, phase: 'draining' | 'parking' | 'flush-failed'): Promise<void> {
-  const ctx = new Context()
-  try {
-    await mountParkStorage(ctx, storageOf(caseRoot))
-    const registry = await openParkRegistry(ctx)
-    await registry.record(SessionId(sessionId), phase)
-  } finally {
-    await ctx.fiber.dispose()
-  }
+  await writeParkRecord(storageOf(caseRoot), sessionId, phase)
 }

@@ -1,20 +1,25 @@
 /**
- * The identities both halves of dsh-safe-stop name, and the one status
- * encoding they share.
+ * The identities both halves of dsh-safe-stop name, the status encodings they
+ * share, and the one spelling a host log line gives a caught value.
  *
  * The browser bundle may value-import only the shell's baseline module table,
- * so this module is the one place the client half and the host half agree on
- * the control's command names and on how the host's park state is spelled
- * without sharing a runtime edge: it imports nothing, and the host half
- * derives the branded identities from these strings.
+ * so this module imports nothing: the client half reads command names and the
+ * decode functions from it directly, and the host half derives the branded
+ * identities from the same strings.
  *
- * THE ENCODING IS A WORKAROUND WITH A REASON: a third-party plugin can publish
- * live state to the browser only through the command registry (no `ctx.remote`
- * namespace, no forwarded event — both are compiled into the harness's own API
- * assembly). A command descriptor's only free-form field is its `description`,
- * so the park state travels as a prefix plus `;`-separated fields on that
- * field. The sentence stays human-readable on purpose: the same text is what
- * the slash-command menu shows.
+ * A third-party plugin's only live channel to the browser is the command
+ * registry — it can add neither a `ctx.remote` namespace nor a forwarded event,
+ * both of which are compiled into the harness's own API assembly. A command
+ * descriptor's only free-form field is its `description`, and a command
+ * result's only free-form field is its `text`, so the park state travels as a
+ * prefix plus `;`-separated fields on one of those. The text stays
+ * human-readable: the same words are what the slash-command menu shows.
+ *
+ * Every value inside a field is escaped, so a decoded name is the exact name
+ * that was encoded. Session ids, tool names, and call ids are the host's own
+ * data and may contain the `;`, `,`, `/`, or newline a field is separated by; a
+ * folded spelling would decode as a different name — a different row, looked up
+ * again.
  * @module dsh-safe-stop/shared
  */
 
@@ -88,6 +93,85 @@ export const TRIAGE_LEAVE_DEFINITION_ID = 'dsh-safe-stop/triage-leave'
 export const STATUS_PREFIX = 'safe-stop: '
 
 /**
+ * One list field's text when the list is empty. A value that would itself spell
+ * this marker is escaped by {@link escapeField}, so an empty list and a list
+ * holding the marker stay different texts.
+ */
+const EMPTY_FIELD = '-'
+
+/**
+ * One field or item value, ready to sit inside an encoded text: every separator
+ * (`;`, `,`, `/`, newline) and the escape character itself are escaped, and a
+ * value that would spell {@link EMPTY_FIELD} is escaped so it is not read as an
+ * empty list.
+ * @param text - the value to encode, as the host holds it.
+ * @returns the value as it appears inside an encoded field.
+ */
+function escapeField(text: string): string {
+  const escaped = text.replace(/[\\;,\n/]/g, character => character === '\n' ? '\\n' : `\\${character}`)
+  return escaped.startsWith(EMPTY_FIELD) ? `\\${escaped}` : escaped
+}
+
+/**
+ * One value previously written by {@link escapeField}.
+ * @param text - the encoded value, escapes included.
+ * @returns the value the host holds.
+ */
+function unescapeField(text: string): string {
+  return text.replace(/\\(.)/g, (_escape, character: string) => character === 'n' ? '\n' : character)
+}
+
+/**
+ * Split one encoded text on the separators that are not escaped, keeping each
+ * escape beside the character it protects so {@link unescapeField} can read it.
+ * @param text - an encoded text, without its prefix.
+ * @param separator - the single character to split on.
+ * @returns the parts, in order; always at least one.
+ */
+function splitFields(text: string, separator: string): string[] {
+  const parts: string[] = []
+  let part = ''
+  for (let at = 0; at < text.length; at += 1) {
+    const character = text[at] ?? ''
+    if (character === '\\') {
+      part += character + (text[at + 1] ?? '')
+      at += 1
+      continue
+    }
+    if (character === separator) {
+      parts.push(part)
+      part = ''
+      continue
+    }
+    part += character
+  }
+  parts.push(part)
+  return parts
+}
+
+/**
+ * One field of an encoded text, by its key.
+ * @param fields - the separated fields of one encoded text.
+ * @param key - the field's key, without its `:`.
+ * @returns the field's value with its escapes still in place, or `undefined`
+ * when the text does not carry that field.
+ */
+function fieldOf(fields: readonly string[], key: string): string | undefined {
+  const prefix = `${key}:`
+  const at = fields.findIndex(field => field.trim().startsWith(prefix))
+  return at < 0 ? undefined : fields[at]?.trim().slice(prefix.length).trim()
+}
+
+/**
+ * One log line's text for a caught value.
+ * @param error - the caught value.
+ * @returns the error's message, or the value's own spelling.
+ */
+export function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/**
  * The four park outcomes, listed in the order a park walks them — and the one
  * vocabulary the live status, the durable registry, and the published words all
  * derive from, so they cannot drift apart:
@@ -129,7 +213,9 @@ export interface ParkStatus {
  */
 export function encodeParkStatus(status: ParkStatus): string {
   const head = `${STATUS_PREFIX}${PHASE_WORD[status.phase]}`
-  return status.runningTools.length === 0 ? head : `${head}; tools: ${status.runningTools.join(', ')}`
+  return status.runningTools.length === 0
+    ? head
+    : `${head}; tools: ${status.runningTools.map(escapeField).join(', ')}`
 }
 
 /**
@@ -140,18 +226,11 @@ export function encodeParkStatus(status: ParkStatus): string {
  */
 export function decodeParkStatus(text: string): ParkStatus | undefined {
   if (!text.startsWith(STATUS_PREFIX)) return undefined
-  const [head = '', ...rest] = text.slice(STATUS_PREFIX.length).split(';')
+  const [head = '', ...rest] = splitFields(text.slice(STATUS_PREFIX.length), ';')
   const word = head.trim()
   const phase = (Object.keys(PHASE_WORD) as ParkPhase[]).find(candidate => PHASE_WORD[candidate] === word)
   if (phase === undefined) return undefined
-  const tools = rest
-    .map(field => field.trim())
-    .find(field => field.startsWith('tools:'))
-    ?.slice('tools:'.length)
-    .split(',')
-    .map(name => name.trim())
-    .filter(name => name.length > 0) ?? []
-  return { phase, safe: phase === 'safe', runningTools: tools }
+  return { phase, safe: phase === 'safe', runningTools: decodeNames(fieldOf(rest, 'tools')) }
 }
 
 /**
@@ -186,9 +265,9 @@ export interface GlobalStatus {
   readonly draining: readonly string[]
   /**
    * Registered sessions that will not reach the park point in this process: a
-   * flush that failed, a pause adopted from an earlier process, or a press
-   * whose registry write failed. Named, never folded into the count and
-   * forgotten.
+   * flush that failed, a pause adopted from an earlier process, a press whose
+   * registry write failed, or a record whose session this host cannot read and
+   * therefore did not hold. Named, never folded into the count and forgotten.
    */
   readonly stalled: readonly string[]
   /** Registered sessions whose tree contains a route a restart cannot resume. */
@@ -201,28 +280,18 @@ export interface GlobalStatus {
   readonly blind: readonly GlobalBlindSpot[]
 }
 
-/** What an empty list field looks like, so a field is never silently absent. */
-const NO_NAMES = '-'
-
-/**
- * One name, stripped of the two characters the encoding separates fields and
- * items with. Session ids come from the host (`session-<uuid>` or a caller's
- * id), so this only ever guards the parse, never a human's reading of a name.
- */
-function plainName(name: string): string {
-  return name.replace(/[;,\n]/g, '_')
-}
-
 /** Encode one list field. */
 function encodeNames(names: readonly string[]): string {
-  return names.length === 0 ? NO_NAMES : names.map(plainName).join(', ')
+  return names.length === 0 ? EMPTY_FIELD : names.map(escapeField).join(', ')
 }
 
 /** Decode one list field. */
 function decodeNames(field: string | undefined): string[] {
   const text = field?.trim()
-  if (text === undefined || text.length === 0 || text === NO_NAMES) return []
-  return text.split(',').map(name => name.trim()).filter(name => name.length > 0)
+  if (text === undefined || text.length === 0 || text === EMPTY_FIELD) return []
+  return splitFields(text, ',')
+    .map(name => unescapeField(name.trim()))
+    .filter(name => name.length > 0)
 }
 
 /**
@@ -250,7 +319,7 @@ export function encodeGlobalStatus(status: GlobalStatus): string {
  */
 export function decodeGlobalStatus(text: string): GlobalStatus | undefined {
   if (!text.startsWith(GLOBAL_STATUS_PREFIX)) return undefined
-  const [head = '', ...fields] = text.slice(GLOBAL_STATUS_PREFIX.length).split(';')
+  const [head = '', ...fields] = splitFields(text.slice(GLOBAL_STATUS_PREFIX.length), ';')
   const verdict = head.trim()
   if (verdict !== 'idle' && verdict !== 'waiting' && verdict !== 'safe') return undefined
   const byKey = new Map<string, string>()
@@ -352,45 +421,34 @@ export type TriageAction = (typeof TRIAGE_ACTIONS)[number]
 /** How one row is spelled in the published list; the wake field's state when the host can hand over the owed request. */
 const WAKE_YES = 'yes'
 
-/** Field text for an empty name list, so a field is never silently absent. */
-const NONE = 'none'
-
-/**
- * One field's text: a fact whose spelling may contain the two separators is
- * folded, because session ids and tool names are the host's data and the
- * encoding is the only thing that must survive being parsed.
- */
-function plainField(text: string): string {
-  return text.replace(/[;,\n]/g, '_')
-}
-
 /** One row's traces, as a list of `tool/callId` items. */
 function encodeTraces(traces: readonly TriageTrace[]): string {
-  if (traces.length === 0) return NONE
+  if (traces.length === 0) return EMPTY_FIELD
   return traces
-    .map(trace => `${plainField(trace.tool)}/${plainField(trace.callId)}`)
+    .map(trace => `${escapeField(trace.tool)}/${escapeField(trace.callId)}`)
     .join(', ')
 }
 
 /** Decode {@link encodeTraces}; an item without a tool name is not a trace. */
 function decodeTraces(field: string | undefined): TriageTrace[] {
   const text = field?.trim()
-  if (text === undefined || text.length === 0 || text === NONE) return []
-  return text.split(',').flatMap((item) => {
-    const entry = item.trim()
-    const at = entry.indexOf('/')
-    if (at <= 0) return []
-    return [{ tool: entry.slice(0, at), callId: entry.slice(at + 1) }]
+  if (text === undefined || text.length === 0 || text === EMPTY_FIELD) return []
+  return splitFields(text, ',').flatMap((item) => {
+    // Only the separator between the two halves is unescaped, so the split is
+    // exact even for a tool name or a call id that carries a slash itself.
+    const [tool = '', callId = ''] = splitFields(item.trim(), '/')
+    if (tool.length === 0) return []
+    return [{ tool: unescapeField(tool), callId: unescapeField(callId) }]
   })
 }
 
 /** One row's stop position, encoded as `<last event>` plus the step it belongs to. */
 function encodeStop(row: TriageRow): string {
-  if (row.lastEvent === undefined) return NONE
+  if (row.lastEvent === undefined) return EMPTY_FIELD
   const position = row.turn === undefined
     ? ''
     : `/turn ${String(row.turn)}${row.step === undefined ? '' : ` step ${String(row.step)}`}`
-  return `${plainField(row.lastEvent)}${position}`
+  return `${escapeField(row.lastEvent)}${position}`
 }
 
 /**
@@ -402,21 +460,14 @@ export function encodeTriageList(list: TriageList): string {
   const head = `${TRIAGE_PREFIX}${String(list.rows.length)}`
   return list.rows.reduce((text, row) => {
     const stopped = row.reading === 'unreadable' ? 'unreadable' : encodeStop(row)
-    return `${text}; row: ${plainField(row.sessionId)}`
+    return `${text}; row: ${escapeField(row.sessionId)}`
       + `; phase: ${row.phase}`
       + `; stopped: ${stopped}`
-      + `; traces: ${row.reading === 'unreadable' ? NONE : encodeTraces(row.traces)}`
-      + `; tools: ${row.reading === 'unreadable' || row.traces.length === 0 ? NONE : encodeNames(row.traces.map(trace => trace.tool))}`
+      + `; traces: ${row.reading === 'unreadable' ? EMPTY_FIELD : encodeTraces(row.traces)}`
+      + `; tools: ${row.reading === 'unreadable' || row.traces.length === 0 ? EMPTY_FIELD : encodeNames(row.traces.map(trace => trace.tool))}`
       + `; owed: ${row.owed ? WAKE_YES : 'no'}`
       + `; wake: ${row.wakeable ? WAKE_YES : 'no'}`
   }, head)
-}
-
-/** Decode one field of an encoded row, or `undefined` when the row does not carry it. */
-function fieldOf(fields: readonly string[], key: string): string | undefined {
-  const prefix = `${key}:`
-  const at = fields.findIndex(field => field.trim().startsWith(prefix))
-  return at < 0 ? undefined : fields[at]?.trim().slice(prefix.length).trim()
 }
 
 /**
@@ -426,7 +477,7 @@ function fieldOf(fields: readonly string[], key: string): string | undefined {
  */
 export function decodeTriageList(text: string): TriageList | undefined {
   if (!text.startsWith(TRIAGE_PREFIX)) return undefined
-  const [head = '', ...rest] = text.slice(TRIAGE_PREFIX.length).split(';')
+  const [head = '', ...rest] = splitFields(text.slice(TRIAGE_PREFIX.length), ';')
   if (!Number.isSafeInteger(Number(head.trim())) || Number(head.trim()) < 0) return undefined
   const rows: TriageRow[] = []
   let fields: string[] = []
@@ -437,22 +488,23 @@ export function decodeTriageList(text: string): TriageList | undefined {
     if (sessionId === undefined || phase === undefined || phase === 'safe') return
     const stopped = fieldOf(fields, 'stopped')
     const reading: TriageReading = stopped === 'unreadable' ? 'unreadable' : 'read'
-    // The event name may itself contain a slash (`tool/call`), so the name is
-    // matched lazily and the `/turn` suffix is what ends it. An unreadable row
-    // has no event to name, so it is not run through this at all.
-    const position = reading === 'unreadable'
+    // An encoded event name has every slash escaped, so the `/turn` suffix is
+    // the field's only raw slash and the lazy match ends exactly there. A row
+    // the host could not read has no event to name, and a row whose log ends on
+    // no event at all carries the empty marker instead.
+    const position = reading === 'unreadable' || stopped === undefined || stopped === EMPTY_FIELD
       ? null
-      : /^(.*?)(?:\/turn (\d+)(?: step (\d+))?)?$/.exec(stopped ?? '')
+      : /^(.*?)(?:\/turn (\d+)(?: step (\d+))?)?$/.exec(stopped)
     rows.push({
-      sessionId,
+      sessionId: unescapeField(sessionId),
       phase: phase as TriageRow['phase'],
       updatedAt: 0,
       reading,
       ...position === null
         ? {}
         : {
-          lastEvent: position[1] ?? '',
-          turn: Number(position[2]),
+          lastEvent: unescapeField(position[1] ?? ''),
+          ...position[2] === undefined ? {} : { turn: Number(position[2]) },
           ...position[3] === undefined ? {} : { step: Number(position[3]) },
         },
       traces: reading === 'unreadable' ? [] : decodeTraces(fieldOf(fields, 'traces')),

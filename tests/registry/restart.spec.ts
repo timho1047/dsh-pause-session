@@ -27,6 +27,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import type { AgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { apply, inject, name } from '../../src/index.ts'
 import { RESUME_DEFINITION_ID } from '../../src/shared.ts'
 import { FakeProvider, textResponse } from '../assumptions/fake-provider.ts'
@@ -104,15 +105,19 @@ interface RevivedProcess {
 }
 
 /**
- * Mount the same stack the child ran, in a fresh context, over one registry
- * root — with no agent yet, so the mount-time registry read is what decides
- * whether a session that wakes up later is held.
+ * Mount the same stack the child ran, in a fresh context, over one case's roots
+ * — with no agent yet, so the mount-time registry read is what decides whether
+ * a session that wakes up later is held. Session persistence is mounted because
+ * this process is what the morning really is: the registered session is brought
+ * back from its own log, and the registry is the only thing that decides it is
+ * held.
  */
-async function revive(registryRoot: string): Promise<RevivedProcess> {
+async function revive(caseRoot: string): Promise<RevivedProcess> {
   const ctx = new Context()
   await mountAgentLoopTestDependencies(ctx)
+  await ctx.plugin(JsonlSessionPersistence, { root: join(caseRoot, 'sessions'), compression: 'none' })
   await ctx.plugin(CommandRuntime)
-  await mountParkStorage(ctx, registryRoot)
+  await mountParkStorage(ctx, storageOf(caseRoot))
   const harness = await mountAgentLoopTestHarness(ctx)
   const provider = new FakeProvider([textResponse('an answer for a free session')])
   ctx.llm.registerAdapter(['fake'], provider)
@@ -141,19 +146,37 @@ const WAKE_UPS = [
   "a teammate's message",
 ] as const
 
-/** Open a session the way a wake-up source does, then deliver each message. */
-async function wake(
-  loop: RevivedProcess,
-  sessionId: string,
-  ...deliveries: readonly string[]
-): Promise<Agent> {
-  const agent = await loop.harness.create(SessionId(sessionId), { provider: 'fake', model: 'fake' })
+/**
+ * Bring one parked session back the way a wake-up source does: from its own
+ * stored log, in this process. The route comes from the case's own composition,
+ * exactly as the app's activation path supplies it.
+ */
+async function reopen(loop: RevivedProcess, sessionId: string): Promise<Agent> {
+  const handle = await loop.ctx.agents.resume({
+    resumeSessionId: SessionId(sessionId),
+    agentOptions: { provider: 'fake', model: 'fake' },
+  })
+  return handle.agent
+}
+
+/** Deliver each message through the session's inbox, where every wake-up lands. */
+function deliver(agent: Agent, ...deliveries: readonly string[]): void {
   for (const text of deliveries) {
     // The schedule source is the one descriptor these tests can build without
     // depending on the sending packages; the delivery entry is the same for all
     // three, which is what the hold is about.
     agent.followup(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'schedule' } }))
   }
+}
+
+/** Open a session nothing was parked under, then deliver each message to it. */
+async function openFresh(
+  loop: RevivedProcess,
+  sessionId: string,
+  ...deliveries: readonly string[]
+): Promise<Agent> {
+  const agent = await loop.harness.create(SessionId(sessionId), { provider: 'fake', model: 'fake' })
+  deliver(agent, ...deliveries)
   return agent
 }
 
@@ -169,11 +192,14 @@ describe('the park registry across a real process restart', () => {
     expect((await readParkRegistry(storageOf(caseRoot))).map(entry => [String(entry.sessionId), entry.phase]))
       .toEqual([['restart-registered', 'safe']])
 
-    const loop = await revive(storageOf(caseRoot))
+    const loop = await revive(caseRoot)
     try {
       // Scheduled task, webhook, and teammate deliveries all reach the session
-      // through its Agent, and none of them may reach the provider.
-      const woken = await wake(loop, 'restart-registered', 'wake up and spend tokens', ...WAKE_UPS)
+      // through its Agent, and none of them may reach the provider. The session
+      // itself comes back from the log the previous process left, which is the
+      // only thing the registry alone could not have supplied.
+      const woken = await reopen(loop, 'restart-registered')
+      deliver(woken, 'wake up and spend tokens', ...WAKE_UPS)
       await until(() => loop.seen.length === 1)
       expect(JSON.stringify(loop.seen[0]?.messages)).toContain('wake up and spend tokens')
       await settles()
@@ -189,7 +215,7 @@ describe('the park registry across a real process restart', () => {
 
       // A session created after the restart is not on the list: it sends and
       // receives normally.
-      const fresh = await wake(loop, 'restart-created-after', 'work I started tonight')
+      const fresh = await openFresh(loop, 'restart-created-after', 'work I started tonight')
       await until(() => loop.provider.requests.length === 1)
       await fresh.whenIdle()
       expect(loop.provider.requests[0]).toBe(loop.seen[1])
@@ -208,9 +234,9 @@ describe('the park registry across a real process restart', () => {
 
   it('does not hold the same session when the registry is empty', async () => {
     const caseRoot = temporaryRoot('dsh-safe-stop-restart-empty-')
-    const loop = await revive(storageOf(caseRoot))
+    const loop = await revive(caseRoot)
     try {
-      const agent = await wake(loop, 'restart-registered', 'nothing was ever parked here')
+      const agent = await openFresh(loop, 'restart-registered', 'nothing was ever parked here')
       await until(() => loop.provider.requests.length === 1)
       await agent.whenIdle()
       expect(turnEnd(agent)).toEqual({ turn: 1, reason: { kind: 'completed' } })
@@ -224,9 +250,10 @@ describe('the park registry across a real process restart', () => {
     await parkAndLeave(caseRoot, 'restart-clean-exit', 'exit')
     expect((await readParkRegistry(storageOf(caseRoot))).map(entry => entry.phase)).toEqual(['safe'])
 
-    const loop = await revive(storageOf(caseRoot))
+    const loop = await revive(caseRoot)
     try {
-      await wake(loop, 'restart-clean-exit', 'still asleep?')
+      const parked = await reopen(loop, 'restart-clean-exit')
+      deliver(parked, 'still asleep?')
       await until(() => loop.seen.length === 1)
       await settles()
       expect(loop.provider.requests).toHaveLength(0)

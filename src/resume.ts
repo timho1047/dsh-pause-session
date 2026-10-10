@@ -7,15 +7,20 @@
  * held; after a restart that input is still the last thing the session says and
  * the model still owes it an answer. What is missing is only a reason for the
  * loop to build a request again, and the documented way to ask for one is a
- * wake input — a user message the loop claims. Its content must leave the wire
- * request unchanged, and whether an empty message does that is a property of
- * the route's conversion rather than of the loop: the loop always builds the
- * empty message in, and the adapter below it either drops it or sends it.
- * The route is therefore resolved per session — from the request header the
- * session itself persisted — and the composition declares which routes drop an
- * empty user message. Every other route gets one fixed minimal marker instead:
- * visible on the wire, never an instruction, because a route that keeps an
- * empty message would otherwise put an empty user turn in front of the model.
+ * wake input — a user message the loop claims.
+ *
+ * The wake is invisible only on the routes the composition declares in
+ * `silentWakeRoutes`, whose conversion drops an empty user message. On every
+ * other route the loop's request carries one visible marker instead, and the
+ * marker reaches the model; that is an accepted cost of resuming at all.
+ * Whether an empty user message survives is a property of the route's
+ * conversion rather than of the loop, so the route is resolved per session —
+ * from the request header the session itself persisted.
+ *
+ * The wake message is attributed to this plugin, never to the user: it is text
+ * this module synthesized on the session's behalf, in the session's own log and
+ * in front of the model, and a downstream consumer has to be able to tell it
+ * apart from something the human typed.
  *
  * Only a cleanly parked session takes this path. A record that never reached
  * the park point, or whose flush did not finish, describes work whose durable
@@ -34,15 +39,34 @@ import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 // Type-only: brings `ctx.get('goals')` and the goal view this path reads.
 import type {} from '@deepseek-ai/dsh-goal'
 import type { PauseGate } from './gate.js'
+import { owesReply } from './history.js'
 import type { ParkRegistry } from './registry.js'
+import { describeError } from './shared.js'
 
-/** The one wake content a route that keeps an empty user message is given. */
-export const WAKE_MARKER = '.'
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    /**
+     * Text dsh-safe-stop synthesized on the session's behalf: the wake this
+     * path delivers and the unknown-outcome note a decision adds. Declared so
+     * the log, and anything reading it, can tell plugin-authored input from the
+     * user's own.
+     */
+    'safe-stop': { kind: 'safe-stop' }
+  }
+}
+
+/**
+ * The one wake content a route that keeps an empty user message is given. It
+ * names its producer, because it lands in the same user turn as the input the
+ * model owes an answer to and must not read as part of it.
+ */
+export const WAKE_MARKER = '[safe-stop: resumed from a pause]'
 
 /**
  * How one resume asks the loop for the request it owes the session:
  *
- * - `silent`: the clean path's wake, whose content leaves the wire unchanged.
+ * - `silent`: the clean path's wake — an empty input on a route the
+ *   composition declared silent, and the visible marker on any other route.
  * - `message`: the decision list's "continue, and say the tool outcome is
  *   unknown" — user-visible text on the wire by construction, and the only
  *   resume that is not invisible.
@@ -162,28 +186,6 @@ export interface ResumePath {
   setRearmGoal(sessionId: SessionId, rearmGoal: boolean): Promise<CommandResult>
 }
 
-/** Human-readable failure detail for a log line. */
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
-/**
- * Whether the loop owes this session an answer: its model history ends with
- * something a model has not replied to. That is exactly the input the park
- * point left pending — the claimed user message, or the tool results of the
- * step whose next request was held.
- */
-function owedReply(session: Session): boolean {
-  const messages = session.deriveMessages()
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index]
-    // System and developer entries are request framing, not conversation.
-    if (message === undefined || message.role === 'system' || message.role === 'developer') continue
-    return message.role !== 'assistant'
-  }
-  return false
-}
-
 /**
  * How a batch release is sequenced: the tree edge each child was found under,
  * and the depth levels a release walks, shallowest first.
@@ -244,22 +246,22 @@ export function installResumePath(
    * request is already standing at the gate or the loop is already running: the
    * continuation is in flight, and a second wake would duplicate it. The content
    * is the route's business only for the silent wake; a note is the user's
-   * decision and goes on the wire as written, on every route.
+   * decision and goes on the wire as written, on every route. Either way the
+   * message is attributed to this plugin: the wake is this path speaking on the
+   * session's behalf, not the user's own input.
    * @param agent - the live agent to wake.
    * @param request - which wake this resume delivers.
-   * @returns whether a wake input was delivered.
    */
-  const wake = (agent: Agent, request: WakeRequest): boolean => {
-    if (request.kind === 'none') return false
-    if (gate.isHeld(agent.id) || agent.status !== 'idle') return false
-    if (!owedReply(agent.session)) return false
+  const wake = (agent: Agent, request: WakeRequest): void => {
+    if (request.kind === 'none') return
+    if (gate.isHeld(agent.id) || agent.status !== 'idle') return
+    if (!owesReply(agent.session.deriveMessages())) return
     const provider = routeOf(agent.session)?.provider
-    if (provider === undefined) return false
+    if (provider === undefined) return
     const content: ContentBlock[] = request.kind === 'message'
       ? [{ type: 'text', text: request.text }]
       : wakeContent(provider)
-    agent.followup(createUserMessage({ content, source: { kind: 'user' } }))
-    return true
+    agent.followup(createUserMessage({ content, source: { kind: 'safe-stop' } }))
   }
 
   /**
@@ -281,7 +283,7 @@ export function installResumePath(
       if (goal.roundsStarted >= goal.maxGoalRounds) return
       goals.resume(agent, { id: goal.id, revision: goal.revision })
     } catch (error: unknown) {
-      ctx.logger.warn(`safe-stop: could not re-open the goal of "${agent.id}": ${describe(error)}`)
+      ctx.logger.warn(`safe-stop: could not re-open the goal of "${agent.id}": ${describeError(error)}`)
     }
   }
 
@@ -322,7 +324,7 @@ export function installResumePath(
         ...parent === undefined ? {} : { parentAgent: parent },
       })).agent
     } catch (error: unknown) {
-      ctx.logger.warn(`safe-stop: could not open "${sessionId}" from its stored log: ${describe(error)}`)
+      ctx.logger.warn(`safe-stop: could not open "${sessionId}" from its stored log: ${describeError(error)}`)
       return {
         sessionId,
         resumed: false,
@@ -346,7 +348,7 @@ export function installResumePath(
     try {
       await registry.forget(sessionId)
     } catch (error: unknown) {
-      ctx.logger.warn(`safe-stop: could not drop "${sessionId}" from the pause registry: ${describe(error)}`)
+      ctx.logger.warn(`safe-stop: could not drop "${sessionId}" from the pause registry: ${describeError(error)}`)
       return { sessionId, resumed: false, refusal: 'unrecorded', answer: { kind: 'error', text: UNRECORDED_TEXT } }
     }
     gate.resume(sessionId)
@@ -461,7 +463,7 @@ export function installResumePath(
             if (owned.has(child.id)) parentOf.set(child.id, sessionId)
           }
         } catch (error: unknown) {
-          ctx.logger.warn(`safe-stop: could not read the children of "${sessionId}": ${describe(error)}`)
+          ctx.logger.warn(`safe-stop: could not read the children of "${sessionId}": ${describeError(error)}`)
         }
       }
     }
@@ -508,7 +510,7 @@ export function installResumePath(
       try {
         await registry.setRearmGoal(sessionId, rearmGoal)
       } catch (error: unknown) {
-        ctx.logger.warn(`safe-stop: could not record the goal opt-out of "${sessionId}": ${describe(error)}`)
+        ctx.logger.warn(`safe-stop: could not record the goal opt-out of "${sessionId}": ${describeError(error)}`)
         return { kind: 'error', text: UNRECORDED_TEXT }
       }
       return { kind: 'success', text: rearmGoal ? REARM_GOAL_ON_TEXT : REARM_GOAL_OFF_TEXT }

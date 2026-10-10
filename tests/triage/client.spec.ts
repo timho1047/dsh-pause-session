@@ -16,7 +16,7 @@ import { SafeStopGlobalControl, TRIAGE_DECISION_COMMAND } from '../../src/client
 import type { TriageReading } from '../../src/client/global.ts'
 import { globalStopView, triageView } from '../../src/client/view.ts'
 import {
-  decodeTriageList, encodeGlobalStatus, encodeTriageList, TRIAGE_COMMAND,
+  decodeTriageList, encodeGlobalStatus, encodeTriageList, STATE_ALL_COMMAND, TRIAGE_COMMAND,
 } from '../../src/shared.ts'
 import type { GlobalStatus, TriageList, TriageRow } from '../../src/shared.ts'
 
@@ -149,12 +149,15 @@ describe('the decision list in the browser', () => {
     for (const action of ['continue', 'note', 'review', 'leave'] as const) {
       host.rows = [row({ sessionId: `session-${action}` })]
       await control.decide(`session-${action}`, action)
-      expect(host.lines[0]).toBe(`/${TRIAGE_DECISION_COMMAND[action]} session-${action}`)
+      // The read comes first: the host acts only on a row it has shown the
+      // session the decision is addressed to, and that read is what shows it.
+      expect(host.lines).toEqual([
+        `/${TRIAGE_COMMAND}`,
+        `/${TRIAGE_DECISION_COMMAND[action]} session-${action}`,
+        `/${STATE_ALL_COMMAND}`,
+      ])
       host.lines.length = 0
     }
-    // Every decision re-reads the list and the verdict: the host's answer is
-    // what the next render shows, never this control's assumption.
-    expect(host.lines.length).toBe(0)
   })
 
   it('shows the panel entry point only when the host says something did not stop cleanly', () => {
@@ -171,5 +174,39 @@ describe('the decision list in the browser', () => {
     expect(decodeTriageList(list)?.rows[0]).toMatchObject({ sessionId: 'overnight-tools', phase: 'draining' })
     expect(decodeTriageList(encodeGlobalStatus(status()))).toBeUndefined()
     expect(decodeTriageList('safe-stop: draining')).toBeUndefined()
+  })
+
+  it('round-trips a row whole, separators and all', () => {
+    // Every field the host's own data can put a separator in: the session id in
+    // the row field, the tool and call id in a trace, and the event name in the
+    // stop position. A folded spelling would name a different session, which is
+    // a row looked up again under the wrong name.
+    const spelled = row({
+      sessionId: 'overnight;tools,one',
+      lastEvent: 'turn/end',
+      traces: [{ tool: 'a/b;c,d', callId: 'call-1/x' }],
+    })
+    const text = encodeTriageList({ rows: [spelled] })
+    const decoded = decodeTriageList(text)
+    expect(decoded?.rows).toHaveLength(1)
+    expect(decoded?.rows[0]).toMatchObject({
+      sessionId: 'overnight;tools,one',
+      phase: 'draining',
+      reading: 'read',
+      lastEvent: 'turn/end',
+      turn: 1,
+      step: 1,
+      traces: [{ tool: 'a/b;c,d', callId: 'call-1/x' }],
+      owed: true,
+      wakeable: true,
+    })
+    // A row that names no stop position says so, rather than decoding the
+    // empty marker as an event.
+    const bare = decodeTriageList(encodeTriageList({ rows: [row({ lastEvent: undefined, turn: undefined, step: undefined })] }))
+    expect(bare?.rows[0]?.lastEvent).toBeUndefined()
+    expect(bare?.rows[0]?.turn).toBeUndefined()
+    // A session id that is exactly the empty marker is still that session.
+    const marker = decodeTriageList(encodeTriageList({ rows: [row({ sessionId: '-' })] }))
+    expect(marker?.rows[0]?.sessionId).toBe('-')
   })
 })

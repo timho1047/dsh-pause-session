@@ -6,10 +6,9 @@
  * event: the Client's Remote namespaces and the forwarded-event allowlist are
  * compiled into the harness's own API assembly. The documented Client-callable
  * Host entry point is therefore a session command run through
- * `ctx.remote.commands.execute` (plugin-development `references/user-actions.md`),
- * and the one live channel such a plugin can publish through is the command
- * registry itself — `commands/change` is a forwarded event, and
- * `commands.list(sessionId)` is a Client-callable read.
+ * `ctx.remote.commands.execute`, and the one live channel such a plugin can
+ * publish through is the command registry itself — `commands/change` is a
+ * forwarded event, and `commands.list(sessionId)` is a Client-callable read.
  *
  * So the resume definition IS the paused marker: it is registered on a paused
  * session's own agent context and removed on resume, and the browser half reads
@@ -29,14 +28,21 @@
  * published, so a restart re-holds exactly the sessions the last process left
  * parked — and a phase that could not be recorded is never shown as cleaner
  * than the record says.
+ *
+ * A park verb changes state, so it acts only on a person's command: a command
+ * dispatched from inside a model turn is refused. The decision verbs add the
+ * one binding their target needs — the row must be one the calling session was
+ * shown — and that rule lives with the list (`./triage.ts`).
  * @module dsh-safe-stop/control
  */
 
 import type { Context, Fiber } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { CommandDefinitionId } from '@deepseek-ai/dsh-commands/brand'
-import type { CommandResult } from '@deepseek-ai/dsh-commands'
+import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
 import { SessionId } from '@deepseek-ai/dsh-session'
+// Type-only: the optional `ctx.sessionPersistence` observation seam.
+import type {} from '@deepseek-ai/dsh-session-persistence'
 import type { PauseGate } from './gate.js'
 import { mountGlobalStop } from './global.js'
 import type { GlobalStop, LivePark } from './global.js'
@@ -49,7 +55,7 @@ import type { TriageListService } from './triage.js'
 import { TRIAGE_NOT_LISTED_TEXT } from './triage.js'
 import type { TriageAction } from './shared.js'
 import {
-  encodeParkStatus, encodeTriageList, PAUSE_COMMAND, PAUSE_DEFINITION_ID, RESUME_ALL_COMMAND,
+  describeError, encodeParkStatus, encodeTriageList, PAUSE_COMMAND, PAUSE_DEFINITION_ID, RESUME_ALL_COMMAND,
   RESUME_ALL_DEFINITION_ID, RESUME_COMMAND, RESUME_DEFINITION_ID, STATE_ALL_COMMAND, STATE_ALL_DEFINITION_ID,
   STATUS_COMMAND, STATUS_DEFINITION_ID, STOP_ALL_COMMAND, STOP_ALL_DEFINITION_ID, TRIAGE_COMMAND,
   TRIAGE_CONTINUE_COMMAND, TRIAGE_CONTINUE_DEFINITION_ID, TRIAGE_DEFINITION_ID, TRIAGE_LEAVE_COMMAND,
@@ -64,6 +70,60 @@ const PAUSED_TEXT = 'This session is paused. It stops once the work in flight dr
 
 /** Result copy for a press or a release the durable registry refused to record. */
 const UNRECORDED_TEXT = 'safe-stop could not write the pause registry, so it did not change the pause state.'
+
+/**
+ * Result copy for a state-changing park verb issued from inside a model turn.
+ * The invocation carries no origin of its own, so this refusal is the plugin's
+ * own reading of the one signal that separates a person's command from a
+ * model's.
+ */
+export const UNATTENDED_TEXT = 'safe-stop did not act: this command came from inside a model turn,'
+  + ' and the park verbs act only on a person\'s command.'
+
+/**
+ * Whether a command is being dispatched from inside a model turn.
+ *
+ * A person's slash command reaches the registry through the Client's command
+ * Remote with no model turn around it; the loop runs every model-driven step —
+ * tool calls included — under its own initiator boundary. The invocation itself
+ * carries no origin: `command/run` records a constant `{ kind: 'user' }` source
+ * for every executor caller. This is therefore the one signal available, and a
+ * state-changing verb refuses when it says a model is driving.
+ * @param ctx - host context carrying the agent store.
+ * @returns whether a model turn is the initiator of this call.
+ */
+function modelIssued(ctx: Context): boolean {
+  try {
+    return ctx.agents.currentInitiator() !== undefined
+  } catch {
+    // The initiator scope is already disposed: this call belongs to teardown,
+    // where refusing is the direction that cannot spend anyone's money.
+    return true
+  }
+}
+
+/**
+ * Whether this host can read one recorded session at all — a live session, or a
+ * stored log the persistence backend can observe.
+ * @param ctx - host context carrying the session store and the optional persistence service.
+ * @param sessionId - the recorded session to look for.
+ * @returns whether the session can be acted on here.
+ */
+async function sessionReadable(ctx: Context, sessionId: SessionId): Promise<boolean> {
+  if (ctx.sessions.get(sessionId) !== undefined) return true
+  const persistence = ctx.get('sessionPersistence')
+  // No persistence service means no stored session is readable here, which is
+  // the same answer the decision list's own cold read gives.
+  if (persistence === undefined) return false
+  try {
+    return await persistence.stat(sessionId) !== undefined
+  } catch (error: unknown) {
+    // A failing observation is not proof of absence, and dropping a park on a
+    // guess is the one direction this control must not take.
+    ctx.logger.warn(`safe-stop: could not look for the stored log of "${sessionId}": ${describeError(error)}`)
+    return true
+  }
+}
 
 /** One session's park in progress. */
 interface ParkMark {
@@ -108,24 +168,11 @@ function statusOf(mark: ParkMark, runningTools: readonly string[]): ParkStatus {
 /** What mounting the session control hands back to the plugin entry. */
 export interface SessionControl {
   /**
-   * Hold every session the registry remembers, and publish the marker for the
-   * ones that already have a live agent. Called once, right after mount.
+   * Hold every session the registry remembers and can read, and publish the
+   * marker for the ones that already have a live agent. Called once, right
+   * after mount.
    */
   adopt(): Promise<void>
-  /**
-   * Resume every session the registry remembers, clean ones only — the morning
-   * path when nothing is live yet. One session's failure never stops the rest.
-   * @returns one attempt per recorded session, in registry order.
-   */
-  resumeParked(): Promise<readonly ResumeAttempt[]>
-  /**
-   * Record or clear one session's goal opt-out, for the control surface a later
-   * task puts in front of it.
-   * @param sessionId - the parked session to change.
-   * @param rearmGoal - whether the clean resume path may re-arm its goal.
-   * @returns the copy for whoever asked.
-   */
-  setRearmGoal(sessionId: SessionId, rearmGoal: boolean): Promise<CommandResult>
 }
 
 /** How resuming all parked sessions answers the command that asked for it. */
@@ -168,6 +215,13 @@ export function installSessionControl(
   const marks = new Map<SessionId, ParkMark>()
   /** Publish fibers per paused session; disposing one removes both commands. */
   const markers = new Map<SessionId, Fiber>()
+  /**
+   * Records this process did not hold again because the session behind them
+   * cannot be read here. Nothing can be parked, released, or decided for them
+   * from this process, so they are not marks — and the aggregate names them
+   * instead of counting them among the sessions this park owns.
+   */
+  const unheld = new Set<SessionId>()
   /** Bumped by every mark and every cancel; a stale generation publishes nothing. */
   let generation = 0
 
@@ -177,7 +231,7 @@ export function installSessionControl(
     if (fiber === undefined) return
     markers.delete(sessionId)
     void Promise.resolve(fiber.dispose()).catch((error: unknown) => {
-      ctx.logger.warn(`safe-stop: session control cleanup failed: ${error instanceof Error ? error.message : String(error)}`)
+      ctx.logger.warn(`safe-stop: session control cleanup failed: ${describeError(error)}`)
     })
   }
 
@@ -198,7 +252,7 @@ export function installSessionControl(
     try {
       await registry.record(sessionId, phase)
     } catch (error: unknown) {
-      ctx.logger.warn(`safe-stop: could not record the park state of "${sessionId}" as ${phase}: ${error instanceof Error ? error.message : String(error)}`)
+      ctx.logger.warn(`safe-stop: could not record the park state of "${sessionId}" as ${phase}: ${describeError(error)}`)
       return false
     }
     mark.phase = phase
@@ -236,7 +290,9 @@ export function installSessionControl(
         definitionId: CommandDefinitionId(RESUME_DEFINITION_ID),
         name: RESUME_COMMAND,
         description: 'Resume this paused Session',
-        handler: async (invocation) => (await resumePath.resumeSession(invocation.agent.id, { kind: 'silent' })).answer,
+        handler: async (invocation) => (modelIssued(ctx)
+          ? { kind: 'error', text: UNATTENDED_TEXT }
+          : (await resumePath.resumeSession(invocation.agent.id, { kind: 'silent' })).answer),
       })
       scope.commands.register({
         definitionId: CommandDefinitionId(STATUS_DEFINITION_ID),
@@ -290,7 +346,7 @@ export function installSessionControl(
       await ctx.sessions.flush(session)
     } catch (error: unknown) {
       if (mark.generation !== attempt) return
-      ctx.logger.warn(`safe-stop: flush failed for "${sessionId}": ${error instanceof Error ? error.message : String(error)}`)
+      ctx.logger.warn(`safe-stop: flush failed for "${sessionId}": ${describeError(error)}`)
       await commit(sessionId, mark, 'flush-failed')
       return
     }
@@ -347,7 +403,7 @@ export function installSessionControl(
     try {
       await registry.forget(sessionId)
     } catch (error: unknown) {
-      ctx.logger.warn(`safe-stop: could not drop "${sessionId}" from the pause registry: ${error instanceof Error ? error.message : String(error)}`)
+      ctx.logger.warn(`safe-stop: could not drop "${sessionId}" from the pause registry: ${describeError(error)}`)
       return { kind: 'error', text: UNRECORDED_TEXT }
     }
     gate.resume(sessionId)
@@ -370,13 +426,15 @@ export function installSessionControl(
   /**
    * The one handler the four decision verbs share. The list is addressed by
    * session like every other command on this channel, so the row the user
-   * decided on travels as the command's own input — and a command aimed at a
-   * session that is not on the list changes nothing.
+   * decided on travels as the command's own input. The calling session is what
+   * makes that row a target: the list acts only on rows it published to this
+   * caller, and never on a model's command.
    */
-  const decide = (action: TriageAction) => async (invocation: { readonly rawInput: string }): Promise<CommandResult> => {
+  const decide = (action: TriageAction) => async (invocation: CommandInvocation): Promise<CommandResult> => {
+    if (modelIssued(ctx)) return { kind: 'error', text: UNATTENDED_TEXT }
     const target = invocation.rawInput.trim()
     if (target.length === 0) return { kind: 'error', text: TRIAGE_NOT_LISTED_TEXT }
-    return await triage.decide(SessionId(target), action)
+    return await triage.decide(invocation.agent.id, SessionId(target), action)
   }
 
   // The whole-app park reads the marks through this one accessor, so the
@@ -392,6 +450,7 @@ export function installSessionControl(
       // any further here.
       moving: mark.origin === 'press' && mark.phase !== 'flush-failed',
     }])),
+    unheld: () => unheld,
   })
 
   // One effect owns the whole surface: unloading removes the pause verb, the
@@ -402,6 +461,7 @@ export function installSessionControl(
       name: PAUSE_COMMAND,
       description: 'Pause this Session before its next model request',
       handler: async (invocation) => {
+        if (modelIssued(ctx)) return { kind: 'error', text: UNATTENDED_TEXT }
         const sessionId = invocation.agent.id
         if (!await press(sessionId)) return { kind: 'error', text: UNRECORDED_TEXT }
         // The press returns now: the drain happens while the user stays free to
@@ -417,7 +477,9 @@ export function installSessionControl(
       definitionId: CommandDefinitionId(RESUME_ALL_DEFINITION_ID),
       name: RESUME_ALL_COMMAND,
       description: 'Resume every Session safe-stop parked',
-      handler: async () => ({ kind: 'success', text: summarizeResume(await resumePath.resumeParked()) }),
+      handler: async () => (modelIssued(ctx)
+        ? { kind: 'error', text: UNATTENDED_TEXT }
+        : { kind: 'success', text: summarizeResume(await resumePath.resumeParked()) }),
     })
     // The one-press whole-app park. Registered globally for the same reason:
     // the sessions it registers are the ones the user is not looking at.
@@ -425,11 +487,12 @@ export function installSessionControl(
       definitionId: CommandDefinitionId(STOP_ALL_DEFINITION_ID),
       name: STOP_ALL_COMMAND,
       description: 'Pause every running Session and its subagents',
-      handler: async () => globalStop.pressAll(),
+      handler: async () => (modelIssued(ctx) ? { kind: 'error', text: UNATTENDED_TEXT } : globalStop.pressAll()),
     })
     // The aggregate read behind the whole-app control. Its result carries the
     // state as of this read, which is what makes a moving park observable at
-    // all — a descriptor cannot change after registration.
+    // all — a descriptor cannot change after registration. A read changes no
+    // state, so it is open to any caller.
     yield ctx.commands.register({
       definitionId: CommandDefinitionId(STATE_ALL_DEFINITION_ID),
       name: STATE_ALL_COMMAND,
@@ -440,12 +503,13 @@ export function installSessionControl(
     // registered globally for the same reason the whole-app verbs are: the
     // sessions they act on are the ones with no live agent to carry a command.
     // The decisions take the listed session as their input, because the command
-    // channel is addressed by the session the user is typing on.
+    // channel is addressed by the session the user is typing on; the read
+    // records what it showed that session, which is what the decisions act on.
     yield ctx.commands.register({
       definitionId: CommandDefinitionId(TRIAGE_DEFINITION_ID),
       name: TRIAGE_COMMAND,
       description: 'List every Session that did not stop cleanly',
-      handler: async () => ({ kind: 'success', text: encodeTriageList(await triage.read()) }),
+      handler: async (invocation) => ({ kind: 'success', text: encodeTriageList(await triage.read(invocation.agent.id)) }),
     })
     yield ctx.commands.register({
       definitionId: CommandDefinitionId(TRIAGE_CONTINUE_DEFINITION_ID),
@@ -502,10 +566,18 @@ export function installSessionControl(
   return {
     adopt: async () => {
       for (const entry of registry.list()) {
-        // Every registered session is held again, whether or not anything is
-        // live: the request that wakes it is the one this gate must catch, and
-        // the wake-up may come from a scheduled task or a webhook long after
-        // this mount.
+        // Every registered session this host can read is held again, whether or
+        // not anything is live: the request that wakes it is the one this gate
+        // must catch, and the wake-up may come from a scheduled task or a
+        // webhook long after this mount. A record whose session cannot be read
+        // is not held — the id would be pinned with nothing behind it and no
+        // verb could ever clear it — and is reported instead.
+        if (!await sessionReadable(ctx, entry.sessionId)) {
+          unheld.add(entry.sessionId)
+          ctx.logger.warn(`safe-stop: the pause recorded for "${entry.sessionId}" is not held:`
+            + ' this host cannot read that session')
+          continue
+        }
         if (gate.pause(entry.sessionId)) {
           marks.set(entry.sessionId, { phase: entry.phase, generation: ++generation, origin: 'registry' })
         }
@@ -516,7 +588,5 @@ export function installSessionControl(
       // re-publishes it for agents that predate this mount.
       for (const agent of ctx.agents.list()) sync(agent.id)
     },
-    resumeParked: () => resumePath.resumeParked(),
-    setRearmGoal: (sessionId, rearmGoal) => resumePath.setRearmGoal(sessionId, rearmGoal),
   }
 }
