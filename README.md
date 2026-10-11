@@ -49,3 +49,9 @@ the pause or resume path.
 [REHEARSAL.md](REHEARSAL.md) is the end-to-end acceptance run: precedence for
 what the automated suite already proves, how to install, the steps to walk, and
 the rollback if the profile will not start.
+
+[docs/how-it-works.html](docs/how-it-works.html) is the picture of the
+implementation — the press and the command channel, the gate at the model
+request boundary, the drain and the durable registry, and the morning resume —
+with the constraint that shaped each part. It is generated from
+[docs/how-it-works.architecture.json](docs/how-it-works.architecture.json).
