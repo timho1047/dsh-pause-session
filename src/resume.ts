@@ -34,7 +34,6 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type { CommandResult } from '@deepseek-ai/dsh-commands'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, LlmCallConfig } from '@deepseek-ai/dsh-llm'
@@ -282,21 +281,22 @@ export function installResumePath(
    * recorded. The loop refuses to build a request without a provider and model,
    * and the persisted header is what the app's own activation path uses too, so
    * this resumes onto the route the session stopped on.
+   *
+   * 0.2.2 replaced the installed route selection with the durable model-selection
+   * fold: `agent.model.current()` already returns a route replayed from the
+   * Session's own request headers, and `select()` records the header's route when
+   * that fold and the Agent options are both empty. The old per-agent
+   * `installModelSelection(agentCtx, selection)` no longer accepts a selection.
    */
   const ensureRoute = (agent: Agent): void => {
-    if (agent.options.provider !== undefined && agent.options.model !== undefined) return
+    if (agent.model.current() !== undefined) return
     const config = routeOf(agent.session)
     if (config === undefined) return
-    const current = {
+    agent.model.select({
       provider: config.provider,
       model: config.model,
       ...config.reasoningEffort === undefined ? {} : { reasoningEffort: config.reasoningEffort },
-    }
-    // Scoped to the agent: the selection is the agent's route, not the plugin's.
-    agent.ctx.effect(
-      () => installModelSelection(agent.ctx, { current, assembled: undefined }),
-      'safe-stop: resumed route',
-    )
+    })
   }
 
   /** What one wake input carries for the route in use. */

@@ -5,10 +5,11 @@
  * Two facts decide that, and each has its own owner:
  *
  * - Whether a turn is open is derived state the harness already maintains:
- *   `dsh-agent-loop` registers the `turnBoundary` session projection, which
- *   folds `turn/start`, `turn/end`, `step/start`, and `step/end` into
- *   `openTurnStartSeq`. Reading it is a synchronous projection read, not a scan
- *   of the event log (synchronous history reads are prohibited for new code).
+ *   the agent registry owns the `turnBoundary` session projection, which folds
+ *   `turn/start`, `turn/end`, `step/start`, and `step/end` into
+ *   `openTurnStartSeq`. Reading it through `ctx.agents` is a synchronous
+ *   projection read, not a scan of the event log (synchronous history reads are
+ *   prohibited for new code).
  * - Which tool is in flight is not projected anywhere, so this module folds the
  *   `tool/call` → `tool/result` pairing itself from the post-commit
  *   `session/event` feed. The fold is incremental and started at plugin mount,
@@ -18,8 +19,8 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
-// Type-only: pulls the projection registry's Context merge (ctx.sessionProjections).
-import type {} from '@deepseek-ai/dsh-session-projection'
+// Type-only: pulls the agent registry's Context merge (ctx.agents).
+import type {} from '@deepseek-ai/dsh-agent'
 
 /** One session's current activity, as the control reports it. */
 export interface ParkActivity {
@@ -45,13 +46,9 @@ export interface ParkWatch {
   onChange(listener: (sessionId: SessionId) => void): () => void
 }
 
-/** The `turnBoundary` projection this control needs, or a loud failure. */
+/** Whether the agent registry's `turnBoundary` fold reports an open turn. */
 function turnOpen(ctx: Context, session: Session): boolean {
-  const boundary = ctx.sessionProjections.stateOf(session, 'turnBoundary')
-  if (boundary === undefined) {
-    throw new Error('safe-stop requires the turnBoundary session projection (mounted by dsh-agent-loop)')
-  }
-  return boundary.openTurnStartSeq !== null
+  return ctx.agents.turnBoundaryOf(session).openTurnStartSeq !== null
 }
 
 /**
