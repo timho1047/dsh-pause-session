@@ -4,6 +4,8 @@ English | [中文](README.zh.md)
 
 <p align="center"><img src="icon.svg" width="64" height="64" alt="dsh-pause-session icon"></p>
 
+[npm: dsh-pause-session](https://www.npmjs.com/package/dsh-pause-session)
+
 Pause every running DSH session and its subagents before you leave, then resume
 them later.
 
@@ -22,12 +24,12 @@ included, and the pause survives a DSH restart.
 
 ## Quick start
 
-1. Open the **Plugins** page in the DSH Web sidebar and install this directory
-   as a bundle. The repository ships the built `lib/` tree; if you changed the
-   source, run `pnpm run build` first. From a session in that profile,
-   `plugin_manager` can do the same with `install_bundle` and the directory's
-   absolute path. The local development layout is in
-   [DEVELOPMENT.md](DEVELOPMENT.md).
+1. Open the **Plugins** page in the DSH Web sidebar and install
+   `dsh-pause-session` from npm. From a session in that profile, `plugin_manager`
+   can do the same with `install_bundle` and `target` = `dsh-pause-session`. To
+   install a local checkout instead, use its absolute path; the repository
+   ships the built `lib/` tree, so only changed sources need a rebuild. The
+   local development layout is in [DEVELOPMENT.md](DEVELOPMENT.md).
 2. Open the session you want to pause. Press the pause button beside its title
    to pause that session and its subagents, or press the pill on the right side
    of the header to pause every running session tree.
