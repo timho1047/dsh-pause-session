@@ -3,3 +3,13 @@ lib/
 *.tsbuildinfo
 .e2e/
 .scratch/
+
+.env
+.env.*
+.DS_Store
+*.log
+*.pem
+*.key
+*.p12
+*.pfx
+.npmrc

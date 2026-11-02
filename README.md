@@ -42,6 +42,13 @@ half builds to `lib/client.js`, the `window.__ModuleLoader__` bundle the browser
 loads with the id `dsh-pause`. `tsdown.client.ts` is the vendored
 client-bundle preset shared by the plugins in this directory.
 
+The development dependencies link to `../../deepseek-harness`, so this
+repository is meant to live inside a DSH source checkout at
+`dsh-plugins/dsh-pause`. The published npm packages are older than the
+`0.2.2-alpha.2` APIs this plugin uses, so a standalone clone cannot run the
+typecheck, build, and test commands until those packages are published at a
+matching version.
+
 ## Design record
 
 The spec and the task breakdown live under `.scratch/pause/`, which is
@@ -55,9 +62,3 @@ the pause or resume path.
 [REHEARSAL.md](REHEARSAL.md) is the end-to-end acceptance run: precedence for
 what the automated suite already proves, how to install, the steps to walk, and
 the rollback if the profile will not start.
-
-[docs/how-it-works.html](docs/how-it-works.html) is the picture of the
-implementation — the press and the command channel, the gate at the model
-request boundary, the drain and the durable registry, and the morning resume —
-with the constraint that shaped each part. It is generated from
-[docs/how-it-works.architecture.json](docs/how-it-works.architecture.json).
