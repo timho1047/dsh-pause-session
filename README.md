@@ -1,5 +1,7 @@
 # dsh-pause
 
+English | [中文](README.zh.md)
+
 Pause every running DSH session — and its subagents — at a safe point before you
 leave, then resume them the next morning as if nothing was interrupted.
 
