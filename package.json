@@ -32,7 +32,8 @@
     "LICENSE",
     "cordis.patch.yml",
     "locale/*.json",
-    "icon.svg"
+    "icon.svg",
+    "docs/images/pause-controls.webp"
   ],
   "scripts": {
     "build:host": "tsc -p tsconfig.json",

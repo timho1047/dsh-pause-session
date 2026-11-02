@@ -14,6 +14,12 @@ included, and the pause survives a DSH restart.
 > Status: beta. Tested against DSH `0.2.2-alpha.2`; the end-to-end rehearsal is
 > tracked in [REHEARSAL.md](REHEARSAL.md).
 
+<p align="center">
+  <img src="docs/images/pause-controls.webp" alt="dsh-pause controls showing a paused session and All Paused for the whole app" width="100%">
+</p>
+
+*The session is paused; the global pill shows All Paused (1/1).*
+
 ## Quick start
 
 1. If you are installing from a checkout rather than a packaged release, run

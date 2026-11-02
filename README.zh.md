@@ -10,6 +10,12 @@ dsh-pause 会把每个会话停在同一个点：当前已经运行的工具先�
 
 > 状态：beta。已针对 DSH `0.2.2-alpha.2` 验证；完整的实机演练见 [REHEARSAL.md](REHEARSAL.md)。
 
+<p align="center">
+  <img src="docs/images/pause-controls.webp" alt="dsh-pause 控件：会话已暂停，全局显示全部已暂停" width="100%">
+</p>
+
+*会话已暂停；全局控件显示“全部已暂停”（1/1）。*
+
 ## 快速开始
 
 1. 如果安装的是源码 checkout 而不是已打包的 release，先执行 `pnpm run build`。然后打开 DSH Web 侧边栏的 **Plugins** 页面，把本目录作为 bundle 安装。也可以在该 profile 的会话里用 `plugin_manager` 的 `install_bundle`，传入本目录的绝对路径。本地开发布局见 [DEVELOPMENT.md](DEVELOPMENT.md)。
