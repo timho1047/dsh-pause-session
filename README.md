@@ -24,19 +24,28 @@ included, and the pause survives a DSH restart.
 
 ## Quick start
 
-1. Install the npm package into the `web` profile from a terminal:
+1. Install the plugin for your target:
+
+   **Desktop** — open the **Plugins** page in the Desktop sidebar and install
+   `dsh-pause-session` there.
+
+   **Web profile, from npm:**
 
    ```sh
    dsh plugin --profile web add dsh-pause-session
    ```
 
-   The command installs the package and adds its bundle layer to the profile.
-   Restart the DSH Web process once so the running process loads the new client
-   bundle. The sidebar **Plugins** page is mainly the desktop installation path.
-   To install a local checkout instead, pass its absolute path in place of the
-   package name; the repository ships the built `lib/` tree, so only changed
-   sources need a rebuild. The local development layout is in
-   [DEVELOPMENT.md](DEVELOPMENT.md).
+   **Web profile, from source:**
+
+   ```sh
+   git clone https://github.com/timho1047/dsh-pause-session.git
+   dsh plugin --profile web add "$PWD/dsh-pause-session"
+   ```
+
+   For either Web installation, restart the DSH Web process once so the running
+   process loads the new client bundle. The checkout ships the built `lib/`
+   tree, so no separate build is needed; only changed sources require a rebuild.
+   The local development layout is in [DEVELOPMENT.md](DEVELOPMENT.md).
 2. Open the session you want to pause. Press the pause button beside its title
    to pause that session and its subagents, or press the pill on the right side
    of the header to pause every running session tree.
