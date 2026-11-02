@@ -7,7 +7,7 @@
  * the registry in a second context over the same storage root (what a new
  * process does), and the live side through the same command registry the
  * browser half reads.
- * @module dsh-pause/test/registry/registry
+ * @module dsh-pause-session/test/registry/registry
  */
 
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -231,7 +231,7 @@ describe('the durable park registry', () => {
       ['a truncated document', `${storedUnit('safe').slice(0, 30)}`, 'malformed-medium'],
       ['a record this build cannot read', storedUnit('maybe parked'), 'invalid-record'],
     ] as const) {
-      const root = temporaryRoot('dsh-pause-corrupt-')
+      const root = temporaryRoot('dsh-pause-session-corrupt-')
       const loop = await mountFakeLoop('registry-corrupt', [])
       try {
         await loop.ctx.plugin(CommandRuntime)

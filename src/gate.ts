@@ -7,7 +7,7 @@
  * committed, and — because nothing pulls the adapter — no timer is armed
  * anywhere. Machine sleep, network loss, and the adapter's stream-idle
  * watchdog therefore cannot touch a parked request.
- * @module dsh-pause/gate
+ * @module dsh-pause-session/gate
  */
 
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'

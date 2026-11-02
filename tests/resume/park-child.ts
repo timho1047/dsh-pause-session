@@ -56,7 +56,7 @@ import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { defineContentToolFixture } from '@deepseek-ai/dsh-tool-testkit'
-import { apply, inject, name } from 'dsh-pause'
+import { apply, inject, name } from 'dsh-pause-session'
 import { FakeProvider, textResponse } from '../assumptions/fake-provider.ts'
 import { mountParkStorage } from '../registry/storage.ts'
 import { GOAL_OBJECTIVE, PENDING_INPUT } from './case.ts'
@@ -187,7 +187,7 @@ async function pause(): Promise<void> {
 /** The park state the browser reads, as of this read. */
 async function phase(): Promise<string | undefined> {
   const listed = ctx.commands.list(agent)
-  if (!listed.some(descriptor => descriptor.definitionId === 'dsh-pause/resume')) return undefined
+  if (!listed.some(descriptor => descriptor.definitionId === 'dsh-pause-session/resume')) return undefined
   const status = await ctx.commands.execute(agent, '/pause-state', [], signal)
   return status?.result.kind === 'success' ? status.result.text : undefined
 }

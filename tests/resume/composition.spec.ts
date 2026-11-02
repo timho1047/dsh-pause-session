@@ -6,7 +6,7 @@
  * service and the preset roster. The durable side is the real descriptor
  * format, so the cases stay about what a resume restores rather than about how
  * a preset is implemented.
- * @module dsh-pause/test/resume/composition
+ * @module dsh-pause-session/test/resume/composition
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'

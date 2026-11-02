@@ -1,13 +1,13 @@
-# dsh-pause
+# dsh-pause-session
 
 English | [中文](README.zh.md)
 
-<p align="center"><img src="icon.svg" width="64" height="64" alt="dsh-pause icon"></p>
+<p align="center"><img src="icon.svg" width="64" height="64" alt="dsh-pause-session icon"></p>
 
 Pause every running DSH session and its subagents before you leave, then resume
 them later.
 
-dsh-pause stops each session at the same point: the tool call that is already
+dsh-pause-session stops each session at the same point: the tool call that is already
 running finishes, then the next model request is held. Subagent trees are
 included, and the pause survives a DSH restart.
 
@@ -15,7 +15,7 @@ included, and the pause survives a DSH restart.
 > tracked in [REHEARSAL.md](REHEARSAL.md).
 
 <p align="center">
-  <img src="docs/images/pause-controls.webp" alt="dsh-pause controls showing a paused session and All Paused for the whole app" width="100%">
+  <img src="docs/images/pause-controls.webp" alt="dsh-pause-session controls showing a paused session and All Paused for the whole app" width="100%">
 </p>
 
 *The session is paused; the global pill shows All Paused (1/1).*

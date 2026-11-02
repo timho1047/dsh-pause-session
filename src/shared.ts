@@ -1,5 +1,5 @@
 /**
- * The identities both halves of dsh-pause name, the status encodings they
+ * The identities both halves of dsh-pause-session name, the status encodings they
  * share, and the one spelling a host log line gives a caught value.
  *
  * The browser bundle may value-import only the shell's baseline module table,
@@ -20,7 +20,7 @@
  * data and may contain the `;`, `,`, `/`, or newline a field is separated by; a
  * folded spelling would decode as a different name — a different row, looked up
  * again.
- * @module dsh-pause/shared
+ * @module dsh-pause-session/shared
  */
 
 /** Command that pauses the receiving session before its next model request. */
@@ -63,43 +63,43 @@ export const TRIAGE_LEAVE_COMMAND = 'pause-triage-leave'
 export const TRIAGE_GOAL_COMMAND = 'pause-triage-goal'
 
 /** Stable definition id of the pause command, matched by identity rather than by copy. */
-export const PAUSE_DEFINITION_ID = 'dsh-pause/pause'
+export const PAUSE_DEFINITION_ID = 'dsh-pause-session/pause'
 
 /** Stable definition id of the resume command: the host's own "this session is paused" fact. */
-export const RESUME_DEFINITION_ID = 'dsh-pause/resume'
+export const RESUME_DEFINITION_ID = 'dsh-pause-session/resume'
 
 /** Stable definition id of the global resume command, matched by identity rather than by copy. */
-export const RESUME_ALL_DEFINITION_ID = 'dsh-pause/resume-all'
+export const RESUME_ALL_DEFINITION_ID = 'dsh-pause-session/resume-all'
 
 /** Stable definition id of the whole-app pause command. */
-export const PAUSE_ALL_DEFINITION_ID = 'dsh-pause/pause-all'
+export const PAUSE_ALL_DEFINITION_ID = 'dsh-pause-session/pause-all'
 
 /** Stable definition id of the whole-app status read. */
-export const STATE_ALL_DEFINITION_ID = 'dsh-pause/state-all'
+export const STATE_ALL_DEFINITION_ID = 'dsh-pause-session/state-all'
 
 /** Stable definition id of the status read, matched by identity rather than by copy. */
-export const STATUS_DEFINITION_ID = 'dsh-pause/status'
+export const STATUS_DEFINITION_ID = 'dsh-pause-session/status'
 
 /** Stable definition id of the paused session's own goal re-arm toggle. */
-export const GOAL_DEFINITION_ID = 'dsh-pause/goal'
+export const GOAL_DEFINITION_ID = 'dsh-pause-session/goal'
 
 /** Stable definition id of the decision-list read. */
-export const TRIAGE_DEFINITION_ID = 'dsh-pause/triage'
+export const TRIAGE_DEFINITION_ID = 'dsh-pause-session/triage'
 
 /** Stable definition id of the decision-list "continue" verb. */
-export const TRIAGE_CONTINUE_DEFINITION_ID = 'dsh-pause/triage-continue'
+export const TRIAGE_CONTINUE_DEFINITION_ID = 'dsh-pause-session/triage-continue'
 
 /** Stable definition id of the decision-list "continue with the unknown-outcome note" verb. */
-export const TRIAGE_NOTE_DEFINITION_ID = 'dsh-pause/triage-note'
+export const TRIAGE_NOTE_DEFINITION_ID = 'dsh-pause-session/triage-note'
 
 /** Stable definition id of the decision-list "open without activating" verb. */
-export const TRIAGE_REVIEW_DEFINITION_ID = 'dsh-pause/triage-review'
+export const TRIAGE_REVIEW_DEFINITION_ID = 'dsh-pause-session/triage-review'
 
 /** Stable definition id of the decision-list "leave it alone today" verb. */
-export const TRIAGE_LEAVE_DEFINITION_ID = 'dsh-pause/triage-leave'
+export const TRIAGE_LEAVE_DEFINITION_ID = 'dsh-pause-session/triage-leave'
 
 /** Stable definition id of the decision-list goal re-arm toggle. */
-export const TRIAGE_GOAL_DEFINITION_ID = 'dsh-pause/triage-goal'
+export const TRIAGE_GOAL_DEFINITION_ID = 'dsh-pause-session/triage-goal'
 
 /** First token of every encoded status, so a descriptor is never parsed by accident. */
 export const STATUS_PREFIX = 'pause: '

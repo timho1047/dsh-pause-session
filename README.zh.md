@@ -1,17 +1,17 @@
-# dsh-pause
+# dsh-pause-session
 
 [English](README.md) | 中文
 
-<p align="center"><img src="icon.svg" width="64" height="64" alt="dsh-pause 图标"></p>
+<p align="center"><img src="icon.svg" width="64" height="64" alt="dsh-pause-session 图标"></p>
 
 在离开前暂停所有运行中的 DSH 会话及其子代理，之后再恢复。
 
-dsh-pause 会把每个会话停在同一个点：当前已经运行的工具先跑完，然后拦住下一条模型请求。子代理树也会一起暂停，暂停状态可以跨 DSH 重启保留。
+dsh-pause-session 会把每个会话停在同一个点：当前已经运行的工具先跑完，然后拦住下一条模型请求。子代理树也会一起暂停，暂停状态可以跨 DSH 重启保留。
 
 > 状态：beta。已针对 DSH `0.2.2-alpha.2` 验证；完整的实机演练见 [REHEARSAL.md](REHEARSAL.md)。
 
 <p align="center">
-  <img src="docs/images/pause-controls.webp" alt="dsh-pause 控件：会话已暂停，全局显示全部已暂停" width="100%">
+  <img src="docs/images/pause-controls.webp" alt="dsh-pause-session 控件：会话已暂停，全局显示全部已暂停" width="100%">
 </p>
 
 *会话已暂停；全局控件显示“全部已暂停”（1/1）。*

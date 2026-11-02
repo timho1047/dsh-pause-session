@@ -9,7 +9,7 @@
  * the rows as of the read, and each decision is its own session-addressed
  * command. The panel's own entry point is a pure function of the whole-app view,
  * so "is there anything to decide" is asserted without a browser renderer.
- * @module dsh-pause/test/triage/client
+ * @module dsh-pause-session/test/triage/client
  */
 
 import { describe, expect, it } from 'vitest'

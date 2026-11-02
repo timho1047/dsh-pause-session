@@ -61,7 +61,7 @@
  * A burst is not restarted by a trigger that lands while one is running: every
  * read it still owes happens after that trigger, so absorbing it loses nothing
  * and a storm of registry changes costs one burst rather than one each.
- * @module dsh-pause/client/burst
+ * @module dsh-pause-session/client/burst
  */
 
 /** Whether the page is on screen, as the shell reports it. */

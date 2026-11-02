@@ -8,7 +8,7 @@
  * a phase that is still moving is observable at all. The contribution is
  * mounted on a real slot registry so the wiring — the forwarded
  * `commands/change` re-read and the injected face — is exercised too.
- * @module dsh-pause/test/gate/client-control
+ * @module dsh-pause-session/test/gate/client-control
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'

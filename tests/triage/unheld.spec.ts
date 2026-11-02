@@ -9,7 +9,7 @@
  * the record must not become a permanent row: the paths that can now read it
  * are the ones that clear it, and the clean-only rule still decides which of
  * them may.
- * @module dsh-pause/test/triage/unheld
+ * @module dsh-pause-session/test/triage/unheld
  */
 
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -33,7 +33,7 @@ function temporaryRoot(prefix: string): string {
 
 describe('a record whose session became readable after the mount', () => {
   it('is cleared by the clean path when the session is live and the park finished', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-unheld-clean-')
+    const caseRoot = temporaryRoot('dsh-pause-session-unheld-clean-')
     // The record is real and durable; the session log it names does not exist
     // yet, so the mount cannot hold anything for it.
     await recordParkWithoutLog(caseRoot, 'late-clean', 'safe')
@@ -62,7 +62,7 @@ describe('a record whose session became readable after the mount', () => {
   })
 
   it('keeps an unclean one, and the list is what clears it', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-unheld-unclean-')
+    const caseRoot = temporaryRoot('dsh-pause-session-unheld-unclean-')
     await recordParkWithoutLog(caseRoot, 'late-unclean', 'draining')
 
     const home = await reviveTriageHome(caseRoot)

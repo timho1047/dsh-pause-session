@@ -11,7 +11,7 @@
  * Which session's tool call runs first is request order, not session order, so
  * a case that must hold a named member in flight addresses its call by the id
  * argument it passed rather than by a start index.
- * @module dsh-pause/test/global/session-tree
+ * @module dsh-pause-session/test/global/session-tree
  */
 
 import { afterAll, describe, expect, it } from 'vitest'
@@ -122,7 +122,7 @@ async function allSafe(caseRoot: string, expected: Readonly<Record<string, strin
 
 describe('the session-header press covers the tree it owns', () => {
   it('registers a nested tree in one press and says how many it registered', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-tree-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-session-tree-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, { script: gatedIn(['tree-root', 'tree-child', 'tree-grandchild']) })
     try {
       const root = await home.create('tree-root')
@@ -160,7 +160,7 @@ describe('the session-header press covers the tree it owns', () => {
   })
 
   it('leaves a one-shot child out of the registry instead of promising a resume', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-tree-one-shot-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-session-tree-one-shot-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, { script: gatedIn(['one-shot-root']) })
     try {
       const root = await home.create('one-shot-root')
@@ -196,7 +196,7 @@ describe('the session-header press covers the tree it owns', () => {
   })
 
   it('releases the same tree symmetrically, parents before children', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-tree-release-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-session-tree-release-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, { script: gatedIn(['release-root', 'release-child', 'release-grandchild']) })
     try {
       const root = await home.create('release-root')
@@ -232,7 +232,7 @@ describe('the session-header press covers the tree it owns', () => {
   })
 
   it('leaves a member that did not stop cleanly parked and named while the others resume', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-tree-unclean-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-session-tree-unclean-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, { script: gatedIn(['unclean-root', 'unclean-child', 'unclean-grandchild']) })
     try {
       const root = await home.create('unclean-root')
@@ -288,7 +288,7 @@ describe('the session-header press covers the tree it owns', () => {
   })
 
   it('reports the tree\'s phase, so a still-draining member is never called safe', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-tree-status-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-session-tree-status-', temporaryRoots)
     // The child's request is the one that calls the tool; the root answers
     // outright, so the child is the member still draining once the root has
     // nothing left to do.
@@ -337,7 +337,7 @@ describe('the session-header press covers the tree it owns', () => {
   })
 
   it('names the member whose record it could not write instead of counting it as paused', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-tree-unrecorded-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-session-tree-unrecorded-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, {
       script: gatedIn(['unrecorded-root', 'unrecorded-child', 'unrecorded-grandchild']),
       failingRecordKeys: key => key === 'unrecorded-grandchild',
@@ -385,7 +385,7 @@ describe('the session-header press covers the tree it owns', () => {
   })
 
   it('refuses the tree-wide press issued from inside a model turn', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-tree-unattended-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-session-tree-unattended-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot)
     try {
       const root = await home.create('unattended-root')

@@ -8,7 +8,7 @@
  * re-reads the same storage from a fresh context, exactly as the premise probe
  * in `tests/assumptions/parked-input-durability.spec.ts` does. The difference
  * is who flushed: here it is the plugin's park flow, not a hand-written append.
- * @module dsh-pause/test/park/park-crash
+ * @module dsh-pause-session/test/park/park-crash
  */
 
 import { spawn, spawnSync } from 'node:child_process'
@@ -28,7 +28,7 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '.
 const crashChild = join(repositoryRoot, 'tests', 'park', 'park-crash-child.ts')
 
 /** Every case shares one storage root; session ids keep the cases apart. */
-const storageRoot = mkdtempSync(join(tmpdir(), 'dsh-pause-park-crash-'))
+const storageRoot = mkdtempSync(join(tmpdir(), 'dsh-pause-session-park-crash-'))
 afterAll(() => { rmSync(storageRoot, { recursive: true, force: true }) })
 
 beforeAll(() => {

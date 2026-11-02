@@ -8,7 +8,7 @@
  * session on a route that was never declared, asserts the marker on the wire,
  * and then re-runs the same parked log with that route declared to show the
  * empty wake coming back — both paths, both payloads.
- * @module dsh-pause/test/resume/wake-route
+ * @module dsh-pause-session/test/resume/wake-route
  */
 
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -40,7 +40,7 @@ const OTHER_ROUTE = 'acme-chat'
 
 describe('the wake content follows the route in use', () => {
   it('sends one fixed marker instead of an empty turn on an undeclared route', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-resume-marker-')
+    const caseRoot = temporaryRoot('dsh-pause-session-resume-marker-')
     const parked = await parkAndLeave(caseRoot, 'overnight-marker', 'clean', OTHER_ROUTE)
     const home = await reviveHome(caseRoot, { route: OTHER_ROUTE })
     try {
@@ -73,7 +73,7 @@ describe('the wake content follows the route in use', () => {
   })
 
   it('drops the wake entirely once the composition declares that route silent', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-resume-declared-')
+    const caseRoot = temporaryRoot('dsh-pause-session-resume-declared-')
     const parked = await parkAndLeave(caseRoot, 'overnight-declared', 'clean', OTHER_ROUTE)
     const home = await reviveHome(caseRoot, {
       route: OTHER_ROUTE,

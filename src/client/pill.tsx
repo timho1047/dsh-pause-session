@@ -15,7 +15,7 @@
  * than a state it would have to invent. The decision list is deliberately NOT
  * part of that first read — it costs two more command calls, and a user who
  * never opens it pays nothing; the panel asks for its own rows when it opens.
- * @module dsh-pause/client/pill
+ * @module dsh-pause-session/client/pill
  */
 
 import { useEffect } from 'react'

@@ -54,7 +54,7 @@
  * next. All five carry the same binding — the row must be one this caller was
  * shown — because each changes, or declines to change, durable state of a
  * parked session.
- * @module dsh-pause/triage
+ * @module dsh-pause-session/triage
  */
 
 import type { Context } from '@deepseek-ai/cordis'

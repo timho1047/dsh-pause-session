@@ -34,7 +34,7 @@
  * answered that way — that reading is the newer fact — and the derivation is
  * voided by the next whole-app answer that names a registered session, which
  * the forwarded change a park causes is what brings in.
- * @module dsh-pause/client/control
+ * @module dsh-pause-session/client/control
  */
 
 import type { ClientRemote } from '@deepseek-ai/dsh-api-remotes/client'

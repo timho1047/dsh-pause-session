@@ -7,7 +7,7 @@
  * and the descriptor's route — without mounting a persistence backend. The
  * second group runs the same path against the real agent loop over a Session a
  * killed child left parked, proving the setup is called before publication.
- * @module dsh-pause/test/resume/composition-resume
+ * @module dsh-pause-session/test/resume/composition-resume
  */
 
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -205,7 +205,7 @@ describe('composition through the real agent loop', () => {
   beforeAll(() => { ensureHostEntry() })
 
   it('mounts the projected preset through agents.resume before the agent is published', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-composition-resume-')
+    const caseRoot = temporaryRoot('dsh-pause-session-composition-resume-')
     await parkAndLeave(caseRoot, 'composition-root', 'clean')
     const home = await reviveHome(caseRoot)
     try {

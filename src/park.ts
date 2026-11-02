@@ -16,7 +16,7 @@
  *   framework owns replay, caching, and disposal. This module listens only to
  *   committed events so it can wake the control, never to keep a second copy
  *   of the state itself.
- * @module dsh-pause/park
+ * @module dsh-pause-session/park
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -41,8 +41,8 @@ type OpenToolCall = z.infer<typeof openCallSchema>
  * The host-only fold behind {@link ParkWatch}. It is registered on the
  * plugin's fiber; unload removes it with every other registration.
  */
-const parkActivityProjection: ProjectionDefinition<'dsh-pause/activity', OpenToolCall[]> = {
-  key: 'dsh-pause/activity',
+const parkActivityProjection: ProjectionDefinition<'dsh-pause-session/activity', OpenToolCall[]> = {
+  key: 'dsh-pause-session/activity',
   stateSchema: z.array(openCallSchema),
   init: () => [],
   apply: (state, event) => {

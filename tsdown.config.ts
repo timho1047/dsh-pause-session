@@ -9,6 +9,6 @@ import { clientBundle, nodeBundle } from './tsdown.client.ts'
  *   externals resolved through the browser module table)
  */
 export default [
-  ...nodeBundle('dsh-pause', ['lib/types/index.js']),
-  clientBundle('dsh-pause', { entry: 'lib/types/client/index.js' }),
+  ...nodeBundle('dsh-pause-session', ['lib/types/index.js']),
+  clientBundle('dsh-pause-session', { entry: 'lib/types/client/index.js' }),
 ]

@@ -5,7 +5,7 @@
  * the button says, whether it accepts a press, and which state label is visible
  * — is asserted without a browser renderer. Labels are KEYS, not copy: the
  * visible sentence is localized, and the host's own names join it as data.
- * @module dsh-pause/client/view
+ * @module dsh-pause-session/client/view
  */
 
 import type { GlobalReading, TriageReading } from './global.js'

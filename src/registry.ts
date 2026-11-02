@@ -14,7 +14,7 @@
  * here would silently drop one paused session; a whole-unit file turns any
  * corruption into a failed `open`, and a failed open fails the plugin's mount
  * loudly instead of resuming everything.
- * @module dsh-pause/registry
+ * @module dsh-pause-session/registry
  */
 
 import { z } from 'zod'

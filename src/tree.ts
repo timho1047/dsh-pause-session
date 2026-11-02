@@ -11,7 +11,7 @@
  * A walk is read, not remembered. The tree is a fact that grows — a delegation
  * in flight publishes its child after the parent's catalog was read — so a
  * press walks the tree at press time and a status read walks it at read time.
- * `@module dsh-pause/tree`
+ * `@module dsh-pause-session/tree`
  */
 
 import type { Context } from '@deepseek-ai/cordis'

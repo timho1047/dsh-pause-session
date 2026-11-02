@@ -15,7 +15,7 @@
  * (`Session.deriveMessages()`); {@link derivedHistory} is the cold form over a
  * stored log, which is all the decision list may claim — it opens a log to read
  * it and never activates a session.
- * @module dsh-pause/history
+ * @module dsh-pause-session/history
  */
 
 import type { Message } from '@deepseek-ai/dsh-llm'

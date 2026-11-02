@@ -7,7 +7,7 @@
  *
  * Every spec drives the plugin through the same host entry point the browser
  * half uses — `ctx.commands.execute` on the real registry.
- * @module dsh-pause/test/gate/pause-gate
+ * @module dsh-pause-session/test/gate/pause-gate
  */
 
 import { describe, expect, it, vi } from 'vitest'

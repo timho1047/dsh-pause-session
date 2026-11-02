@@ -26,7 +26,7 @@
  * — is not guessed at: {@link logFacts} reports `undefined` and the row says
  * `unreadable`, because a list that invents a stop position is worse than a
  * list that says it could not read one.
- * @module dsh-pause/coldlog
+ * @module dsh-pause-session/coldlog
  */
 
 import type { Context } from '@deepseek-ai/cordis'

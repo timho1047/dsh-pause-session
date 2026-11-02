@@ -7,7 +7,7 @@
  * abort. This suite installs exactly that listener over the real loop and
  * checks the discipline from the outside: delegation counts and the requests
  * that reached the provider.
- * @module dsh-pause/test/assumptions/gate-listener-discipline
+ * @module dsh-pause-session/test/assumptions/gate-listener-discipline
  */
 
 import { describe, expect, it } from 'vitest'

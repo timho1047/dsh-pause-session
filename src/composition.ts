@@ -20,7 +20,7 @@
  * A profile that mounts one but cannot read the Session projection cannot
  * prove what composition the Session ran, so it fails the resume instead of
  * silently starting a different Agent.
- * @module dsh-pause/composition
+ * @module dsh-pause-session/composition
  */
 
 import type { Context } from '@deepseek-ai/cordis'

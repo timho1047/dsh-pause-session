@@ -1,5 +1,5 @@
 /**
- * Browser half of dsh-pause.
+ * Browser half of dsh-pause-session.
  *
  * Registers two controls: one in the session header's title-adjacent action
  * group (`conversation.session.header.actions`), which pauses or resumes the
@@ -22,7 +22,7 @@
  * header control also reads the whole-app answer the whole-app control
  * publishes, so a park that holds nothing does not cost a host round-trip per
  * header.
- * @module dsh-pause/client
+ * @module dsh-pause-session/client
  */
 
 import { useEffect } from 'react'

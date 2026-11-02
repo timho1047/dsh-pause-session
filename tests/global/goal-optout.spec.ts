@@ -14,7 +14,7 @@
  * that parks a live goal session cleanly and switches the opt-out through the
  * session's own verb, and a fresh one that mounts the same stack over the same
  * logs and registry and has nothing but the silent path to bring it back.
- * @module dsh-pause/test/global/goal-optout
+ * @module dsh-pause-session/test/global/goal-optout
  */
 
 import { afterAll, describe, expect, it } from 'vitest'
@@ -98,7 +98,7 @@ async function parkCleanGoal(caseRoot: string, sessionId: string, optOut: boolea
 
 describe('the goal opt-out of a cleanly parked session', () => {
   it('leaves the goal disarmed when the clean record opted out through its own switch', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-global-goal-off-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-session-global-goal-off-', temporaryRoots)
     await parkCleanGoal(caseRoot, 'evening-goal-off', true)
 
     // The morning: nothing is live, so the silent path is the only thing that
@@ -124,7 +124,7 @@ describe('the goal opt-out of a cleanly parked session', () => {
   })
 
   it('re-opens the goal when the clean record was left at the default', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-global-goal-on-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-session-global-goal-on-', temporaryRoots)
     await parkCleanGoal(caseRoot, 'evening-goal-on', false)
 
     // The control: the same park, the same silent resume, no opt-out written.

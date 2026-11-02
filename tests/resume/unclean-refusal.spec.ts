@@ -12,7 +12,7 @@
  * The rule is a property of the RECORD, not of whether the session happens to
  * be live: a session the user has just opened is still one that never parked,
  * and the same refusal — and the same row — must hold for it.
- * @module dsh-pause/test/resume/unclean-refusal
+ * @module dsh-pause-session/test/resume/unclean-refusal
  */
 
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -46,7 +46,7 @@ async function records(root: string): Promise<[string, string][]> {
 
 describe('the clean resume path refuses a session that did not finish parking', () => {
   it('wakes none of the three unfinished parks', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-resume-unclean-')
+    const caseRoot = temporaryRoot('dsh-pause-session-resume-unclean-')
     await parkAndLeave(caseRoot, 'overnight-draining', 'draining')
     await parkAndLeave(caseRoot, 'overnight-parking', 'parking')
     await parkAndLeave(caseRoot, 'overnight-flush-failed', 'flush-failed')
@@ -80,7 +80,7 @@ describe('the clean resume path refuses a session that did not finish parking', 
   })
 
   it('refuses the same record again once its session is live, and keeps the row for the list', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-resume-live-unclean-')
+    const caseRoot = temporaryRoot('dsh-pause-session-resume-live-unclean-')
     await parkAndLeave(caseRoot, 'overnight-draining-live', 'draining')
     expect(await records(storageOf(caseRoot))).toEqual([['overnight-draining-live', 'draining']])
 

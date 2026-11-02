@@ -8,7 +8,7 @@
  * route's conversion — the DeepSeek serializer drops the empty user message,
  * the harness's pi-ai conversion keeps it, and the vendored pi-ai library then
  * decides per provider API. So it is never a loop guarantee.
- * @module dsh-pause/test/assumptions/empty-wake-content
+ * @module dsh-pause-session/test/assumptions/empty-wake-content
  */
 
 import { createRequire } from 'node:module'

@@ -5,7 +5,7 @@
  * module runs that conversion — the shipped DeepSeek serializer, the one the
  * spike used to locate the empty message's disappearance — over a request the
  * loop built, so a spec can assert the payload rather than the intent.
- * @module dsh-pause/test/resume/wire
+ * @module dsh-pause-session/test/resume/wire
  */
 
 import { resolveAdapterOptions } from '@deepseek-ai/dsh-llm-deepseek'

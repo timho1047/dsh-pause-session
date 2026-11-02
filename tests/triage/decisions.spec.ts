@@ -9,7 +9,7 @@
  * decision is also a target, so the cases that matter include the ones the host
  * must refuse: a command no row was shown for, and a wake that must not land in
  * the log as the user's own words.
- * @module dsh-pause/test/triage/decisions
+ * @module dsh-pause-session/test/triage/decisions
  */
 
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -72,7 +72,7 @@ async function lastLoggedSource(home: TriageHome, sessionId: string): Promise<st
 
 describe('the decisions on one listed session', () => {
   it('continues with no note: the clean path\'s own invisible wake', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-triage-continue-')
+    const caseRoot = temporaryRoot('dsh-pause-session-triage-continue-')
     await parkAndLeave(caseRoot, 'overnight-continue', 'draining')
 
     const home = await reviveTriageHome(caseRoot)
@@ -107,7 +107,7 @@ describe('the decisions on one listed session', () => {
   })
 
   it('continues with a note that says the tool outcome is unknown and forbids a blind retry', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-triage-note-')
+    const caseRoot = temporaryRoot('dsh-pause-session-triage-note-')
     await parkAndLeave(caseRoot, 'overnight-note', 'draining')
 
     const home = await reviveTriageHome(caseRoot)
@@ -140,7 +140,7 @@ describe('the decisions on one listed session', () => {
   })
 
   it('answers the review decision without activating anything or spending a request', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-triage-review-')
+    const caseRoot = temporaryRoot('dsh-pause-session-triage-review-')
     await parkAndLeave(caseRoot, 'overnight-review', 'draining')
 
     const home = await reviveTriageHome(caseRoot)
@@ -166,7 +166,7 @@ describe('the decisions on one listed session', () => {
   })
 
   it('leaves the session alone: no agent, no request, no write', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-triage-leave-')
+    const caseRoot = temporaryRoot('dsh-pause-session-triage-leave-')
     await parkAndLeave(caseRoot, 'overnight-leave', 'draining')
     const before: [string, string][] = [['overnight-leave', 'draining']]
 
@@ -186,7 +186,7 @@ describe('the decisions on one listed session', () => {
   })
 
   it('refuses a decision on a row this calling session was never shown', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-triage-unshown-')
+    const caseRoot = temporaryRoot('dsh-pause-session-triage-unshown-')
     await parkAndLeave(caseRoot, 'overnight-unshown', 'draining')
 
     const home = await reviveTriageHome(caseRoot)
@@ -217,7 +217,7 @@ describe('the decisions on one listed session', () => {
   })
 
   it('refuses a park verb issued from inside a model turn', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-triage-unattended-')
+    const caseRoot = temporaryRoot('dsh-pause-session-triage-unattended-')
     await parkAndLeave(caseRoot, 'overnight-unattended', 'draining')
 
     const home = await reviveTriageHome(caseRoot)
@@ -246,7 +246,7 @@ describe('the decisions on one listed session', () => {
   })
 
   it('refuses a decision aimed at a session that is not on the list', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-triage-not-listed-')
+    const caseRoot = temporaryRoot('dsh-pause-session-triage-not-listed-')
     await parkAndLeave(caseRoot, 'overnight-clean', 'clean')
 
     const home = await reviveTriageHome(caseRoot)

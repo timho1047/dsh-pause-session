@@ -5,7 +5,7 @@
  * This is the second test seam the spec names (the registry file). It is kept
  * apart from `./storage.ts` because that module is also imported by the child
  * processes, which run the BUILT plugin entry and cannot load `src/*.ts`.
- * @module dsh-pause/test/registry/read
+ * @module dsh-pause-session/test/registry/read
  */
 
 import { Context } from '@deepseek-ai/cordis'

@@ -1,7 +1,7 @@
 /**
  * The glyphs both pause controls are drawn with, so the session-header
  * control and the whole-app pill cannot drift apart.
- * @module dsh-pause/client/icons
+ * @module dsh-pause-session/client/icons
  */
 
 import type { ReactNode } from 'react'

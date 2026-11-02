@@ -2,7 +2,7 @@
  * Shared mounting for the assumption probes: a real agent loop (the harness's
  * own testkit) over the scripted fake provider, with no persistence and no
  * network.
- * @module dsh-pause/test/assumptions/loop-harness
+ * @module dsh-pause-session/test/assumptions/loop-harness
  */
 
 import { Context } from '@deepseek-ai/cordis'

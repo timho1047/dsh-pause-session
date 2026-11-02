@@ -8,7 +8,7 @@
  * one whose subagent tree this process cannot read at all. The park also names
  * the session it belongs to whatever phase it reached — the clean case included
  * — which is the address a window showing something else reads it through.
- * @module dsh-pause/test/global/aggregate
+ * @module dsh-pause-session/test/global/aggregate
  */
 
 import { afterAll, describe, expect, it } from 'vitest'
@@ -102,7 +102,7 @@ async function commandRuns(home: GlobalHome, sessionId: SessionId): Promise<numb
 
 describe('the aggregate answer', () => {
   it('reaches safe on both readings after a press made while a tool is still running, with no further action', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-agg-cycle-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-session-agg-cycle-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, { script: blockingScript() })
     const lifetime = new AbortController()
     const eye = clientEye(home)
@@ -183,7 +183,7 @@ describe('the aggregate answer', () => {
   })
 
   it('turns safe only once every registered session has parked', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-agg-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-session-agg-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, { script: blockingScript() })
     try {
       const first = await home.create('first-job')
@@ -228,7 +228,7 @@ describe('the aggregate answer', () => {
   })
 
   it('names a session that never reaches the park point instead of dropping it', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-agg-stuck-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-session-agg-stuck-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, { script: blockingScript() })
     try {
       const stuck = await home.create('stuck-in-a-tool')
@@ -253,7 +253,7 @@ describe('the aggregate answer', () => {
   })
 
   it('moves a session whose flush failed out of the count and never calls it clean', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-agg-flush-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-session-agg-flush-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, { script: blockingScript(), failingFlush: true })
     try {
       const only = await home.create('flush-fails')
@@ -281,7 +281,7 @@ describe('the aggregate answer', () => {
   })
 
   it('refuses to call the park safe when a subagent tree could not be read', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-agg-blind-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-session-agg-blind-', temporaryRoots)
     // A composition with no subagent service at all: the session itself parks
     // cleanly, but nothing here can vouch for the tree it might have.
     const home = await mountGlobalHome(caseRoot, { subagents: false, script: blockingScript() })
@@ -308,7 +308,7 @@ describe('the aggregate answer', () => {
   })
 
   it('names a record it could not hold instead of counting it as parked', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-agg-unheld-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-session-agg-unheld-', temporaryRoots)
     // A durable record with no session log behind it — the child killed inside
     // a tool whose log never materialized. The record is real; the session is
     // not readable, so this process cannot hold it, park it, or clear it.
@@ -339,7 +339,7 @@ describe('the aggregate answer', () => {
   })
 
   it('names a parked session a read can reach rather than only a record it cannot hold', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-agg-name-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-session-agg-name-', temporaryRoots)
     // A record this host cannot hold is registered before the live park exists,
     // so it is the first session the aggregate walks. It is named in `stalled`
     // like every other record the process cannot hold, and the parked session a
@@ -368,7 +368,7 @@ describe('the aggregate answer', () => {
   })
 
   it('keeps a clean park\'s rows in the parked session, not in the window that reads them', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-agg-window-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-session-agg-window-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, { script: blockingScript() })
     const lifetime = new AbortController()
     const eye = clientEye(home)

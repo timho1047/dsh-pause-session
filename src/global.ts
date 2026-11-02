@@ -20,7 +20,7 @@
  * The aggregate is derived in one place so the host's answer and the browser's
  * reading of it cannot disagree, and it is a promise about the durable
  * registry: a session is `safe` only when its recorded phase says so.
- * @module dsh-pause/global
+ * @module dsh-pause-session/global
  */
 
 import type { Context } from '@deepseek-ai/cordis'

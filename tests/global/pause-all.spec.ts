@@ -6,7 +6,7 @@
  * real one: a child session the parent's own subagent catalog records. What is
  * asserted is the durable registry on disk plus what the browser can read back,
  * not any internal set.
- * @module dsh-pause/test/global/pause-all
+ * @module dsh-pause-session/test/global/pause-all
  */
 
 import { afterAll, describe, expect, it } from 'vitest'
@@ -30,7 +30,7 @@ const ask = (text: string) => createUserMessage({ content: [{ type: 'text', text
 
 describe('one press over every running session tree', () => {
   it('registers the running tree and its subagent descendant, and nothing else', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-global-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-session-global-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, { script: BLOCKING_SCRIPT })
     try {
       const busy = await home.create('busy-root')
@@ -83,7 +83,7 @@ describe('one press over every running session tree', () => {
   })
 
   it('leaves a tree member that is not live alone, and still reaches safe', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-global-inactive-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-session-global-inactive-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, { script: blockingScript() })
     try {
       const parent = await home.create('busy-parent')
@@ -132,7 +132,7 @@ describe('one press over every running session tree', () => {
   })
 
   it('leaves a session that was paused first exactly where it was', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-global-idempotent-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-session-global-idempotent-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot)
     try {
       const idle = await home.create('idle-pressed')
@@ -153,7 +153,7 @@ describe('one press over every running session tree', () => {
   })
 
   it('registers a session that is owed an unclaimed reply, and not the one at rest', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-global-inbox-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-session-global-inbox-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot)
     try {
       const resting = await home.create('at-rest')

@@ -7,7 +7,7 @@
  * backend, and the backend writes to a real directory on purpose: the whole
  * point of the registry is that a later process reads it back, which is only
  * observable against a medium that outlives the writer.
- * @module dsh-pause/test/registry/storage
+ * @module dsh-pause-session/test/registry/storage
  */
 
 import type { Context } from '@deepseek-ai/cordis'

@@ -1,5 +1,5 @@
 /**
- * Host half of dsh-pause.
+ * Host half of dsh-pause-session.
  *
  * Mounts the pause gate — the per-session hold at the model-request waterfall —
  * the activity fold the park predicate reads, the durable park registry, the
@@ -10,7 +10,7 @@
  * process left parked is held again by this one without any user action; a
  * registry this build cannot read fails the mount loudly rather than silently
  * resuming every session it named.
- * @module dsh-pause
+ * @module dsh-pause-session
  */
 
 import { z } from 'zod'
@@ -22,7 +22,7 @@ import { mountParkWatch } from './park.js'
 import { openParkRegistry } from './registry.js'
 
 /** Plugin name; the Loader row and the bundle patch both use it. */
-export const name = 'dsh-pause'
+export const name = 'dsh-pause-session'
 
 /**
  * Required host services: the model runtime to gate, the stores the control

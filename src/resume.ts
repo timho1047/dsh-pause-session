@@ -29,7 +29,7 @@
  * holds whether or not the recorded session happens to be live in this process:
  * liveness is not the park outcome, and a session can be live without ever
  * having stopped.
- * @module dsh-pause/resume
+ * @module dsh-pause-session/resume
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -50,7 +50,7 @@ import { walkDescendants } from './tree.js'
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
     /**
-     * Text dsh-pause synthesized on the session's behalf: the wake this
+     * Text dsh-pause-session synthesized on the session's behalf: the wake this
      * path delivers and the unknown-outcome note a decision adds. Declared so
      * the log, and anything reading it, can tell plugin-authored input from the
      * user's own.

@@ -6,7 +6,7 @@
  * session storage, real storage hub and JSON backend, the plugin under test —
  * in a fresh context over the same roots. The parent keeps a recorder upstream
  * of the gate, so "what reached the model" is observable without a network.
- * @module dsh-pause/test/resume/home
+ * @module dsh-pause-session/test/resume/home
  */
 
 import { spawn } from 'node:child_process'

@@ -7,7 +7,7 @@
  * The stack is the one the resume suites use, deliberately: the decision list
  * reads the same durable registry, the same session logs and the same resume
  * path, and a fixture that shared none of them would be proving something else.
- * @module dsh-pause/test/triage/home
+ * @module dsh-pause-session/test/triage/home
  */
 
 import { spawn } from 'node:child_process'

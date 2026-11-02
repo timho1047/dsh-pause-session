@@ -45,7 +45,7 @@
  * at the close of that window when the reading the action left is still moving,
  * which is how a park that reaches its final phase inside the echo window is
  * still read.
- * @module dsh-pause/client/global
+ * @module dsh-pause-session/client/global
  */
 
 import type { ClientRemote } from '@deepseek-ai/dsh-api-remotes/client'

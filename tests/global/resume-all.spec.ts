@@ -8,7 +8,7 @@
  * all, so every session is activated from its own stored log by the one press.
  * That is the case the ordering exists for: waking a child needs its direct
  * parent to be live first.
- * @module dsh-pause/test/global/resume-all
+ * @module dsh-pause-session/test/global/resume-all
  */
 
 import { afterAll, describe, expect, it } from 'vitest'
@@ -31,7 +31,7 @@ const SOLO = SessionId('resume-solo')
 
 describe('resume all after a park', () => {
   it('releases every registered session at once, parents before children', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-resume-all-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-session-resume-all-', temporaryRoots)
 
     // One process: park a real tree plus a session that hangs from nothing.
     const before = await mountGlobalHome(caseRoot, { script: blockingScript() })

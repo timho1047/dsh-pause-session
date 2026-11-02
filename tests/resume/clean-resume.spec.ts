@@ -10,7 +10,7 @@
  * wire assertion runs the parked child's own request and the resumed request
  * through the route's serializer, so what is compared is the payload, not the
  * plugin's intent.
- * @module dsh-pause/test/resume/clean-resume
+ * @module dsh-pause-session/test/resume/clean-resume
  */
 
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -42,7 +42,7 @@ beforeAll(() => { ensureHostEntry() })
 
 describe('a cleanly parked session resumed in a fresh process', () => {
   it('answers the input that was pending, and puts nothing new on the wire', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-resume-clean-')
+    const caseRoot = temporaryRoot('dsh-pause-session-resume-clean-')
     const parked = await parkAndLeave(caseRoot, 'overnight-clean', 'clean')
     expect(parked.request, 'the child parked nothing at the gate').toBeDefined()
     expect((await readParkRegistry(storageOf(caseRoot))).map(entry => [String(entry.sessionId), entry.phase]))
@@ -80,7 +80,7 @@ describe('a cleanly parked session resumed in a fresh process', () => {
   })
 
   it('resumes from a step whose tool results were already in hand', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-resume-tool-')
+    const caseRoot = temporaryRoot('dsh-pause-session-resume-tool-')
     // The park point the gate exists for: the tool finished, its results are on
     // the surface, and the request that would answer them never left.
     const parked = await parkAndLeave(caseRoot, 'overnight-tool', 'tool-result')
@@ -109,7 +109,7 @@ describe('a cleanly parked session resumed in a fresh process', () => {
   })
 
   it('resumes through the session-scoped verb when the session is already open', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-resume-open-')
+    const caseRoot = temporaryRoot('dsh-pause-session-resume-open-')
     const parked = await parkAndLeave(caseRoot, 'overnight-open', 'clean')
     const home = await reviveHome(caseRoot)
     try {

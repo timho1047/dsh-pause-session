@@ -27,7 +27,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
-import { apply, inject, name } from 'dsh-pause'
+import { apply, inject, name } from 'dsh-pause-session'
 import { FakeProvider, textResponse } from '../assumptions/fake-provider.ts'
 import { mountParkStorage } from './storage.ts'
 
@@ -65,7 +65,7 @@ agent.followup(createUserMessage({
 // Wait for the session to report safe, read the same way the browser does: the
 // resume definition is the pause, and the status command answers with the phase
 // as of the read.
-const resumeDefinitionId = 'dsh-pause/resume'
+const resumeDefinitionId = 'dsh-pause-session/resume'
 for (let attempt = 0; attempt < 4000; attempt++) {
   const listed = ctx.commands.list(agent)
   if (listed.some(descriptor => descriptor.definitionId === resumeDefinitionId)) {

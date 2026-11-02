@@ -7,7 +7,7 @@
  * comes from the job registry, where background work lives outside the agent
  * loop entirely. What is asserted is the report a user reads, decoded the way
  * the browser control decodes it.
- * @module dsh-pause/test/global/report
+ * @module dsh-pause-session/test/global/report
  */
 
 import { afterAll, describe, expect, it } from 'vitest'
@@ -27,7 +27,7 @@ const ask = (text: string) => createUserMessage({ content: [{ type: 'text', text
 
 describe('the whole-app report', () => {
   it('names a tree on a one-shot route and a background job, and still says it is safe', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-report-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-session-report-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, { script: blockingScript() })
     let job: ReturnType<typeof home.job> | undefined
     try {
@@ -95,7 +95,7 @@ describe('the whole-app report', () => {
   })
 
   it('names no route when every child can be resumed', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-report-clean-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-session-report-clean-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, { script: blockingScript() })
     try {
       const parent = await home.create('plain-parent')

@@ -11,7 +11,7 @@
  * The same root can be mounted twice (a second context over the first one's
  * logs and registry), which is the in-process form of the restart the resume
  * path is built for.
- * @module dsh-pause/test/global/home
+ * @module dsh-pause-session/test/global/home
  */
 
 import { mkdtempSync, rmSync } from 'node:fs'

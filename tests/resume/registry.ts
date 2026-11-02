@@ -4,7 +4,7 @@
  * medium again. Kept apart from the read helper because the JSON backend
  * refuses a second open of one root inside one process, so a case that edits a
  * record must do it before it mounts the plugin.
- * @module dsh-pause/test/resume/registry
+ * @module dsh-pause-session/test/resume/registry
  */
 
 import { Context } from '@deepseek-ai/cordis'

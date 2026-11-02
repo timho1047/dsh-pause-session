@@ -8,7 +8,7 @@
  * recorder upstream of the gate that captures the request the loop built.
  * Listeners are registered before the plugin, so the recorder sits closer to
  * the loop than the gate does.
- * @module dsh-pause/test/gate/loop
+ * @module dsh-pause-session/test/gate/loop
  */
 
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -47,7 +47,7 @@ export async function mountGatedLoop(
   options: { idleTimeoutMs?: number; heldWrites?: boolean } = {},
 ): Promise<GatedLoop> {
   const loop = await mountFakeLoop(id, script, options)
-  const storageRoot = mkdtempSync(join(tmpdir(), 'dsh-pause-loop-'))
+  const storageRoot = mkdtempSync(join(tmpdir(), 'dsh-pause-session-loop-'))
   loop.ctx.effect(() => () => rmSync(storageRoot, { recursive: true, force: true }), 'spec: registry root')
   const held = options.heldWrites === true ? await mountHeldParkStorage(loop.ctx, storageRoot) : undefined
   if (held === undefined) await mountParkStorage(loop.ctx, storageRoot)

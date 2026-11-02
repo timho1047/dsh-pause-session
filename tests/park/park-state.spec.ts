@@ -12,7 +12,7 @@
  * Every spec drives the plugin through the same host entry points the browser
  * half uses — `ctx.commands.execute` on the real registry, plus `commands.list`
  * to see what the host published.
- * @module dsh-pause/test/park/park-state
+ * @module dsh-pause-session/test/park/park-state
  */
 
 import { describe, expect, it } from 'vitest'

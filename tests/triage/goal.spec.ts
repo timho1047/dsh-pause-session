@@ -6,7 +6,7 @@
  * the row in the morning list, which is already bound to the session that read
  * it. What is asserted here is the effect the user can see — the goal stays
  * closed and the rounds never start — plus the default it must not change.
- * @module dsh-pause/test/triage/goal
+ * @module dsh-pause-session/test/triage/goal
  */
 
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -34,7 +34,7 @@ beforeAll(() => { ensureHostEntry() })
 
 describe('the listed goal opt-out', () => {
   it('closes the goal across the next resume, and the rounds never start', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-triage-goal-off-')
+    const caseRoot = temporaryRoot('dsh-pause-session-triage-goal-off-')
     await parkAndLeave(caseRoot, 'goal-unclean-off', 'goal-draining')
 
     const home = await reviveTriageHome(caseRoot, { goals: true })
@@ -70,7 +70,7 @@ describe('the listed goal opt-out', () => {
   })
 
   it('re-opens the goal when the row was left at the default', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-triage-goal-on-')
+    const caseRoot = temporaryRoot('dsh-pause-session-triage-goal-on-')
     await parkAndLeave(caseRoot, 'goal-unclean-on', 'goal-draining')
 
     const home = await reviveTriageHome(caseRoot, { goals: true })

@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "Pause",
+    "title": "Pause Session",
     "description": "Pause every running session and its subagents at a safe point, then resume them later without losing the work in flight."
   }
 }

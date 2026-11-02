@@ -8,7 +8,7 @@
  * all. The phase → view mapping and the address picker are pure functions and
  * are asserted directly; the contribution is mounted on a stand-in slot
  * registry so the wiring is exercised too.
- * @module dsh-pause/test/global/client-status
+ * @module dsh-pause-session/test/global/client-status
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'

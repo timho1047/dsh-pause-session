@@ -32,7 +32,7 @@
  * made elsewhere while the window was open. An action that leaves a phase still
  * moving owes one look when its window closes, because a park can reach its final
  * phase inside that window and then never announce anything again.
- * @module dsh-pause/test/global/poll-budget
+ * @module dsh-pause-session/test/global/poll-budget
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'

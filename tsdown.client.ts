@@ -21,7 +21,7 @@
  */
 import { readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { basename, dirname, resolve as resolvePath, sep } from 'node:path'
+import { basename, dirname, relative, resolve as resolvePath, sep } from 'node:path'
 import type { UserConfig, Plugin } from 'tsdown'
 import { transform } from 'lightningcss'
 
@@ -143,11 +143,11 @@ export function clientBundle(id: string, options: ClientBundleOptions = {}): Use
     resolveId(source: string, importer: string | undefined) {
       if (!source.endsWith('.module.css')) return null
       const abs = importer !== undefined ? sourceAssetPath(source, importer) : source
-      return CSS_VIRTUAL_PREFIX + abs + CSS_VIRTUAL_SUFFIX
+      return CSS_VIRTUAL_PREFIX + relative(process.cwd(), abs) + CSS_VIRTUAL_SUFFIX
     },
     async load(virtualId: string) {
       if (!virtualId.startsWith(CSS_VIRTUAL_PREFIX)) return null
-      const fileId = virtualId.slice(CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length)
+      const fileId = resolvePath(process.cwd(), virtualId.slice(CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length))
       this.addWatchFile(fileId)
       const source = await readFile(fileId)
       const { code, exports: cssExports } = transform({
@@ -168,11 +168,11 @@ export function clientBundle(id: string, options: ClientBundleOptions = {}): Use
       if (!source.endsWith(`.css${INLINE_CSS_QUERY}`)) return null
       const stylesheet = source.slice(0, -INLINE_CSS_QUERY.length)
       const abs = importer !== undefined ? sourceAssetPath(stylesheet, importer) : stylesheet
-      return INLINE_CSS_VIRTUAL_PREFIX + abs + CSS_VIRTUAL_SUFFIX
+      return INLINE_CSS_VIRTUAL_PREFIX + relative(process.cwd(), abs) + CSS_VIRTUAL_SUFFIX
     },
     async load(virtualId: string) {
       if (!virtualId.startsWith(INLINE_CSS_VIRTUAL_PREFIX)) return null
-      const fileId = virtualId.slice(INLINE_CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length)
+      const fileId = resolvePath(process.cwd(), virtualId.slice(INLINE_CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length))
       this.addWatchFile(fileId)
       const source = await readFile(fileId)
       const { code } = transform({ filename: fileId, code: source, minify: true })
@@ -183,11 +183,11 @@ export function clientBundle(id: string, options: ClientBundleOptions = {}): Use
     resolveId(source: string, importer: string | undefined) {
       if (!source.endsWith('.css') || source.endsWith('.module.css')) return null
       const abs = importer !== undefined ? sourceAssetPath(source, importer) : source
-      return GLOBAL_CSS_VIRTUAL_PREFIX + abs + CSS_VIRTUAL_SUFFIX
+      return GLOBAL_CSS_VIRTUAL_PREFIX + relative(process.cwd(), abs) + CSS_VIRTUAL_SUFFIX
     },
     async load(virtualId: string) {
       if (!virtualId.startsWith(GLOBAL_CSS_VIRTUAL_PREFIX)) return null
-      const fileId = virtualId.slice(GLOBAL_CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length)
+      const fileId = resolvePath(process.cwd(), virtualId.slice(GLOBAL_CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length))
       this.addWatchFile(fileId)
       const source = await readFile(fileId)
       const { code } = transform({ filename: fileId, code: source, minify: true })

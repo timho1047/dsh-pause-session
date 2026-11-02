@@ -5,7 +5,7 @@
  * two optional services `restoreComposition` reads are replaced: the Session
  * projection read and the preset roster. Everything else in the fixtures is a
  * real Cordis Context or the real subagent descriptor format.
- * @module dsh-pause/test/resume/composition-fixtures
+ * @module dsh-pause-session/test/resume/composition-fixtures
  */
 
 import { vi } from 'vitest'

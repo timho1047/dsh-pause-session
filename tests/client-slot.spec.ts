@@ -3,7 +3,7 @@
  * to, under which ids, that it owns a locale namespace, and that it requires
  * the host round-trip it cannot work without. Asserted through the plugin's
  * declared interface (`inject` + `apply`), not its internals.
- * @module dsh-pause/test/client-slot
+ * @module dsh-pause-session/test/client-slot
  */
 
 import { describe, expect, it } from 'vitest'

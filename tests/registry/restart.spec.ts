@@ -9,7 +9,7 @@
  * session's next message is held while a session the registry never named is
  * served normally. The empty-registry case is the control that makes the first
  * one mean something: the pause is in the registry, not in the session log.
- * @module dsh-pause/test/registry/restart
+ * @module dsh-pause-session/test/registry/restart
  */
 
 import { spawn, spawnSync } from 'node:child_process'
@@ -187,7 +187,7 @@ async function settles(): Promise<void> {
 
 describe('the park registry across a real process restart', () => {
   it('holds a session the previous process parked, and only that one', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-restart-')
+    const caseRoot = temporaryRoot('dsh-pause-session-restart-')
     await parkAndLeave(caseRoot, 'restart-registered', 'kill')
     expect((await readParkRegistry(storageOf(caseRoot))).map(entry => [String(entry.sessionId), entry.phase]))
       .toEqual([['restart-registered', 'safe']])
@@ -233,7 +233,7 @@ describe('the park registry across a real process restart', () => {
   })
 
   it('does not hold the same session when the registry is empty', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-restart-empty-')
+    const caseRoot = temporaryRoot('dsh-pause-session-restart-empty-')
     const loop = await revive(caseRoot)
     try {
       const agent = await openFresh(loop, 'restart-registered', 'nothing was ever parked here')
@@ -246,7 +246,7 @@ describe('the park registry across a real process restart', () => {
   })
 
   it('re-applies the pause after a clean exit too', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-restart-clean-')
+    const caseRoot = temporaryRoot('dsh-pause-session-restart-clean-')
     await parkAndLeave(caseRoot, 'restart-clean-exit', 'exit')
     expect((await readParkRegistry(storageOf(caseRoot))).map(entry => entry.phase)).toEqual(['safe'])
 

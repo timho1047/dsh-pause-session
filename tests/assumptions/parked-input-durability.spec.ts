@@ -6,7 +6,7 @@
  * a chosen path and then SIGKILLs itself without unwinding, and re-reads the
  * stored log from this process afterwards. The child therefore exercises the
  * real JSONL backend and the real crash boundary; nothing is mocked.
- * @module dsh-pause/test/assumptions/parked-input-durability
+ * @module dsh-pause-session/test/assumptions/parked-input-durability
  */
 
 import { spawn } from 'node:child_process'
@@ -26,7 +26,7 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '.
 const crashScript = join(repositoryRoot, 'scripts', 'parked-input-crash.mjs')
 
 /** Every case shares one storage root; session ids keep the cases apart. */
-const storageRoot = mkdtempSync(join(tmpdir(), 'dsh-pause-crash-'))
+const storageRoot = mkdtempSync(join(tmpdir(), 'dsh-pause-session-crash-'))
 afterAll(() => { rmSync(storageRoot, { recursive: true, force: true }) })
 
 /** Run one crash case to its SIGKILL, or fail on any other outcome. */

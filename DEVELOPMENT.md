@@ -11,7 +11,7 @@ official DSH source tree; it is only the author's local layout.
   control, state mapping, and locale dictionaries.
 - `lib/` — build output, ignored by Git. It is created by `pnpm run build` and
   is not present in a fresh clone.
-- `.scratch/pause/` — local-only design record (ignored by Git).
+- `.scratch/pause-session/` — local-only design record (ignored by Git).
 - `REHEARSAL.md` — the manual end-to-end acceptance run.
 
 ## DSH dependency links
@@ -36,13 +36,13 @@ pnpm run build      # tsc for both faces, then tsdown
 ```
 
 The host half builds to `lib/index.js`; the client half builds to
-`lib/client.js`, the browser module bundle loaded under the `dsh-pause` id.
+`lib/client.js`, the browser module bundle loaded under the `dsh-pause-session` id.
 `tsdown.client.ts` is the vendored client-bundle preset shared by the plugins
 in this directory.
 
 ## Design record
 
-The specification and task breakdown live under `.scratch/pause/`, local-only
+The specification and task breakdown live under `.scratch/pause-session/`, local-only
 by this directory's convention. The load-bearing findings behind the design —
 where a pause can land, what a pause costs the surrounding app, and what a
 restart does to a paused session — are recorded in the spec's evidence section.

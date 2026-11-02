@@ -32,7 +32,7 @@
 **出问题的回滚**（照抄，别临场想）：
 
 - 插件行失败：**启动不会被拦住**，只会有一条 `warning: 1 entry did not activate`；在 Plugins 页面关掉它即可。
-- 整个应用起不来：用市场那个脱离宿主的恢复界面取消勾选本插件；或 `dsh plugin --profile web remove dsh-pause`，再把 `dsh-pause` 从该 profile `package.json` 的 `dsh.profile.bundles` 里删掉。
+- 整个应用起不来：用市场那个脱离宿主的恢复界面取消勾选本插件；或 `dsh plugin --profile web remove dsh-pause-session`，再把 `dsh-pause-session` 从该 profile `package.json` 的 `dsh.profile.bundles` 里删掉。
 
 ## 四、演练 A：干净的下班 → 上班
 

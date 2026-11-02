@@ -51,7 +51,7 @@
  * dispatched from inside a model turn is refused. The listed verbs add the
  * one binding their target needs — the row must be one the calling session was
  * shown — and that rule lives with the list (`./triage.ts`).
- * @module dsh-pause/control
+ * @module dsh-pause-session/control
  */
 
 import type { Context, Fiber } from '@deepseek-ai/cordis'
