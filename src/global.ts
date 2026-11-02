@@ -51,6 +51,9 @@ export interface LivePark {
   readonly moving: boolean
 }
 
+/** What one press of the per-session control did. */
+export type PressResult = 'registered' | 'unrecordable' | 'not-live' | 'not-resumable' | 'already-paused'
+
 /** What the whole-app control needs from the per-session control. */
 export interface GlobalPauseDeps {
   /**
@@ -61,9 +64,10 @@ export interface GlobalPauseDeps {
   /**
    * Press one session's pause and make it durable.
    * @param sessionId - session to register.
-   * @returns whether the pause was recorded; `false` means it was rolled back.
+   * @param signal - cancellation for the resumability and registry reads.
+   * @returns what the press did; only `registered` created a new park.
    */
-  press(sessionId: SessionId): Promise<boolean>
+  press(sessionId: SessionId, signal?: AbortSignal): Promise<PressResult>
   /**
    * Look at one session's mark now that it is paused.
    * @param sessionId - the session that was just pressed.
@@ -337,9 +341,21 @@ export function mountGlobalPause(
         for (const sessionId of targets) {
           signal?.throwIfAborted()
           // The press is a durable promise per session: one that cannot be
-          // recorded is rolled back there and named here.
-          markUnrecorded(sessionId, !await deps.press(sessionId))
-          deps.look(sessionId)
+          // recorded is rolled back there and named here. A session whose
+          // route is not resumable, or has no live log, is left out of the
+          // registry rather than promised a wake the morning path must refuse.
+          const pressed = await deps.press(sessionId, signal)
+          switch (pressed) {
+            case 'registered':
+              markUnrecorded(sessionId, false)
+              deps.look(sessionId)
+              break
+            case 'unrecordable':
+              markUnrecorded(sessionId, true)
+              break
+            default:
+              break
+          }
         }
       }
       const answer = encodeGlobalStatus(await status(signal))

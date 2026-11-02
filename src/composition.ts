@@ -73,6 +73,42 @@ export function hasIndependentPresetSelection(events: readonly SessionEvent[]): 
 }
 
 /**
+ * Whether a local Session may be parked under a promise of a later resume.
+ *
+ * A normal root Session has no child descriptor and is resumable. A local
+ * subagent child is resumable only when its own durable descriptor is
+ * `continuable`; a historical `one-shot` child is terminal and must never be
+ * registered as a park the morning path would later have to refuse. External
+ * executions have no local Session, so callers never reach this check.
+ *
+ * A profile without the optional Session-query service cannot prove the
+ * descriptor's mode; it keeps the previous permissive behavior rather than
+ * dropping every subagent. The web profile mounts the query service.
+ * @param ctx - host context carrying the optional Session-query service.
+ * @param sessionId - the local Session to inspect.
+ * @param signal - cancellation for the observation read.
+ * @returns whether a park of this Session may be resumed.
+ * @throws the cancellation reason when `signal` aborts the read.
+ */
+export async function isResumableSession(
+  ctx: Context,
+  sessionId: SessionId,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const query = ctx.get('sessionQuery')
+  if (query === undefined) return true
+  const observation = await query.observeSession(sessionId, {
+    ...signal === undefined ? {} : { signal },
+  })
+  try {
+    const ownEvents = observation.events.slice(observation.inheritedEventCount)
+    return foldSubagentDescriptor(ownEvents)?.mode !== 'one-shot'
+  } finally {
+    observation[Symbol.dispose]()
+  }
+}
+
+/**
  * Read one parked Session's stored composition and build the resume options.
  *
  * The returned `setup` belongs to the unpublished Agent scope, so all

@@ -9,10 +9,10 @@ starting an incompatible resume path.
 
 **Status: feature-complete, awaiting the end-to-end rehearsal.** One press
 parks every running session tree at its next model-request boundary and reports
-when it is safe to close the lid; the pause survives a restart; the next press
-resumes the cleanly parked sessions with the Agent preset composition they ran
+when every session is paused; the pause survives a restart; the next press
+resumes the cleanly paused sessions with the Agent preset composition they ran
 under (scoped tools, prompt sections, and subagent delegation context restored),
-with nothing added to the request, and anything that did not stop cleanly goes
+with nothing added to the request, and anything that did not pause cleanly goes
 to a decision list instead. What is not yet verified on a real machine is listed
 in [REHEARSAL.md](REHEARSAL.md).
 

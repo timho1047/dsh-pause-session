@@ -62,8 +62,9 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 // Type-only: the optional `ctx.sessionPersistence` observation seam.
 import type {} from '@deepseek-ai/dsh-session-persistence'
 import type { PauseGate } from './gate.js'
+import { isResumableSession } from './composition.js'
 import { mountGlobalPause } from './global.js'
-import type { GlobalPause, LivePark } from './global.js'
+import type { GlobalPause, LivePark, PressResult } from './global.js'
 import type { ParkWatch } from './park.js'
 import type { ParkRegistry } from './registry.js'
 import { installResumePath, NOT_PARKED_TEXT } from './resume.js'
@@ -98,8 +99,8 @@ function pausedText(agents: number): string {
     : agents === 1
       ? 'this session and 1 subagent'
       : `this session and ${String(agents)} subagents`
-  return `pause registered ${registered}. They stop once the work in flight drains.`
-    + ' Press again to cancel the pause.'
+  return `Paused ${registered}. A running tool will finish first; no new model request will be sent.`
+    + ' Press again to resume.'
 }
 
 /** Result copy for a press or a release the durable registry refused to record. */
@@ -111,7 +112,10 @@ const UNRECORDED_TEXT = 'pause could not write the pause registry, so it did not
  * vouched for, and the answer names that limit rather than letting the session's
  * own park stand for a tree nobody read.
  */
-const TREE_UNREAD_TEXT = 'pause could not read this session\'s subagent tree, so it did not register its subagents.'
+const TREE_UNREAD_TEXT = 'pause could not read this session\'s subagent list, so it did not pause its subagents.'
+
+/** Result copy for a session whose own subagent route is terminal. */
+const NOT_RESUMABLE_PARK_TEXT = 'pause did not register this session: its subagent route is one-shot and cannot be resumed.'
 
 /**
  * Result copy for a tree-wide press that could not record part of the tree.
@@ -120,8 +124,8 @@ const TREE_UNREAD_TEXT = 'pause could not read this session\'s subagent tree, so
  * @returns the copy for the person who pressed.
  */
 function unrecordedTreeText(names: readonly SessionId[]): string {
-  return `pause could not register ${names.map(name => `"${String(name)}"`).join(', ')}`
-    + ' in the pause registry, so they are not paused. Everything else in the tree is.'
+  return `pause could not save the pause for ${names.map(name => `"${String(name)}"`).join(', ')};`
+    + ' they are still running. Everything else in the tree is paused.'
 }
 
 /**
@@ -267,7 +271,7 @@ export function summarizeResume(attempts: readonly ResumeAttempt[]): string {
   if (refused === 0) return `${head}.`
   const unclean = attempts.filter(attempt => attempt.refusal === 'not-clean').length
   const rest = unclean === refused
-    ? `${refused} did not stop cleanly and need your decision`
+    ? `${refused} did not pause completely and need your decision`
     : `${refused} could not be resumed`
   return `${head}; ${rest}.`
 }
@@ -441,7 +445,7 @@ export function installSessionControl(
       name: STATUS_COMMAND,
       // This descriptor is only the marker the browser looks for; the state
       // it reports is derived per call, tree and all.
-      description: 'Report this parked tree',
+      description: 'Report this session\'s pause state',
       handler: async (invocation) => ({ kind: 'success', text: await status(invocation.signal) }),
     })
     /** Re-register the status verb, which is the announcement every phase change rides. */
@@ -455,7 +459,7 @@ export function installSessionControl(
       scope.commands.register({
         definitionId: CommandDefinitionId(RESUME_DEFINITION_ID),
         name: RESUME_COMMAND,
-        description: 'Resume this parked Session and its subagents',
+        description: 'Resume this paused session and its subagents',
         handler: async (invocation) => (modelIssued(ctx)
           ? { kind: 'error', text: UNATTENDED_TEXT }
           : (await resumePath.releaseTree(invocation.agent.id, invocation.signal)).answer),
@@ -579,22 +583,30 @@ export function installSessionControl(
    * "safe to close" from ever appearing. Registering the running tree therefore
    * means registering the members a pause can actually hold and flush.
    * @param sessionId - the session to pause.
-   * @returns whether the session is now paused, with a durable record behind it.
+   * @param signal - cancellation for the resumability read and registry write.
+   * @param knownResumable - whether the caller already proved the local route is
+   * `continuable` from the parent catalog, avoiding a second Session read.
+   * @returns what the press did; only `registered` created a new park.
    */
-  const press = async (sessionId: SessionId): Promise<boolean> => {
-    if (ctx.sessions.get(sessionId) === undefined) return true
-    if (!gate.pause(sessionId)) return true
+  const press = async (
+    sessionId: SessionId,
+    signal?: AbortSignal,
+    knownResumable = false,
+  ): Promise<PressResult> => {
+    if (ctx.sessions.get(sessionId) === undefined) return 'not-live'
+    if (!knownResumable && !await isResumableSession(ctx, sessionId, signal)) return 'not-resumable'
+    if (!gate.pause(sessionId)) return 'already-paused'
     const mark: ParkMark = { phase: 'draining', generation: ++generation, origin: 'press', advancing: false }
     marks.set(sessionId, mark)
     if (await commit(sessionId, mark, 'draining')) {
       // Whatever this process could not hold earlier is moot now: the session
       // is live and the press owns it.
       unheld.delete(sessionId)
-      return true
+      return 'registered'
     }
     drop(sessionId)
     gate.resume(sessionId)
-    return false
+    return 'unrecordable'
   }
 
   /**
@@ -627,39 +639,43 @@ export function installSessionControl(
     // is refused is the claim about the tree, which is why the count stays at
     // the one member this press actually covers.
     if (walk.unreadWhole) {
-      const pressed = await press(sessionId)
-      // The look is unconditional on purpose: a session that left the store
-      // during this press has a mark and cannot be flushed, which is the one
-      // way its park still reaches a durable "not clean" instead of a phase
-      // that never settles.
-      look(sessionId)
-      globalPause.markUnrecorded(sessionId, !pressed)
+      const pressed = await press(sessionId, signal)
+      // The look is unconditional on purpose only after a mark exists: a
+      // session that left the store during this press has a mark and cannot be
+      // flushed, which is the one way its park still reaches a durable "not
+      // clean" instead of a phase that never settles.
+      if (pressed === 'registered') look(sessionId)
+      globalPause.markUnrecorded(sessionId, pressed === 'unrecordable')
       return {
-        members: 1,
-        registered: pressed ? 1 : 0,
-        rootRegistered: pressed,
-        unrecorded: pressed ? [] : [sessionId],
+        members: pressed === 'registered' ? 1 : 0,
+        registered: pressed === 'registered' ? 1 : 0,
+        rootRegistered: pressed === 'registered',
+        unrecorded: pressed === 'unrecordable' ? [sessionId] : [],
         unread: true,
       }
     }
     const registered: SessionId[] = []
     const unrecorded: SessionId[] = []
-    for (const id of [sessionId, ...walk.members.map(member => member.id)]) {
+    const members = walk.members.filter(member => member.mode === 'continuable')
+    for (const id of [sessionId, ...members.map(member => member.id)]) {
       // The press is per member on purpose: one member that cannot be recorded
-      // is named while the rest keep the pause they got.
-      const paused = await press(id)
-      if (paused) {
+      // is named while the rest keep the pause they got. A member on a
+      // one-shot or external route is never registered: there is no later
+      // resume that could honestly satisfy that promise.
+      const pressed = await press(id, signal, id !== sessionId)
+      if (pressed === 'registered') {
         registered.push(id)
         // A member this host has nothing live for has no mark to walk; one that
         // does is looked at now, exactly as the session's own press looked at
         // itself.
         look(id)
-      } else {
+      } else if (pressed === 'unrecordable') {
         unrecorded.push(id)
       }
       // The aggregate owns the same fact, so a member the registry refused is
-      // named by the whole-app report too.
-      globalPause.markUnrecorded(id, !paused)
+      // named by the whole-app report too. A skipped member is not a failed
+      // promise and is not named as one.
+      globalPause.markUnrecorded(id, pressed === 'unrecordable')
     }
     return {
       members: registered.length + unrecorded.length,
@@ -756,6 +772,9 @@ export function installSessionControl(
         if (pressed.unrecorded.length > 0) {
           return { kind: 'error', text: unrecordedTreeText(pressed.unrecorded) }
         }
+        if (!pressed.rootRegistered) {
+          return { kind: 'error', text: NOT_RESUMABLE_PARK_TEXT }
+        }
         const agents = pressed.rootRegistered ? pressed.registered - 1 : pressed.registered
         // A tree this press could not read leaves the session itself parked and
         // its subagents unaccounted for; the answer says exactly that much.
@@ -772,7 +791,7 @@ export function installSessionControl(
     yield ctx.commands.register({
       definitionId: CommandDefinitionId(RESUME_ALL_DEFINITION_ID),
       name: RESUME_ALL_COMMAND,
-      description: 'Resume every Session pause parked',
+      description: 'Resume every paused session',
       handler: async (invocation) => (modelIssued(ctx)
         ? { kind: 'error', text: UNATTENDED_TEXT }
         : { kind: 'success', text: summarizeResume(await resumePath.resumeParked(invocation.signal)) }),
@@ -794,7 +813,7 @@ export function installSessionControl(
     yield ctx.commands.register({
       definitionId: CommandDefinitionId(STATE_ALL_DEFINITION_ID),
       name: STATE_ALL_COMMAND,
-      description: 'Report whether every parked Session is safe to close',
+      description: 'Report whether every session is paused',
       handler: async (invocation) => globalPause.readStatus(invocation.signal),
     })
     // The morning decision list, and the four decisions it offers. All five are
@@ -806,31 +825,31 @@ export function installSessionControl(
     yield ctx.commands.register({
       definitionId: CommandDefinitionId(TRIAGE_DEFINITION_ID),
       name: TRIAGE_COMMAND,
-      description: 'List every Session that did not stop cleanly',
+      description: 'List sessions that did not pause completely',
       handler: async (invocation) => ({ kind: 'success', text: encodeTriageList(await triage.read(invocation.agent.id, invocation.signal)) }),
     })
     yield ctx.commands.register({
       definitionId: CommandDefinitionId(TRIAGE_CONTINUE_DEFINITION_ID),
       name: TRIAGE_CONTINUE_COMMAND,
-      description: 'Resume a listed Session: <session id>',
+      description: 'Resume a listed session: <session id>',
       handler: decide('continue'),
     })
     yield ctx.commands.register({
       definitionId: CommandDefinitionId(TRIAGE_NOTE_DEFINITION_ID),
       name: TRIAGE_NOTE_COMMAND,
-      description: 'Resume a listed Session with a note that its tool outcome is unknown: <session id>',
+      description: 'Resume a listed session with a note that its tool result is unknown: <session id>',
       handler: decide('note'),
     })
     yield ctx.commands.register({
       definitionId: CommandDefinitionId(TRIAGE_REVIEW_DEFINITION_ID),
       name: TRIAGE_REVIEW_COMMAND,
-      description: 'Open a listed Session for review without running it: <session id>',
+      description: 'Open a listed session without running it: <session id>',
       handler: decide('review'),
     })
     yield ctx.commands.register({
       definitionId: CommandDefinitionId(TRIAGE_LEAVE_DEFINITION_ID),
       name: TRIAGE_LEAVE_COMMAND,
-      description: 'Leave a listed Session paused for today: <session id>',
+      description: 'Keep a listed session paused: <session id>',
       handler: decide('leave'),
     })
     // The one listed verb that is not a resume: it flips whether the next

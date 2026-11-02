@@ -77,7 +77,7 @@ export const TRIAGE_FAILED_TEXT = 'pause could not carry out that decision; the 
 export const TRIAGE_LEFT_TEXT = 'pause left this session paused; it is still on the list.'
 
 /** Result copy for a decision aimed at a session that is not on the list. */
-export const TRIAGE_NOT_LISTED_TEXT = 'pause has no unfinished park recorded for this session.'
+export const TRIAGE_NOT_LISTED_TEXT = 'pause has no unfinished pause for this session.'
 
 /**
  * Result copy for a decision aimed at a row the calling session was not shown.

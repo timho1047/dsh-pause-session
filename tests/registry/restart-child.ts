@@ -71,7 +71,7 @@ for (let attempt = 0; attempt < 4000; attempt++) {
   if (listed.some(descriptor => descriptor.definitionId === resumeDefinitionId)) {
     const status = await ctx.commands.execute(agent, '/pause-state', [], new AbortController().signal)
     const text = status?.result.kind === 'success' ? status.result.text : undefined
-    if (text?.includes('safe to close') === true) {
+    if (text?.includes('paused') === true) {
       writeSync(1, `RESTART_READY ${text}\n`)
       if (mode === 'kill') process.kill(process.pid, 'SIGKILL')
       await ctx.fiber.dispose()
@@ -81,4 +81,4 @@ for (let attempt = 0; attempt < 4000; attempt++) {
   }
   await new Promise(resolve => setTimeout(resolve, 10))
 }
-throw new Error('child: the session never reported safe to close')
+throw new Error('child: the session never reported paused')

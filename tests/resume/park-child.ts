@@ -214,13 +214,13 @@ if (mode === 'clean') {
   await pause()
   agent.followup(createUserMessage({ content: [{ type: 'text', text: PENDING_INPUT }], source: { kind: 'user' } }))
   await until(() => seen.length === 1, 'the request standing at the gate')
-  await untilPhase('safe to close')
+  await untilPhase('paused')
 } else if (mode === 'goal') {
   ctx.goals.create(agent, { objective: GOAL_OBJECTIVE })
   agent.followup(createUserMessage({ content: [{ type: 'text', text: 'start the work' }], source: { kind: 'user' } }))
   await agent.whenIdle()
   await pause()
-  await untilPhase('safe to close')
+  await untilPhase('paused')
 } else if (mode === 'tool-result') {
   agent.followup(createUserMessage({ content: [{ type: 'text', text: 'run the tool' }], source: { kind: 'user' } }))
   await until(() => toolStarted, 'the tool in flight')
@@ -229,13 +229,13 @@ if (mode === 'clean') {
   // the gate catches: the park point with the tool's results already in hand.
   releaseTool()
   await until(() => seen.length === 2, 'the request answering the tool results')
-  await untilPhase('safe to close')
+  await untilPhase('paused')
 } else if (mode === 'draining' || mode === 'goal-draining') {
   if (mode === 'goal-draining') ctx.goals.create(agent, { objective: GOAL_OBJECTIVE })
   agent.followup(createUserMessage({ content: [{ type: 'text', text: 'run the tool' }], source: { kind: 'user' } }))
   await until(() => toolStarted, 'the tool in flight')
   await pause()
-  await untilPhase('draining')
+  await untilPhase('pausing')
 } else if (mode === 'pair') {
   agent.followup(createUserMessage({ content: [{ type: 'text', text: 'run both tools' }], source: { kind: 'user' } }))
   await until(() => fastDone && slowStarted, 'the first result recorded and the second call in flight')
@@ -247,13 +247,13 @@ if (mode === 'clean') {
   // park can never reach its point, and killing here leaves exactly the pair
   // the morning list has to tell apart.
   await pause()
-  await untilPhase('draining')
+  await untilPhase('pausing')
 } else if (mode === 'parking') {
   await pause()
   await until(() => flushEntered, 'the park checkpoint to be dispatched')
 } else {
   await pause()
-  await untilPhase('could not flush')
+  await untilPhase('save failed')
 }
 
 // The park flush covered the session as it stood at the park point; this child

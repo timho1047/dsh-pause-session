@@ -18,6 +18,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
+import { snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
 import { UNATTENDED_TEXT } from '../../src/control.ts'
 import { RESUME_DEFINITION_ID } from '../../src/shared.ts'
 import { textResponse } from '../assumptions/fake-provider.ts'
@@ -138,8 +139,8 @@ describe('the session-header press covers the tree it owns', () => {
       expect(answer.kind, answer.text).toBe('success')
       // The count is what makes the press unmistakable for stopping one thing:
       // the session plus the two subagents under it.
-      expect(answer.text).toBe('pause registered this session and 2 subagents.'
-        + ' They stop once the work in flight drains. Press again to cancel the pause.')
+      expect(answer.text).toBe('Paused this session and 2 subagents.'
+        + ' A running tool will finish first; no new model request will be sent. Press again to resume.')
       expect(await phases(caseRoot)).toEqual({
         'tree-root': 'draining',
         'tree-child': 'draining',
@@ -152,6 +153,42 @@ describe('the session-header press covers the tree it owns', () => {
       home.blocking.releaseAll()
       await allSafe(caseRoot, { 'tree-root': 'safe', 'tree-child': 'safe', 'tree-grandchild': 'safe' })
       expect(home.provider.requests).toHaveLength(sent)
+    } finally {
+      home.blocking.releaseAll()
+      await home.ctx.fiber.dispose()
+    }
+  })
+
+  it('leaves a one-shot child out of the registry instead of promising a resume', async () => {
+    const caseRoot = temporaryRoot('dsh-pause-tree-one-shot-', temporaryRoots)
+    const home = await mountGlobalHome(caseRoot, { script: gatedIn(['one-shot-root']) })
+    try {
+      const root = await home.create('one-shot-root')
+      const child = await home.create('one-shot-child')
+      root.session.append('subagent/catalog', {
+        version: 0,
+        childId: child.session.id,
+        childCreatedAt: child.session.header.createdAt,
+        mode: 'one-shot',
+        label: 'bridge',
+      })
+      child.session.append('subagent/descriptor', snapshotSubagentDescriptor({
+        mode: 'one-shot',
+        provider: 'spawn',
+        label: 'bridge',
+      }))
+      root.followup(ask('run the tool'))
+      await untilAsync(async () => home.blocking.started() === 1, 'the tool in flight')
+
+      const answer = await home.stop(root)
+      expect(answer.kind, answer.text).toBe('success')
+      expect(answer.text).toBe('Paused this session.'
+        + ' A running tool will finish first; no new model request will be sent. Press again to resume.')
+      expect(await phases(caseRoot)).toEqual({ 'one-shot-root': 'draining' })
+
+      home.blocking.releaseAll()
+      await allSafe(caseRoot, { 'one-shot-root': 'safe' })
+      expect(await phases(caseRoot)).toEqual({ 'one-shot-root': 'safe' })
     } finally {
       home.blocking.releaseAll()
       await home.ctx.fiber.dispose()
@@ -227,7 +264,7 @@ describe('the session-header press covers the tree it owns', () => {
       const answer = await home.release(root)
       expect(answer.kind, answer.text).toBe('error')
       expect(answer.text).toBe('pause resumed 1 session from where it stopped;'
-        + ' "unclean-root", "unclean-child" did not stop cleanly.')
+        + ' "unclean-root", "unclean-child" did not pause completely.')
       expect(await phases(caseRoot)).toEqual({
         'unclean-root': 'draining',
         'unclean-child': 'draining',
@@ -324,8 +361,8 @@ describe('the session-header press covers the tree it owns', () => {
       // the press does not report the tree as registered.
       const answer = await home.stop(root)
       expect(answer.kind, answer.text).toBe('error')
-      expect(answer.text).toBe('pause could not register "unrecorded-grandchild" in the pause registry,'
-        + ' so they are not paused. Everything else in the tree is.')
+      expect(answer.text).toBe('pause could not save the pause for "unrecorded-grandchild";'
+        + ' they are still running. Everything else in the tree is paused.')
       expect(await phases(caseRoot)).toEqual({ 'unrecorded-root': 'draining', 'unrecorded-child': 'draining' })
 
       // The refused member keeps running, and the whole-app report still names

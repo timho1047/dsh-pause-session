@@ -90,14 +90,14 @@ export const RESUMED_TEXT = 'This session resumed from where it paused.'
  * Result copy for a registered session this path refuses: its durable state is
  * not the outcome of a completed park, so waking it would be a guess.
  */
-export const UNCLEAN_TEXT = 'pause did not resume this session: it did not stop cleanly,'
-  + ' so its pending work needs your decision rather than a silent wake.'
+export const UNCLEAN_TEXT = 'pause did not resume this session: its pause did not finish cleanly,'
+  + ' so it needs your decision.'
 
 /** Result copy when nothing is parked under that session. */
 export const NOT_PARKED_TEXT = 'pause has no pause recorded for this session.'
 
 /** Result copy for a session that is parked but could not be loaded back. */
-export const ACTIVATION_FAILED_TEXT = 'pause could not open this session from its stored log, so it stayed paused.'
+export const ACTIVATION_FAILED_TEXT = 'pause could not reopen this session, so it stayed paused.'
 
 /** Result copy for a one-shot subagent route: its Session exists, but no resume may reactivate it. */
 export const UNRESUMABLE_TEXT = 'pause did not resume this session: it is a one-shot subagent route and cannot be resumed.'
@@ -239,7 +239,7 @@ export interface ReleaseTreeOutcome {
  * sentence about all of it: what came back, and — by name, because those rows
  * are what the morning list is for — what did not.
  * @param released - the sessions this release covered, in release order.
- * @returns the result text, e.g. `pause resumed 2 sessions from where they stopped; "child" did not stop cleanly`.
+ * @returns the result text, e.g. `pause resumed 2 sessions from where they stopped; "child" did not pause completely`.
  */
 export function summarizeTreeRelease(released: readonly ResumeAttempt[]): string {
   const resumed = released.filter(attempt => attempt.resumed).length
@@ -256,8 +256,8 @@ export function summarizeTreeRelease(released: readonly ResumeAttempt[]): string
   const rest = named.length === 0
     ? `${String(refused.length)} could not be resumed`
     : refused.length === named.length
-      ? `${named.join(', ')} did not stop cleanly`
-      : `${named.join(', ')} did not stop cleanly, and ${String(refused.length - named.length)} more could not be resumed`
+      ? `${named.join(', ')} did not pause completely`
+      : `${named.join(', ')} did not pause completely, and ${String(refused.length - named.length)} more could not be resumed`
   return `${head}; ${rest}.`
 }
 

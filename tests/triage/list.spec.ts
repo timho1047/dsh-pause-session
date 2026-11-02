@@ -171,7 +171,7 @@ describe('the decision list', () => {
     const text = encodeTriageList(hostile)
     expect(text.startsWith(TRIAGE_PREFIX)).toBe(true)
     expect(decodeTriageList(text)?.rows[0]?.reading).toBe('unreadable')
-    expect(decodeTriageList('pause: safe to close')).toBeUndefined()
+    expect(decodeTriageList('pause: paused')).toBeUndefined()
     expect(decodeTriageList('pause all: safe; registered: 1')).toBeUndefined()
   })
 })

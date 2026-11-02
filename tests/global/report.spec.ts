@@ -13,6 +13,7 @@
 import { afterAll, describe, expect, it } from 'vitest'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import { snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
 import { decodeGlobalStatus } from '../../src/shared.ts'
 import {
   blockingScript, cleanRoots, mountGlobalHome, settles, temporaryRoot, untilAsync,
@@ -45,6 +46,15 @@ describe('the whole-app report', () => {
         mode: 'one-shot',
         label: 'bridge',
       })
+      // The catalog row is what the tree walk reads; the child's own descriptor
+      // is what proves the route cannot be resumed. A real historical one-shot
+      // child has both, and the press must leave it out of the registry rather
+      // than promise a wake the morning path would refuse.
+      child.session.append('subagent/descriptor', snapshotSubagentDescriptor({
+        mode: 'one-shot',
+        provider: 'spawn',
+        label: 'bridge',
+      }))
       parent.followup(ask('run the tool'))
       await untilAsync(async () => home.blocking.started() === 1, 'the tool in flight')
 
@@ -53,8 +63,10 @@ describe('the whole-app report', () => {
       await untilAsync(async () => (await home.status(parent)).verdict === 'safe', 'the whole tree to park')
 
       const status = await home.status(parent)
-      expect(status.registered).toBe(2)
-      expect(status.safe).toBe(2)
+      // The one-shot child is named by the tree report but never registered:
+      // its route has no resume that could satisfy a park record.
+      expect(status.registered).toBe(1)
+      expect(status.safe).toBe(1)
       expect(status.blind).toEqual([])
       expect(status.unresumable).toEqual(['bridge-user'])
       expect(status.jobs).toEqual([job.id])

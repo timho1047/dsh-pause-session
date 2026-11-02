@@ -73,7 +73,7 @@ describe('a record whose session became readable after the mount', () => {
       // would for a session that is not live at all.
       const refused = await home.run('/pause-resume-all')
       expect(refused.kind, refused.text).toBe('success')
-      expect(refused.text).toBe('pause resumed no session; 1 did not stop cleanly and need your decision.')
+      expect(refused.text).toBe('pause resumed no session; 1 did not pause completely and need your decision.')
       await recordsUntil(caseRoot, [['late-unclean', 'draining']])
 
       // The row is the user's to decide, and deciding it is what clears the

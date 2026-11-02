@@ -58,7 +58,7 @@ describe('the clean resume path refuses a session that did not finish parking', 
 
     const home = await reviveHome(caseRoot)
     try {
-      expect(await resumeAll(home)).toBe('pause resumed no session; 3 did not stop cleanly and need your decision.')
+      expect(await resumeAll(home)).toBe('pause resumed no session; 3 did not pause completely and need your decision.')
       await settles()
 
       // Neither session was activated, so nothing was woken and no request was
@@ -95,7 +95,7 @@ describe('the clean resume path refuses a session that did not finish parking', 
 
       // The whole-app release runs this same path, live or not.
       expect(await resumeAll(home))
-        .toBe('pause resumed no session; 1 did not stop cleanly and need your decision.')
+        .toBe('pause resumed no session; 1 did not pause completely and need your decision.')
       await settles()
       // Nothing was woken and nothing was released: the one request the park
       // was holding is still held, and no new one was asked for.

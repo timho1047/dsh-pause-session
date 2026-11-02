@@ -237,10 +237,10 @@ export function foldTreePhases(phases: Iterable<ParkPhase>): { phase: ParkPhase;
 
 /** The one word each phase is published as, and the whole decoding vocabulary. */
 const PHASE_WORD: Record<ParkPhase, string> = {
-  draining: 'draining',
-  parking: 'flushing',
-  safe: 'safe to close',
-  'flush-failed': 'could not flush',
+  draining: 'pausing',
+  parking: 'saving',
+  safe: 'paused',
+  'flush-failed': 'save failed',
 }
 
 /**
