@@ -20,7 +20,13 @@ dsh-pause-session 会把每个会话停在同一个点：当前已经运行的�
 
 ## 快速开始
 
-1. 打开 DSH Web 侧边栏的 **Plugins** 页面，从 npm 安装 `dsh-pause-session`。也可以在该 profile 的会话里用 `plugin_manager` 的 `install_bundle`，`target` 填 `dsh-pause-session`。如果要安装本地 checkout，改传本目录的绝对路径；仓库里已经提交了构建好的 `lib/`，只有改过源码时才需要重新构建。本地开发布局见 [DEVELOPMENT.md](DEVELOPMENT.md)。
+1. 在终端把 npm 包安装到 `web` profile：
+
+   ```sh
+   dsh plugin --profile web add dsh-pause-session
+   ```
+
+   这个命令会安装 npm 包，并把它的 bundle 层加入 profile。安装后重启一次 DSH Web 进程，让运行中的进程加载新的 client bundle。侧边栏的 **Plugins** 页面主要是 desktop 安装路径。如果要安装本地 checkout，把包名换成目录的绝对路径；仓库里已经提交了构建好的 `lib/`，只有改过源码时才需要重新构建。本地开发布局见 [DEVELOPMENT.md](DEVELOPMENT.md)。
 2. 打开要暂停的会话。按标题旁的暂停按钮，会暂停这个会话及其子代理；按头部右侧的胶囊，会暂停所有运行中的会话树。
 3. 控件会先显示 **正在暂停**（Pausing），等运行中的工具结束、下一条模型请求被拦住后，才会变成 **已暂停**（Paused）。全局胶囊变成 **全部已暂停**（All Paused）时，所有已登记的会话都已停住。
 4. 下次按 **全部已暂停** 可以恢复所有干净暂停的会话；按会话旁的控制可以只恢复这一个会话及其子代理。
