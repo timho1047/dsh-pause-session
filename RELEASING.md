@@ -4,18 +4,26 @@ This repository publishes one npm package, `dsh-pause-session`, from a Git tag.
 
 ## First npm seed
 
-A brand-new npm package cannot use trusted publishing until it exists. Seed the
-first version manually:
+A brand-new npm package cannot use trusted publishing until it exists. Seed any
+version once manually; it does not need to be the first release version. This
+repository was seeded with the placeholder `0.0.0-stage`, which only reserves
+the package name and is not the release.
 
 ```sh
-pnpm run verify
-pnpm run build
-git add lib CHANGELOG.md package.json
-git commit -m "chore: release v0.1.0"
 npm publish --access public
 ```
 
-Then open the package settings on npmjs.com and configure a Trusted Publisher:
+Then configure a Trusted Publisher. The npm CLI can do it:
+
+```sh
+npm trust github dsh-pause-session \
+  --file release.yml \
+  --repo timho1047/dsh-pause-session \
+  --allow-publish \
+  --yes
+```
+
+The same relationship can be added in the package's settings on npmjs.com:
 
 - Owner: `timho1047`
 - Repository: `dsh-pause-session`
@@ -23,7 +31,11 @@ Then open the package settings on npmjs.com and configure a Trusted Publisher:
 - Permission: Publish
 
 After that, tag pushes publish through GitHub Actions OIDC and do not need a
-long-lived `NPM_TOKEN`.
+long-lived `NPM_TOKEN`. Check the result with:
+
+```sh
+npm trust list dsh-pause-session
+```
 
 ## Normal release
 
@@ -51,3 +63,5 @@ updates the GitHub Release with the matching changelog section.
 - If trusted publishing is temporarily unavailable, publish the generated
   tarball manually with `npm publish`, then rerun the tag workflow to create the
   GitHub Release.
+- The `0.0.0-stage` placeholder can be unpublished after the first real release;
+  it exists only so the package can be configured for trusted publishing.
