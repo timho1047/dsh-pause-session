@@ -42,12 +42,13 @@ half builds to `lib/client.js`, the `window.__ModuleLoader__` bundle the browser
 loads with the id `dsh-pause`. `tsdown.client.ts` is the vendored
 client-bundle preset shared by the plugins in this directory.
 
-The development dependencies link to `../../deepseek-harness`, so this
-repository is meant to live inside a DSH source checkout at
-`dsh-plugins/dsh-pause`. The published npm packages are older than the
-`0.2.2-alpha.2` APIs this plugin uses, so a standalone clone cannot run the
-typecheck, build, and test commands until those packages are published at a
-matching version.
+This is a personal plugin repository; `dsh-plugins/` is not part of the
+official DSH source tree. Its development dependencies use relative links to a
+DeepSeek Harness checkout at `../../deepseek-harness`, so local typecheck,
+build, and test commands expect that checkout to be present at the same
+relative depth. The published npm packages are older than the
+`0.2.2-alpha.2` APIs this plugin uses, so a fresh clone can `pnpm pack` but
+cannot run the full verification suite until matching packages are available.
 
 ## Design record
 
