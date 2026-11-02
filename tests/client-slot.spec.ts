@@ -3,7 +3,7 @@
  * to, under which ids, that it owns a locale namespace, and that it requires
  * the host round-trip it cannot work without. Asserted through the plugin's
  * declared interface (`inject` + `apply`), not its internals.
- * @module dsh-safe-stop/test/client-slot
+ * @module dsh-pause/test/client-slot
  */
 
 import { describe, expect, it } from 'vitest'
@@ -61,8 +61,8 @@ describe('client slot contribution', () => {
     expect(recorded).toContainEqual({ injected: 'conversation.session.header.utilities' })
     const registrations = recorded.flatMap(entry => entry.options === undefined ? [] : [entry.options])
     expect(registrations).toMatchObject([
-      { name: 'conversation.session.header.actions', id: 'safe-stop', locale: 'safe-stop' },
-      { name: 'conversation.session.header.utilities', id: 'safe-stop-all', locale: 'safe-stop' },
+      { name: 'conversation.session.header.actions', id: 'pause', locale: 'pause' },
+      { name: 'conversation.session.header.utilities', id: 'pause-all', locale: 'pause' },
     ])
   })
 
@@ -79,7 +79,7 @@ describe('client slot contribution', () => {
   it('registers its own locale namespace', () => {
     const { ctx, namespaces } = fakeClientContext()
     apply(ctx as never)
-    expect(namespaces).toEqual(['safe-stop'])
+    expect(namespaces).toEqual(['pause'])
   })
 
   it('requires the slot registry, the locale service, and the host command round-trip', () => {

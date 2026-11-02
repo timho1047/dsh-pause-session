@@ -7,14 +7,14 @@
  * committed, and — because nothing pulls the adapter — no timer is armed
  * anywhere. Machine sleep, network loss, and the adapter's stream-idle
  * watchdog therefore cannot touch a parked request.
- * @module dsh-safe-stop/gate
+ * @module dsh-pause/gate
  */
 
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 
 /** Message of the failure a held request ends with when its plugin unloads first. */
-export const PLUGIN_UNLOADED = 'safe-stop: plugin lifetime ended while a request was held'
+export const PLUGIN_UNLOADED = 'pause: plugin lifetime ended while a request was held'
 
 /** One latch a paused request waits on. */
 interface Latch {
@@ -38,7 +38,7 @@ interface Pause {
 
 /** The abort signal's own error, or a stable one when the abort carried no reason. */
 function abortError(signal: AbortSignal): Error {
-  return signal.reason instanceof Error ? signal.reason : new Error('safe-stop: request aborted while held')
+  return signal.reason instanceof Error ? signal.reason : new Error('pause: request aborted while held')
 }
 
 /** A latch without `Promise.withResolvers`, which this project's ES2022 lib predates. */

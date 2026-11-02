@@ -1,4 +1,4 @@
-/** `safe-stop` namespace dictionaries. */
+/** `pause` namespace dictionaries. */
 
 /** Simplified Chinese dictionary (the key-set source of truth). */
 export const zh = {
@@ -22,9 +22,9 @@ export const zh = {
   'checking.tip': '正在读取暂停状态',
   'unavailable.aria': '暂停状态暂不可用',
   'unavailable.tip': '暂停状态暂不可用',
-  'all.stop.aria': '暂停所有正在运行的会话及其子代理',
+  'all.pause.aria': '暂停所有正在运行的会话及其子代理',
   'all.resume.aria': '恢复所有被暂停的会话',
-  'all.idle': '停下所有会话',
+  'all.idle': '暂停所有会话',
   'all.finishing': '正在收尾',
   'all.unclean': '有会话没停干净',
   'all.unclean.aria': '有会话没停干净，这里不能恢复；打开清单逐行处理',
@@ -65,11 +65,11 @@ export const zh = {
   'all.triage': '有待决定的会话',
 } satisfies Record<string, string>
 
-/** The safe-stop namespace key union. */
-export type SafeStopKey = keyof typeof zh
+/** The pause namespace key union. */
+export type PauseKey = keyof typeof zh
 
 /** English dictionary, checked complete against the zh key set. */
-export const en: Record<SafeStopKey, string> = {
+export const en: Record<PauseKey, string> = {
   'pause.aria': 'Pause this session and its subagents: their next model request will not be sent',
   'pause.tip': 'Pause this session and its subagents',
   'resume.aria': 'Cancel this pause and let this session and its subagents continue',
@@ -90,9 +90,9 @@ export const en: Record<SafeStopKey, string> = {
   'checking.tip': 'Reading pause state',
   'unavailable.aria': 'Pause state is unavailable',
   'unavailable.tip': 'Pause state is unavailable',
-  'all.stop.aria': 'Pause every running session and its subagents',
+  'all.pause.aria': 'Pause every running session and its subagents',
   'all.resume.aria': 'Resume every parked session',
-  'all.idle': 'Stop all sessions',
+  'all.idle': 'Pause all sessions',
   'all.finishing': 'Finishing up',
   'all.unclean': 'Some did not stop cleanly',
   'all.unclean.aria': 'Some sessions did not stop cleanly and cannot be released here; open the list to decide them',

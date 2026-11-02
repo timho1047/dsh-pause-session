@@ -2,7 +2,7 @@
  * The facts both sides of the resume proof have to agree on: what the parked
  * session was waiting for, and what the goal it was carrying asks for. Kept out
  * of the child module on purpose — importing that module runs it.
- * @module dsh-safe-stop/test/resume/case
+ * @module dsh-pause/test/resume/case
  */
 
 /** The input the parked session left unanswered; the parent asserts the model got it. */

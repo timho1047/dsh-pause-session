@@ -5,25 +5,25 @@
  * the button says, whether it accepts a press, and which state label is visible
  * — is asserted without a browser renderer. Labels are KEYS, not copy: the
  * visible sentence is localized, and the host's own names join it as data.
- * @module dsh-safe-stop/client/view
+ * @module dsh-pause/client/view
  */
 
 import type { GlobalReading, TriageReading } from './global.js'
-import type { SafeStopReading } from './control.js'
-import type { SafeStopKey } from './locales.js'
+import type { PauseReading } from './control.js'
+import type { PauseKey } from './locales.js'
 import type { TriageRow } from '../shared.js'
 import type { TriageAction } from '../shared.js'
 
 /** What one reading renders as. */
-export interface SafeStopView {
+export interface PauseView {
   /** Whether the host reported this session paused. */
   readonly paused: boolean
   /** Whether the control accepts a press; an unknown or failed reading does not. */
   readonly enabled: boolean
   /** Accessible name of the button. */
-  readonly ariaKey: SafeStopKey
+  readonly ariaKey: PauseKey
   /** Label shown beside the button while the control has something to say. */
-  readonly labelKey?: SafeStopKey
+  readonly labelKey?: PauseKey
   /** Tools in flight, taken verbatim from the host; rendered only with `labelKey`. */
   readonly runningTools: readonly string[]
   /**
@@ -58,7 +58,7 @@ export function showsPauseControl(subagent: { readonly address: unknown } | null
  * @param reading - the host's answer.
  * @returns the field to spread into the view, empty when the host said nothing.
  */
-function goalOf(reading: SafeStopReading): { rearmGoal?: boolean } {
+function goalOf(reading: PauseReading): { rearmGoal?: boolean } {
   return reading.rearmGoal === undefined ? {} : { rearmGoal: reading.rearmGoal }
 }
 
@@ -67,7 +67,7 @@ function goalOf(reading: SafeStopReading): { rearmGoal?: boolean } {
  * @param reading - the host-reported reading, or `undefined` before the first answer.
  * @returns the view for that reading.
  */
-export function safeStopView(reading: SafeStopReading | undefined): SafeStopView {
+export function pauseView(reading: PauseReading | undefined): PauseView {
   switch (reading?.phase) {
     case 'active':
       // Not parked, so no record exists for a resume to obey: there is nothing
@@ -121,22 +121,22 @@ export function safeStopView(reading: SafeStopReading | undefined): SafeStopView
 /** One named fact from the whole-app report, with the copy key that introduces it. */
 export interface GlobalCaveat {
   /** What this list of names is. */
-  readonly key: SafeStopKey
+  readonly key: PauseKey
   /** Host names, rendered verbatim. */
   readonly names: readonly string[]
 }
 
 /** Which verb a whole-app press runs. */
-export type GlobalAction = 'stop-all' | 'resume-all' | 'none'
+export type GlobalAction = 'pause-all' | 'resume-all' | 'none'
 
 /** One decision as the list renders it. */
 export interface TriageActionView {
   /** The decision this button takes. */
   readonly action: TriageAction
   /** Visible label. */
-  readonly labelKey: SafeStopKey
+  readonly labelKey: PauseKey
   /** What it does, for the accessible name. */
-  readonly ariaKey: SafeStopKey
+  readonly ariaKey: PauseKey
 }
 
 /** The four decisions, in the order a user reads them: least to most cautious. */
@@ -162,7 +162,7 @@ export interface TriageRowView {
   /** Host data, rendered verbatim. */
   readonly sessionId: string
   /** The durable outcome, as a word. */
-  readonly phaseKey: SafeStopKey
+  readonly phaseKey: PauseKey
   /** Stop position: the event the log ends on and the step it belongs to. */
   readonly stopped?: string
   /** The tools whose outcomes were never recorded. */
@@ -184,7 +184,7 @@ export interface TriageView {
 }
 
 /** The word each non-clean phase is shown as. */
-const PHASE_KEY: Readonly<Record<TriageRow['phase'], SafeStopKey>> = {
+const PHASE_KEY: Readonly<Record<TriageRow['phase'], PauseKey>> = {
   draining: 'triage.phase.draining',
   parking: 'triage.phase.parking',
   'flush-failed': 'triage.phase.flushFailed',
@@ -218,18 +218,18 @@ export function triageView(reading: TriageReading | undefined): TriageView {
 }
 
 /** What the whole-app reading renders as. */
-export interface GlobalStopView {
+export interface GlobalPauseView {
   /** Whether the control renders at all; a control with no host answer claims nothing. */
   readonly visible: boolean
   /** Whether the control accepts a press. */
   readonly enabled: boolean
   /** Accessible name of the button. */
-  readonly ariaKey: SafeStopKey
+  readonly ariaKey: PauseKey
   /**
    * Headline shown beside the button. Absent while there is nothing to report:
    * an untouched park renders the bare affordance, not a sentence about itself.
    */
-  readonly labelKey?: SafeStopKey
+  readonly labelKey?: PauseKey
   /** Verb the press runs. */
   readonly action: GlobalAction
   /** Host numbers, rendered verbatim beside the label. */
@@ -245,7 +245,7 @@ export interface GlobalStopView {
  * @param reading - the host-reported reading, or `undefined` before the first answer.
  * @returns the view for that reading.
  */
-export function globalStopView(reading: GlobalReading | undefined): GlobalStopView {
+export function globalPauseView(reading: GlobalReading | undefined): GlobalPauseView {
   if (reading === undefined) {
     return { visible: false, enabled: false, ariaKey: 'all.checking.aria', action: 'none', detail: '', caveats: [], unclean: 0 }
   }
@@ -278,7 +278,7 @@ export function globalStopView(reading: GlobalReading | undefined): GlobalStopVi
     case 'idle':
       // Nothing parked: the pill is the affordance itself, so it carries no
       // sentence about a park that does not exist.
-      return { ...base, ariaKey: 'all.stop.aria', action: 'stop-all', detail: '' }
+      return { ...base, ariaKey: 'all.pause.aria', action: 'pause-all', detail: '' }
     case 'safe':
       return {
         ...base,

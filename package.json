@@ -1,7 +1,7 @@
 {
-  "name": "dsh-safe-stop",
+  "name": "dsh-pause",
   "version": "0.1.0",
-  "description": "DSH plugin: stop every running session (and its subagents) at a safe point before you leave, then resume them the next morning as if nothing was interrupted.",
+  "description": "DSH plugin: pause every running session (and its subagents) at a safe point before you leave, then resume them the next morning as if nothing was interrupted.",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -15,7 +15,9 @@
       "default": "./lib/client.js"
     },
     "./cordis.patch.yml": "./cordis.patch.yml",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
   },
   "files": [
     "lib/index.js",
@@ -24,7 +26,9 @@
     "lib/client.js.map",
     "lib/types/**/*.d.ts",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "locale/*.json",
+    "icon.svg"
   ],
   "scripts": {
     "build:host": "tsc -p tsconfig.json",
@@ -60,9 +64,11 @@
     "@deepseek-ai/dsh-goal": "*",
     "@deepseek-ai/dsh-jobs": "*",
     "@deepseek-ai/dsh-llm": "*",
-    "@deepseek-ai/dsh-storage": "*",
     "@deepseek-ai/dsh-storage-domain": "*",
-    "@deepseek-ai/dsh-subagent": "*"
+    "@deepseek-ai/dsh-subagent": "*",
+    "@deepseek-ai/dsh-session": "*",
+    "@deepseek-ai/dsh-session-query": "*",
+    "@deepseek-ai/dsh-agent-preset-registry": "*"
   },
   "dependencies": {
     "zod": "4.4.3"
@@ -74,6 +80,7 @@
     "@deepseek-ai/dsh-agent": "link:../../deepseek-harness/packages/core/agent",
     "@deepseek-ai/dsh-agent-loop": "link:../../deepseek-harness/packages/core/agent-loop",
     "@deepseek-ai/dsh-agent-loop-testkit": "link:../../deepseek-harness/packages/test-support/agent-loop-testkit",
+    "@deepseek-ai/dsh-agent-preset-registry": "link:../../deepseek-harness/packages/preset/agent-preset-registry",
     "@deepseek-ai/dsh-api-remotes": "link:../../deepseek-harness/packages/api/remotes",
     "@deepseek-ai/dsh-client-locale": "link:../../deepseek-harness/packages/client/locale",
     "@deepseek-ai/dsh-client-store": "link:../../deepseek-harness/packages/client/store",
@@ -93,6 +100,7 @@
     "@deepseek-ai/dsh-session-persistence": "link:../../deepseek-harness/packages/session/session-persistence",
     "@deepseek-ai/dsh-session-persistence-jsonl": "link:../../deepseek-harness/packages/session/session-persistence-jsonl",
     "@deepseek-ai/dsh-session-projection": "link:../../deepseek-harness/packages/session/session-projection",
+    "@deepseek-ai/dsh-session-query": "link:../../deepseek-harness/packages/session-query/session-query",
     "@deepseek-ai/dsh-session-query-sqlite": "link:../../deepseek-harness/packages/session-query/session-query-sqlite",
     "@deepseek-ai/dsh-storage": "link:../../deepseek-harness/packages/storage/storage",
     "@deepseek-ai/dsh-storage-domain": "link:../../deepseek-harness/packages/storage/storage-domain",
@@ -100,6 +108,7 @@
     "@deepseek-ai/dsh-subagent": "link:../../deepseek-harness/packages/subagent/subagent",
     "@deepseek-ai/dsh-system-prompt": "link:../../deepseek-harness/packages/core/system-prompt",
     "@deepseek-ai/dsh-timeout": "link:../../deepseek-harness/packages/util/timeout",
+    "@deepseek-ai/dsh-tool-testkit": "link:../../deepseek-harness/packages/test-support/tool-testkit",
     "@deepseek-ai/dsh-tools": "link:../../deepseek-harness/packages/core/tools",
     "@types/node": "^22.10.0",
     "@types/react": "^18.3.0",
@@ -109,5 +118,8 @@
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "engines": {
+    "dsh": ">=0.2.2-alpha.2 <0.3.0-0"
+  }
 }

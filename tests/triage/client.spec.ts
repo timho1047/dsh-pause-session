@@ -9,16 +9,16 @@
  * the rows as of the read, and each decision is its own session-addressed
  * command. The panel's own entry point is a pure function of the whole-app view,
  * so "is there anything to decide" is asserted without a browser renderer.
- * @module dsh-safe-stop/test/triage/client
+ * @module dsh-pause/test/triage/client
  */
 
 import { describe, expect, it } from 'vitest'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { apply } from '../../src/client/index.tsx'
-import type { SafeStopPillInjected } from '../../src/client/pill.tsx'
-import { SafeStopGlobalControl, TRIAGE_DECISION_COMMAND } from '../../src/client/global.ts'
-import type { GlobalStopState, TriageReading } from '../../src/client/global.ts'
-import { globalStopView, triageView, TRIAGE_GOAL_VIEW } from '../../src/client/view.ts'
+import type { PausePillInjected } from '../../src/client/pill.tsx'
+import { PauseGlobalControl, TRIAGE_DECISION_COMMAND } from '../../src/client/global.ts'
+import type { GlobalPauseState, TriageReading } from '../../src/client/global.ts'
+import { globalPauseView, triageView, TRIAGE_GOAL_VIEW } from '../../src/client/view.ts'
 import {
   decodeTriageList, encodeGlobalStatus, encodeTriageList, STATE_ALL_COMMAND, TRIAGE_COMMAND, TRIAGE_GOAL_COMMAND,
 } from '../../src/shared.ts'
@@ -80,7 +80,7 @@ function hostDouble(): { commands: never; host: HostDouble } {
         const list: TriageList = { rows: host.rows }
         return Promise.resolve({ ok: true, value: { commandId: 'c', result: { kind: 'success', text: encodeTriageList(list) } } })
       }
-      if (line.startsWith('/safe-triage-')) {
+      if (line.startsWith('/pause-triage-')) {
         // A decision releases the session it continued, exactly as the host does.
         const target = line.slice(line.indexOf(' ') + 1)
         host.rows = host.rows.filter(entry => line.includes('-leave') || entry.sessionId !== target)
@@ -95,13 +95,13 @@ function hostDouble(): { commands: never; host: HostDouble } {
   return { commands: commands as never, host }
 }
 
-const triageOf = (control: SafeStopGlobalControl): TriageReading | undefined =>
+const triageOf = (control: PauseGlobalControl): TriageReading | undefined =>
   control.store.getSnapshot().triage
 
 describe('the decision list in the browser', () => {
   it('asks the host for the rows when the panel opens, and not before', async () => {
     const { commands, host } = hostDouble()
-    const control = new SafeStopGlobalControl(commands, new AbortController().signal)
+    const control = new PauseGlobalControl(commands, new AbortController().signal)
 
     // Closed: the panel has no rows and has spent no call on them.
     expect(triageOf(control)).toBeUndefined()
@@ -109,12 +109,12 @@ describe('the decision list in the browser', () => {
     expect(host.lines).toEqual([])
 
     await control.refresh(ADDRESS)
-    expect(host.lines).toEqual(['/safe-state-all'])
+    expect(host.lines).toEqual(['/pause-state-all'])
 
     // Opening it is what asks; the explicit read after that is the second call.
     control.setPanel(true)
     await control.refreshTriage()
-    expect(host.lines).toEqual(['/safe-state-all', `/${TRIAGE_COMMAND}`, `/${TRIAGE_COMMAND}`])
+    expect(host.lines).toEqual(['/pause-state-all', `/${TRIAGE_COMMAND}`, `/${TRIAGE_COMMAND}`])
     // `updatedAt` is the host's own park timestamp and does not ride the
     // published list; every fact the row shows does.
     expect(triageOf(control)).toMatchObject({ kind: 'reported', rows: [{ ...row(), updatedAt: 0 }] })
@@ -147,7 +147,7 @@ describe('the decision list in the browser', () => {
 
   it('runs one listed verb per action, addressed through the session the user is on', async () => {
     const { commands, host } = hostDouble()
-    const control = new SafeStopGlobalControl(commands, new AbortController().signal)
+    const control = new PauseGlobalControl(commands, new AbortController().signal)
     await control.refresh(ADDRESS)
     control.setPanel(true)
     await control.refreshTriage()
@@ -188,17 +188,17 @@ describe('the decision list in the browser', () => {
   it('shows the panel entry point only when the host says something did not stop cleanly', () => {
     // `stalled` is the host's own name for "will not finish in this process",
     // which is exactly the set the list exists for.
-    expect(globalStopView({ kind: 'reported', status: status({ stalled: ['a'] }) }).unclean).toBe(1)
-    expect(globalStopView({ kind: 'reported', status: status({ stalled: [] }) }).unclean).toBe(0)
+    expect(globalPauseView({ kind: 'reported', status: status({ stalled: ['a'] }) }).unclean).toBe(1)
+    expect(globalPauseView({ kind: 'reported', status: status({ stalled: [] }) }).unclean).toBe(0)
     // A host that cannot answer gets no entry point, like the rest of the pill.
-    expect(globalStopView({ kind: 'unavailable' }).unclean).toBe(0)
+    expect(globalPauseView({ kind: 'unavailable' }).unclean).toBe(0)
   })
 
   it('refuses to read a list out of the other vocabularies', () => {
     const list = encodeTriageList({ rows: [row()] })
     expect(decodeTriageList(list)?.rows[0]).toMatchObject({ sessionId: 'overnight-tools', phase: 'draining' })
     expect(decodeTriageList(encodeGlobalStatus(status()))).toBeUndefined()
-    expect(decodeTriageList('safe-stop: draining')).toBeUndefined()
+    expect(decodeTriageList('pause: draining')).toBeUndefined()
   })
 
   it('round-trips a row whole, separators and all', () => {
@@ -264,21 +264,21 @@ describe('the decision list from its header seat', () => {
     apply(ctx as never)
     const entry = registrations.find(registration =>
       registration.options['name'] === 'conversation.session.header.utilities')
-    if (entry === undefined) throw new Error('safe-stop: the whole-app control registered no slot entry')
-    const face = (entry.options as { inject?: () => SafeStopPillInjected }).inject
-    if (face === undefined) throw new Error('safe-stop: the whole-app control registered no inject face')
+    if (entry === undefined) throw new Error('pause: the whole-app control registered no slot entry')
+    const face = (entry.options as { inject?: () => PausePillInjected }).inject
+    if (face === undefined) throw new Error('pause: the whole-app control registered no inject face')
     return { host, injected: face() }
   }
 
   it('opens and reads the panel from the header, spending nothing on rows while it is closed', async () => {
     const benchRun = bench()
-    const state = (): GlobalStopState => benchRun.injected.hooks.safeStopGlobal.getSnapshot()
+    const state = (): GlobalPauseState => benchRun.injected.hooks.pauseGlobal.getSnapshot()
 
     benchRun.injected.refresh(ADDRESS)
     await until(() => state().global !== undefined)
     // Something did not stop cleanly, which is what makes the panel reachable:
     // its entry point counts the same set the whole-app verdict calls unclean.
-    expect(globalStopView(state().global)).toMatchObject({ visible: true, unclean: 1 })
+    expect(globalPauseView(state().global)).toMatchObject({ visible: true, unclean: 1 })
     expect(state().triage).toBeUndefined()
     expect(benchRun.host.lines).toEqual([`/${STATE_ALL_COMMAND}`])
 

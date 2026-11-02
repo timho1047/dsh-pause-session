@@ -10,7 +10,7 @@
  * wire assertion runs the parked child's own request and the resumed request
  * through the route's serializer, so what is compared is the payload, not the
  * plugin's intent.
- * @module dsh-safe-stop/test/resume/clean-resume
+ * @module dsh-pause/test/resume/clean-resume
  */
 
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -42,7 +42,7 @@ beforeAll(() => { ensureHostEntry() })
 
 describe('a cleanly parked session resumed in a fresh process', () => {
   it('answers the input that was pending, and puts nothing new on the wire', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-resume-clean-')
+    const caseRoot = temporaryRoot('dsh-pause-resume-clean-')
     const parked = await parkAndLeave(caseRoot, 'overnight-clean', 'clean')
     expect(parked.request, 'the child parked nothing at the gate').toBeDefined()
     expect((await readParkRegistry(storageOf(caseRoot))).map(entry => [String(entry.sessionId), entry.phase]))
@@ -53,7 +53,7 @@ describe('a cleanly parked session resumed in a fresh process', () => {
       // Nothing is live before the press: the registry is the only thing that
       // remembers this session, which is what makes the activation part real.
       expect(home.ctx.agents.get(SessionId('overnight-clean'))).toBeUndefined()
-      expect(await resumeAll(home)).toBe('safe-stop resumed 1 session from where it stopped.')
+      expect(await resumeAll(home)).toBe('pause resumed 1 session from where it stopped.')
 
       const resumed = home.ctx.agents.get(SessionId('overnight-clean'))
       expect(resumed, 'the parked session was not activated').toBeDefined()
@@ -80,13 +80,13 @@ describe('a cleanly parked session resumed in a fresh process', () => {
   })
 
   it('resumes from a step whose tool results were already in hand', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-resume-tool-')
+    const caseRoot = temporaryRoot('dsh-pause-resume-tool-')
     // The park point the gate exists for: the tool finished, its results are on
     // the surface, and the request that would answer them never left.
     const parked = await parkAndLeave(caseRoot, 'overnight-tool', 'tool-result')
     const home = await reviveHome(caseRoot, { tools: true })
     try {
-      expect(await resumeAll(home)).toBe('safe-stop resumed 1 session from where it stopped.')
+      expect(await resumeAll(home)).toBe('pause resumed 1 session from where it stopped.')
       const resumed = home.ctx.agents.get(SessionId('overnight-tool'))
       expect(resumed, 'the parked session was not activated').toBeDefined()
       await until(() => home.provider.requests.length === 1, 'the model answering the tool results')
@@ -109,7 +109,7 @@ describe('a cleanly parked session resumed in a fresh process', () => {
   })
 
   it('resumes through the session-scoped verb when the session is already open', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-resume-open-')
+    const caseRoot = temporaryRoot('dsh-pause-resume-open-')
     const parked = await parkAndLeave(caseRoot, 'overnight-open', 'clean')
     const home = await reviveHome(caseRoot)
     try {
@@ -120,7 +120,7 @@ describe('a cleanly parked session resumed in a fresh process', () => {
         .toContain(RESUME_DEFINITION_ID)
       expect(home.provider.requests).toHaveLength(0)
 
-      const execution = await home.ctx.commands.execute(opened, '/safe-resume', [], new AbortController().signal)
+      const execution = await home.ctx.commands.execute(opened, '/pause-resume', [], new AbortController().signal)
       expect(execution?.result.kind, JSON.stringify(execution?.result)).toBe('success')
 
       await until(() => home.provider.requests.length === 1, 'the model answering the pending input')

@@ -5,7 +5,7 @@
  * run through `ctx.remote.commands.execute`, plus the forwarded
  * `commands/change` event as the only notification — carries the aggregate
  * here. There is no push channel a third-party plugin can add, so the browser
- * asks: `safe-state-all` is registered globally and its RESULT carries the
+ * asks: `pause-state-all` is registered globally and its RESULT carries the
  * whole-app status as of the read.
  *
  * The command channel is session-addressed, so the control needs one session
@@ -45,7 +45,7 @@
  * at the close of that window when the reading the action left is still moving,
  * which is how a park that reaches its final phase inside the echo window is
  * still read.
- * @module dsh-safe-stop/client/global
+ * @module dsh-pause/client/global
  */
 
 import type { ClientRemote } from '@deepseek-ai/dsh-api-remotes/client'
@@ -53,14 +53,14 @@ import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import {
-  decodeGlobalStatus, decodeTriageList, RESUME_ALL_COMMAND, STATE_ALL_COMMAND, STOP_ALL_COMMAND,
+  decodeGlobalStatus, decodeTriageList, RESUME_ALL_COMMAND, STATE_ALL_COMMAND, PAUSE_ALL_COMMAND,
   TRIAGE_COMMAND, TRIAGE_CONTINUE_COMMAND, TRIAGE_GOAL_COMMAND, TRIAGE_LEAVE_COMMAND, TRIAGE_NOTE_COMMAND,
   TRIAGE_REVIEW_COMMAND,
 } from '../shared.js'
 import type { GlobalStatus, TriageAction, TriageRow } from '../shared.js'
 import { burstWaits, DEFAULT_BURST_POLICY, ReadBurst } from './burst.js'
 import type { BurstPolicy } from './burst.js'
-import { globalStopView } from './view.js'
+import { globalPauseView } from './view.js'
 
 /** What the whole-app control knows: the host's answer, or that it could not ask. */
 export type GlobalReading =
@@ -73,7 +73,7 @@ export type TriageReading =
   | { readonly kind: 'unavailable' }
 
 /** Whole-app control state. */
-export interface GlobalStopState {
+export interface GlobalPauseState {
   /** The host's answer; absent until one arrives. Writable: the store updates through a draft. */
   global: GlobalReading | undefined
   /** Whether the user asked for the decision list; the panel reads only when it is open. */
@@ -82,7 +82,7 @@ export interface GlobalStopState {
   triage: TriageReading | undefined
 }
 
-const INITIAL: GlobalStopState = { global: undefined, panelOpen: false, triage: undefined }
+const INITIAL: GlobalPauseState = { global: undefined, panelOpen: false, triage: undefined }
 
 /** The command one listed verb runs, named from the one vocabulary the host registers. */
 export const TRIAGE_DECISION_COMMAND: Readonly<Record<TriageAction, string>> = {
@@ -174,9 +174,9 @@ export function parkedAddress(status: GlobalStatus): SessionId | undefined {
 }
 
 /** Owns the published whole-app reading; nothing else writes that state. */
-export class SafeStopGlobalControl {
+export class PauseGlobalControl {
   /** State source the whole-app contribution binds its selector hook to. */
-  readonly store: SnapshotStore<GlobalStopState> = createSnapshotStore(INITIAL)
+  readonly store: SnapshotStore<GlobalPauseState> = createSnapshotStore(INITIAL)
 
   /** The session the shell asked this control through; reads start here. */
   private address: SessionId | undefined
@@ -454,9 +454,9 @@ export class SafeStopGlobalControl {
     // Nothing to press against: a state that could not be read is not a state
     // this control may act on.
     if (current === undefined || current.kind !== 'reported') return
-    const action = globalStopView(current).action
+    const action = globalPauseView(current).action
     if (action === 'none') return
-    const line = action === 'stop-all' ? `/${STOP_ALL_COMMAND}` : `/${RESUME_ALL_COMMAND}`
+    const line = action === 'pause-all' ? `/${PAUSE_ALL_COMMAND}` : `/${RESUME_ALL_COMMAND}`
     // The press is a client action: the host announces the markers it registers
     // or unregisters as it runs, and the read below is the answer to all of it.
     this.burst.absorb()

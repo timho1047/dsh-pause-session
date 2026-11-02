@@ -20,7 +20,7 @@
  * The aggregate is derived in one place so the host's answer and the browser's
  * reading of it cannot disagree, and it is a promise about the durable
  * registry: a session is `safe` only when its recorded phase says so.
- * @module dsh-safe-stop/global
+ * @module dsh-pause/global
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -52,7 +52,7 @@ export interface LivePark {
 }
 
 /** What the whole-app control needs from the per-session control. */
-export interface GlobalStopDeps {
+export interface GlobalPauseDeps {
   /**
    * @param sessionId - session to inspect.
    * @returns whether a press already owns this session.
@@ -82,17 +82,19 @@ export interface GlobalStopDeps {
 }
 
 /** The whole-app park, as the plugin entry drives it. */
-export interface GlobalStop {
+export interface GlobalPause {
   /**
    * Register and park every running session tree in one action. Sessions this
    * pause already owns are left where they are; an idle session is not touched.
+   * @param signal - cancellation for the tree reads this action performs.
    * @returns the aggregate as of this action's end.
    */
-  pressAll(): Promise<CommandResult>
+  pressAll(signal?: AbortSignal): Promise<CommandResult>
   /**
+   * @param signal - cancellation for the tree reads this read performs.
    * @returns the aggregate as of this read.
    */
-  readStatus(): Promise<CommandResult>
+  readStatus(signal?: AbortSignal): Promise<CommandResult>
   /**
    * Report one session a press could not register, so the aggregate names it.
    * The whole-app action records that fact for its own targets; a press of a
@@ -136,12 +138,12 @@ function readingOf(walk: TreeWalk): TreeReading {
  * @param deps - the per-session press and the live phase of every mark.
  * @returns the one-press action and the aggregate read.
  */
-export function mountGlobalStop(
+export function mountGlobalPause(
   ctx: Context,
   watch: ParkWatch,
   registry: ParkRegistry,
-  deps: GlobalStopDeps,
-): GlobalStop {
+  deps: GlobalPauseDeps,
+): GlobalPause {
   /**
    * Sessions this action tried to press and could not record. They are NOT
    * parked and they keep running, so the aggregate counts them and names them
@@ -176,14 +178,15 @@ export function mountGlobalStop(
    * answer; the cache keeps that read from repeating a catalog round-trip it
    * has already paid for.
    */
-  const walkTree = async (sessionId: SessionId): Promise<TreeReading> => {
+  const walkTree = async (sessionId: SessionId, signal?: AbortSignal): Promise<TreeReading> => {
+    signal?.throwIfAborted()
     const cached = walks.get(sessionId)
     if (cached !== undefined) return cached
     // No subagent service at all: the walk would answer "no members", which is
     // not the same claim as "no children", and this report may not make it.
     const reading = ctx.get('subagents') === undefined
       ? { members: [], unresumable: false, unread: true }
-      : readingOf(await walkDescendants(ctx, sessionId))
+      : readingOf(await walkDescendants(ctx, sessionId, signal))
     walks.set(sessionId, reading)
     return reading
   }
@@ -196,13 +199,13 @@ export function mountGlobalStop(
    * press leaves it alone rather than record a park that could never finish
    * (see `./control.ts`).
    */
-  const runningTargets = async (): Promise<readonly SessionId[]> => {
+  const runningTargets = async (signal?: AbortSignal): Promise<readonly SessionId[]> => {
     const found = new Set<SessionId>()
     for (const agent of ctx.agents.list()) if (running(agent)) found.add(agent.id)
     // The roots are fixed before the walk: a descendant discovered here is a
     // member of a tree, not a second tree to walk from.
     for (const root of [...found]) {
-      for (const member of (await walkTree(root)).members) found.add(member)
+      for (const member of (await walkTree(root, signal)).members) found.add(member)
     }
     return [...found].filter(sessionId => !deps.isPaused(sessionId))
   }
@@ -237,7 +240,7 @@ export function mountGlobalStop(
    * The park also names the session it belongs to, so a client can address its
    * reads there rather than at whatever session it is showing.
    */
-  const status = async (): Promise<GlobalStatus> => {
+  const status = async (signal?: AbortSignal): Promise<GlobalStatus> => {
     const phases = new Map<SessionId, LivePark>()
     // The durable list is the promise; a live mark is the same episode's
     // fresher phase, and a press that could not be recorded is neither.
@@ -291,7 +294,7 @@ export function mountGlobalStop(
     // One walk is one catalog read, and the walks do not depend on each other:
     // a read of N registered sessions must not take N catalog round-trips end
     // to end. `walkTree` answers from its per-episode cache when it has one.
-    const trees = await Promise.all(owners.map(async sessionId => [sessionId, await walkTree(sessionId)] as const))
+    const trees = await Promise.all(owners.map(async sessionId => [sessionId, await walkTree(sessionId, signal)] as const))
     for (const [sessionId, tree] of trees) {
       if (tree.unresumable) unresumable.push(String(sessionId))
       if (tree.unread) unreadTrees.push(String(sessionId))
@@ -327,23 +330,24 @@ export function mountGlobalStop(
   }
 
   return {
-    pressAll: async () => {
+    pressAll: async (signal) => {
       for (let round = 0; round < PRESS_ROUNDS; round += 1) {
-        const targets = await runningTargets()
+        const targets = await runningTargets(signal)
         if (targets.length === 0) break
         for (const sessionId of targets) {
+          signal?.throwIfAborted()
           // The press is a durable promise per session: one that cannot be
           // recorded is rolled back there and named here.
           markUnrecorded(sessionId, !await deps.press(sessionId))
           deps.look(sessionId)
         }
       }
-      const answer = encodeGlobalStatus(await status())
+      const answer = encodeGlobalStatus(await status(signal))
       return unrecorded.size === 0
         ? { kind: 'success', text: answer }
         : { kind: 'error', text: answer }
     },
-    readStatus: async () => ({ kind: 'success', text: encodeGlobalStatus(await status()) }),
+    readStatus: async (signal) => ({ kind: 'success', text: encodeGlobalStatus(await status(signal)) }),
     markUnrecorded,
   }
 }

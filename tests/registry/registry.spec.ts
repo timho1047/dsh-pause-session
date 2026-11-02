@@ -7,7 +7,7 @@
  * the registry in a second context over the same storage root (what a new
  * process does), and the live side through the same command registry the
  * browser half reads.
- * @module dsh-safe-stop/test/registry/registry
+ * @module dsh-pause/test/registry/registry
  */
 
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -52,11 +52,11 @@ async function published(ctx: Context, agent: Agent): Promise<ParkStatus | undef
   const listed = ctx.commands.list(agent)
   if (!listed.some(descriptor => descriptor.definitionId === RESUME_DEFINITION_ID)) return undefined
   const execution = await ctx.commands.execute(agent, `/${STATUS_COMMAND}`, [], new AbortController().signal)
-  if (execution === undefined) throw new Error('safe-stop: the status command is not registered')
-  if (execution.result.kind !== 'success') throw new Error(`safe-stop: status read failed: ${execution.result.text}`)
+  if (execution === undefined) throw new Error('pause: the status command is not registered')
+  if (execution.result.kind !== 'success') throw new Error(`pause: status read failed: ${execution.result.text}`)
   const text = execution.result.text
   const decoded = text === undefined ? undefined : decodeParkStatus(text)
-  if (decoded === undefined) throw new Error(`safe-stop: status read answered in an unknown vocabulary: ${String(text)}`)
+  if (decoded === undefined) throw new Error(`pause: status read answered in an unknown vocabulary: ${String(text)}`)
   return decoded
 }
 
@@ -231,7 +231,7 @@ describe('the durable park registry', () => {
       ['a truncated document', `${storedUnit('safe').slice(0, 30)}`, 'malformed-medium'],
       ['a record this build cannot read', storedUnit('maybe parked'), 'invalid-record'],
     ] as const) {
-      const root = temporaryRoot('dsh-safe-stop-corrupt-')
+      const root = temporaryRoot('dsh-pause-corrupt-')
       const loop = await mountFakeLoop('registry-corrupt', [])
       try {
         await loop.ctx.plugin(CommandRuntime)

@@ -11,7 +11,7 @@
  * The same root can be mounted twice (a second context over the first one's
  * logs and registry), which is the in-process form of the restart the resume
  * path is built for.
- * @module dsh-safe-stop/test/global/home
+ * @module dsh-pause/test/global/home
  */
 
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -29,14 +29,14 @@ import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import SqliteSessionQueryEngine from '@deepseek-ai/dsh-session-query-sqlite'
 import SubagentRuntime from '@deepseek-ai/dsh-subagent'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import type { AgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
-import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
+import { defineContentToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 import { apply, inject, name } from '../../src/index.ts'
-import { decodeGlobalStatus, decodeParkStatus, RESUME_COMMAND, STOP_ALL_COMMAND } from '../../src/shared.ts'
+import { decodeGlobalStatus, decodeParkStatus, RESUME_COMMAND, PAUSE_ALL_COMMAND } from '../../src/shared.ts'
 import type { GlobalStatus, ParkStatus } from '../../src/shared.ts'
 import { FakeProvider, textResponse } from '../assumptions/fake-provider.ts'
 import type { ScriptEntry } from '../assumptions/fake-provider.ts'
@@ -264,7 +264,7 @@ export async function mountGlobalHome(caseRoot: string, options: GlobalHomeOptio
 
   const run = async (agent: Agent, command: string): Promise<CommandResult> => {
     const execution = await ctx.commands.execute(agent, `/${command}`, [], signal)
-    if (execution === undefined) throw new Error(`safe-stop: /${command} did not resolve for "${agent.id}"`)
+    if (execution === undefined) throw new Error(`pause: /${command} did not resolve for "${agent.id}"`)
     return execution.result
   }
 
@@ -277,25 +277,25 @@ export async function mountGlobalHome(caseRoot: string, options: GlobalHomeOptio
     plugin,
     create: (id) => harness.create(SessionId(id), { provider: 'fake', model: 'fake' }),
     run,
-    stop: agent => run(agent, 'safe-stop'),
+    stop: agent => run(agent, 'pause'),
     release: agent => run(agent, RESUME_COMMAND),
     headerStatus: async (agent) => {
-      const answer = await run(agent, 'safe-state')
+      const answer = await run(agent, 'pause-state')
       const text = answer.text
       const status = text === undefined ? undefined : decodeParkStatus(text)
       if (status === undefined) {
-        throw new Error(`safe-stop: the header status answered in an unknown vocabulary: ${String(text)}`)
+        throw new Error(`pause: the header status answered in an unknown vocabulary: ${String(text)}`)
       }
       return status
     },
     status: async (agent) => {
-      const answer = await run(agent, 'safe-state-all')
+      const answer = await run(agent, 'pause-state-all')
       const status = answer.text === undefined ? undefined : decodeGlobalStatus(answer.text)
-      if (status === undefined) throw new Error(`safe-stop: the aggregate read answered in an unknown vocabulary: ${String(answer.text)}`)
+      if (status === undefined) throw new Error(`pause: the aggregate read answered in an unknown vocabulary: ${String(answer.text)}`)
       return status
     },
     job: (owner, label) => {
-      if (options.jobs === false) throw new Error('safe-stop: this home mounts no job registry')
+      if (options.jobs === false) throw new Error('pause: this home mounts no job registry')
       let finish: () => void = () => {}
       const done = new Promise<{ status: 'completed' }>((resolve) => {
         finish = () => { resolve({ status: 'completed' }) }

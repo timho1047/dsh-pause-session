@@ -26,7 +26,7 @@
  * — is not guessed at: {@link logFacts} reports `undefined` and the row says
  * `unreadable`, because a list that invents a stop position is worse than a
  * list that says it could not read one.
- * @module dsh-safe-stop/coldlog
+ * @module dsh-pause/coldlog
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -59,7 +59,7 @@ export const TRIAGE_LOG_MAX_EVENTS = 1_000_000
 /**
  * Events that are not the session's own story: the bookkeeping of the pause
  * command the user pressed, and the pending-input splices the inbox writes.
- * They are real and durable, but "it stopped right after `/safe-stop` finished"
+ * They are real and durable, but "it stopped right after `/pause` finished"
  * is not what "where did it stop" means.
  */
 const BOOKKEEPING_EVENTS: ReadonlySet<string> = new Set(['command/run', 'command/done', 'agent/inbox/spliced'])
@@ -227,9 +227,14 @@ interface OffsetReader {
   /**
    * @param offset - first logical event seq to include.
    * @param length - maximum number of events to return.
+   * @param options - cancellation for this read.
    * @returns a slice of the log, empty at or past its end.
    */
-  read(offset?: number, length?: number): Promise<{ readonly events: readonly SessionEvent[] }>
+  read(
+    offset?: number,
+    length?: number,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<{ readonly events: readonly SessionEvent[] }>
 }
 
 /**
@@ -237,10 +242,11 @@ interface OffsetReader {
  * more than one of them.
  * @param handle - an open read handle onto the log.
  * @param count - the event count to test for.
+ * @param signal - cancellation for the probe.
  * @returns whether the log reaches that far.
  */
-async function reaches(handle: OffsetReader, count: number): Promise<boolean> {
-  return (await handle.read(count, 1)).events.length > 0
+async function reaches(handle: OffsetReader, count: number, signal?: AbortSignal): Promise<boolean> {
+  return (await handle.read(count, 1, { ...signal === undefined ? {} : { signal } })).events.length > 0
 }
 
 /**
@@ -251,18 +257,19 @@ async function reaches(handle: OffsetReader, count: number): Promise<boolean> {
  * it passes the end and then bisects, so a log of any length costs a handful
  * of one-event reads, and none of them materializes the prefix it skips.
  * @param handle - an open read handle onto the log.
+ * @param signal - cancellation for the probe.
  * @returns the event count, or `undefined` when the log is longer than this read will walk.
  */
-async function eventCount(handle: OffsetReader): Promise<number | undefined> {
+async function eventCount(handle: OffsetReader, signal?: AbortSignal): Promise<number | undefined> {
   let high = 1
-  while (await reaches(handle, high)) {
+  while (await reaches(handle, high, signal)) {
     if (high >= TRIAGE_LOG_MAX_EVENTS) return undefined
     high = Math.min(high * 2, TRIAGE_LOG_MAX_EVENTS)
   }
   let low = 0
   while (high - low > 1) {
     const mid = low + Math.floor((high - low) / 2)
-    if (await reaches(handle, mid)) low = mid
+    if (await reaches(handle, mid, signal)) low = mid
     else high = mid
   }
   return low
@@ -278,34 +285,43 @@ async function eventCount(handle: OffsetReader): Promise<number | undefined> {
  * @param ctx - host context carrying the optional persistence service.
  * @param sessionId - the stored session to read.
  * @param windowEvents - how many events of the log's end one row may fold.
+ * @param signal - cancellation for the open, probe, and read.
  * @returns the bounded read, or `unreadable` when no read seam exists, it refused, or the log is too long to walk.
+ * @throws the cancellation reason when `signal` aborts the read.
  */
 export async function coldRead(
   ctx: Context,
   sessionId: SessionId,
   windowEvents: number = TRIAGE_WINDOW_EVENTS,
+  signal?: AbortSignal,
 ): Promise<ColdLog> {
   const persistence = ctx.get('sessionPersistence')
   if (persistence === undefined) return { kind: 'unreadable' }
   let handle
   try {
-    handle = await persistence.open(sessionId, 'read')
+    handle = await persistence.open(sessionId, 'read', {
+      ...signal === undefined ? {} : { signal },
+    })
   } catch (error: unknown) {
-    ctx.logger.warn(`safe-stop: could not open the stored log of "${sessionId}": ${describeError(error)}`)
+    if (signal?.aborted === true) throw error
+    ctx.logger.warn(`pause: could not open the stored log of "${sessionId}": ${describeError(error)}`)
     return { kind: 'unreadable' }
   }
   try {
     const window = Math.max(1, Math.floor(windowEvents))
-    const count = await eventCount(handle)
+    const count = await eventCount(handle, signal)
     if (count === undefined) {
-      ctx.logger.warn(`safe-stop: the stored log of "${sessionId}" is longer than this read will walk`)
+      ctx.logger.warn(`pause: the stored log of "${sessionId}" is longer than this read will walk`)
       return { kind: 'unreadable' }
     }
     const start = Math.max(0, count - window)
-    const stored = await handle.read(start, window)
+    const stored = await handle.read(start, window, {
+      ...signal === undefined ? {} : { signal },
+    })
     return { kind: 'read', events: stored.events, complete: start === 0 }
   } catch (error: unknown) {
-    ctx.logger.warn(`safe-stop: could not read the stored log of "${sessionId}": ${describeError(error)}`)
+    if (signal?.aborted === true) throw error
+    ctx.logger.warn(`pause: could not read the stored log of "${sessionId}": ${describeError(error)}`)
     return { kind: 'unreadable' }
   } finally {
     await handle.close()

@@ -7,7 +7,7 @@
  * The stack is the one the resume suites use, deliberately: the decision list
  * reads the same durable registry, the same session logs and the same resume
  * path, and a fixture that shared none of them would be proving something else.
- * @module dsh-safe-stop/test/triage/home
+ * @module dsh-pause/test/triage/home
  */
 
 import { spawn } from 'node:child_process'
@@ -22,10 +22,10 @@ import GoalService from '@deepseek-ai/dsh-goal'
 import * as GoalRoundDriver from '@deepseek-ai/dsh-goal-round-driver'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import type { AgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
-import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
+import { defineContentToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 import { apply, Config, inject, name } from '../../src/index.ts'
 import { decodeGlobalStatus, decodeTriageList, STATE_ALL_COMMAND, TRIAGE_COMMAND } from '../../src/shared.ts'
 import type { GlobalStatus, ParkPhase, TriageAction, TriageList } from '../../src/shared.ts'
@@ -157,7 +157,7 @@ export async function reviveTriageHome(caseRoot: string, options: TriageHomeOpti
 
   const run = async (line: string): Promise<CommandResult> => {
     const execution = await ctx.commands.execute(desk, line, [], signal)
-    if (execution === undefined) throw new Error(`safe-stop: "${line}" did not resolve`)
+    if (execution === undefined) throw new Error(`pause: "${line}" did not resolve`)
     return execution.result
   }
 
@@ -171,20 +171,20 @@ export async function reviveTriageHome(caseRoot: string, options: TriageHomeOpti
     triage: async () => {
       const answer = await run(`/${TRIAGE_COMMAND}`)
       const list = answer.text === undefined ? undefined : decodeTriageList(answer.text)
-      if (list === undefined) throw new Error(`safe-stop: the decision list answered in an unknown vocabulary: ${String(answer.text)}`)
+      if (list === undefined) throw new Error(`pause: the decision list answered in an unknown vocabulary: ${String(answer.text)}`)
       return list
     },
     status: async () => {
       const answer = await run(`/${STATE_ALL_COMMAND}`)
       const status = answer.text === undefined ? undefined : decodeGlobalStatus(answer.text)
-      if (status === undefined) throw new Error(`safe-stop: the aggregate answered in an unknown vocabulary: ${String(answer.text)}`)
+      if (status === undefined) throw new Error(`pause: the aggregate answered in an unknown vocabulary: ${String(answer.text)}`)
       return status
     },
     decide: async (sessionId, action) => {
       // The browser reads the list before it decides a row, and that read is
       // what shows this session the row the host then acts on.
       await run(`/${TRIAGE_COMMAND}`)
-      return await run(`/safe-triage-${action} ${sessionId}`)
+      return await run(`/pause-triage-${action} ${sessionId}`)
     },
   }
 }

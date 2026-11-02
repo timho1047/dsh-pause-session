@@ -14,7 +14,7 @@
  * that parks a live goal session cleanly and switches the opt-out through the
  * session's own verb, and a fresh one that mounts the same stack over the same
  * logs and registry and has nothing but the silent path to bring it back.
- * @module dsh-safe-stop/test/global/goal-optout
+ * @module dsh-pause/test/global/goal-optout
  */
 
 import { afterAll, describe, expect, it } from 'vitest'
@@ -75,7 +75,7 @@ async function parkCleanGoal(caseRoot: string, sessionId: string, optOut: boolea
     agent.followup(ask('start the work'))
     await agent.whenIdle()
 
-    expect((await evening.run(agent, 'safe-stop')).kind).toBe('success')
+    expect((await evening.run(agent, 'pause')).kind).toBe('success')
     await untilAsync(async () => (await evening.status(agent)).verdict === 'safe', 'the clean park to settle')
     expect((await readParkRegistry(storageOf(caseRoot))).map(entry => [String(entry.sessionId), entry.phase]))
       .toEqual([[sessionId, 'safe']])
@@ -98,7 +98,7 @@ async function parkCleanGoal(caseRoot: string, sessionId: string, optOut: boolea
 
 describe('the goal opt-out of a cleanly parked session', () => {
   it('leaves the goal disarmed when the clean record opted out through its own switch', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-global-goal-off-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-global-goal-off-', temporaryRoots)
     await parkCleanGoal(caseRoot, 'evening-goal-off', true)
 
     // The morning: nothing is live, so the silent path is the only thing that
@@ -106,7 +106,7 @@ describe('the goal opt-out of a cleanly parked session', () => {
     const morning = await mountGlobalHome(caseRoot, { goals: true })
     try {
       const desk = await morning.create('morning-desk')
-      const answer = await morning.run(desk, 'safe-resume-all')
+      const answer = await morning.run(desk, 'pause-resume-all')
       expect(answer.kind, JSON.stringify(answer)).toBe('success')
       const agent = morning.ctx.agents.get(SessionId('evening-goal-off'))
       expect(agent, 'the cleanly parked session was not resumed').toBeDefined()
@@ -124,7 +124,7 @@ describe('the goal opt-out of a cleanly parked session', () => {
   })
 
   it('re-opens the goal when the clean record was left at the default', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-global-goal-on-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-global-goal-on-', temporaryRoots)
     await parkCleanGoal(caseRoot, 'evening-goal-on', false)
 
     // The control: the same park, the same silent resume, no opt-out written.
@@ -132,7 +132,7 @@ describe('the goal opt-out of a cleanly parked session', () => {
     const morning = await mountGlobalHome(caseRoot, { goals: true })
     try {
       const desk = await morning.create('morning-desk')
-      const answer = await morning.run(desk, 'safe-resume-all')
+      const answer = await morning.run(desk, 'pause-resume-all')
       expect(answer.kind, JSON.stringify(answer)).toBe('success')
       const agent = morning.ctx.agents.get(SessionId('evening-goal-on'))
       expect(agent, 'the cleanly parked session was not resumed').toBeDefined()

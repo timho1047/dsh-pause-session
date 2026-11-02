@@ -11,7 +11,7 @@
  * The subject is the row a user reads, driven through the same verb the browser
  * half executes for the end-to-end case, and the same derivation the row is
  * built from for the window-by-window cases.
- * @module dsh-safe-stop/test/triage/bounded-read
+ * @module dsh-pause/test/triage/bounded-read
  */
 
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -21,7 +21,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { logFacts } from '../../src/coldlog.ts'
 import type { ColdFacts } from '../../src/coldlog.ts'
 import { parkAndLeave, recordsUntil, reviveTriageHome, sessionRootOf } from './home.ts'
@@ -107,7 +107,7 @@ function comparable(facts: ColdFacts | undefined): unknown {
 
 describe('the bounded read of one parked log', () => {
   it('answers a window that holds the facts exactly as the whole log does', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-triage-window-')
+    const caseRoot = temporaryRoot('dsh-pause-triage-window-')
     await parkPairSession(caseRoot)
     const events = await storedEvents(caseRoot)
     const whole = factsOfWindow(events, events.length)
@@ -146,7 +146,7 @@ describe('the bounded read of one parked log', () => {
 
 describe('the decision list under a bounded read', () => {
   it('lists the row as unreadable when the bound cannot hold its facts', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-triage-bound-small-')
+    const caseRoot = temporaryRoot('dsh-pause-triage-bound-small-')
     await parkPairSession(caseRoot)
     const events = await storedEvents(caseRoot)
     // The bound is chosen to sit inside the log's bookkeeping tail, where the
@@ -175,7 +175,7 @@ describe('the decision list under a bounded read', () => {
   })
 
   it('keeps the full read exact when the whole log fits inside the bound', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-triage-bound-fit-')
+    const caseRoot = temporaryRoot('dsh-pause-triage-bound-fit-')
     await parkPairSession(caseRoot)
 
     // A bound larger than any real log: every event is read, so the row is
@@ -193,7 +193,7 @@ describe('the decision list under a bounded read', () => {
   })
 
   it('clamps a bound that reaches the end of the log to the whole log', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-triage-bound-clamp-')
+    const caseRoot = temporaryRoot('dsh-pause-triage-bound-clamp-')
     await parkPairSession(caseRoot)
     const events = await storedEvents(caseRoot)
     const whole = comparable(factsOfWindow(events, events.length))

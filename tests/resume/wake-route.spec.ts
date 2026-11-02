@@ -8,7 +8,7 @@
  * session on a route that was never declared, asserts the marker on the wire,
  * and then re-runs the same parked log with that route declared to show the
  * empty wake coming back — both paths, both payloads.
- * @module dsh-safe-stop/test/resume/wake-route
+ * @module dsh-pause/test/resume/wake-route
  */
 
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -40,7 +40,7 @@ const OTHER_ROUTE = 'acme-chat'
 
 describe('the wake content follows the route in use', () => {
   it('sends one fixed marker instead of an empty turn on an undeclared route', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-resume-marker-')
+    const caseRoot = temporaryRoot('dsh-pause-resume-marker-')
     const parked = await parkAndLeave(caseRoot, 'overnight-marker', 'clean', OTHER_ROUTE)
     const home = await reviveHome(caseRoot, { route: OTHER_ROUTE })
     try {
@@ -58,7 +58,7 @@ describe('the wake content follows the route in use', () => {
       // The marker names the plugin that put it there: it lands in the same user
       // turn as the input the model owes an answer to, and it must be readable
       // as an aside rather than as part of that input.
-      expect(WAKE_MARKER).toContain('safe-stop')
+      expect(WAKE_MARKER).toContain('pause')
 
       // On the wire it is visible, and it is still nothing but the marker: it
       // lands as one extra text block in the user turn the model owes an answer
@@ -73,7 +73,7 @@ describe('the wake content follows the route in use', () => {
   })
 
   it('drops the wake entirely once the composition declares that route silent', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-resume-declared-')
+    const caseRoot = temporaryRoot('dsh-pause-resume-declared-')
     const parked = await parkAndLeave(caseRoot, 'overnight-declared', 'clean', OTHER_ROUTE)
     const home = await reviveHome(caseRoot, {
       route: OTHER_ROUTE,

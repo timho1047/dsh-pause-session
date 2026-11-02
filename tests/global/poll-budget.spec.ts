@@ -32,7 +32,7 @@
  * made elsewhere while the window was open. An action that leaves a phase still
  * moving owes one look when its window closes, because a park can reach its final
  * phase inside that window and then never announce anything again.
- * @module dsh-safe-stop/test/global/poll-budget
+ * @module dsh-pause/test/global/poll-budget
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -40,14 +40,14 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { apply, inject } from '../../src/client/index.tsx'
 import { ACTION_ABSORB_MS, ReadBurst, burstWaits } from '../../src/client/burst.ts'
 import type { BurstPolicy } from '../../src/client/burst.ts'
-import { SafeStopControl } from '../../src/client/control.ts'
-import type { SafeStopState } from '../../src/client/control.ts'
-import { SafeStopGlobalControl, parkedAddress, registeredAddress } from '../../src/client/global.ts'
-import type { GlobalReading, GlobalStopState } from '../../src/client/global.ts'
-import { globalStopView } from '../../src/client/view.ts'
+import { PauseControl } from '../../src/client/control.ts'
+import type { PauseState } from '../../src/client/control.ts'
+import { PauseGlobalControl, parkedAddress, registeredAddress } from '../../src/client/global.ts'
+import type { GlobalReading, GlobalPauseState } from '../../src/client/global.ts'
+import { globalPauseView } from '../../src/client/view.ts'
 import {
   encodeGlobalStatus, encodeParkStatus, encodeTriageList, RESUME_COMMAND, RESUME_DEFINITION_ID,
-  STATE_ALL_COMMAND, STATUS_COMMAND, STATUS_DEFINITION_ID, STOP_ALL_COMMAND, TRIAGE_COMMAND,
+  STATE_ALL_COMMAND, STATUS_COMMAND, STATUS_DEFINITION_ID, PAUSE_ALL_COMMAND, TRIAGE_COMMAND,
 } from '../../src/shared.ts'
 import type { GlobalStatus, ParkPhase, TriageRow } from '../../src/shared.ts'
 
@@ -151,7 +151,7 @@ function hostDouble(): { commands: never; host: Host } {
           },
         })
       }
-      host.answered = line === `/${STOP_ALL_COMMAND}`
+      host.answered = line === `/${PAUSE_ALL_COMMAND}`
         ? status()
         : status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
       return Promise.resolve({ ok: true, value: { commandId: 'c', result: { kind: 'success' } } })
@@ -183,10 +183,10 @@ function policy(
 const controls = (
   commands: never,
   overrides: Partial<Omit<BurstPolicy, 'windowMs' | 'waitsMs'>> = {},
-): SafeStopGlobalControl =>
-  new SafeStopGlobalControl(commands, new AbortController().signal, WINDOW_MS, policy(overrides))
+): PauseGlobalControl =>
+  new PauseGlobalControl(commands, new AbortController().signal, WINDOW_MS, policy(overrides))
 
-const readingOf = (control: SafeStopGlobalControl): GlobalReading | undefined =>
+const readingOf = (control: PauseGlobalControl): GlobalReading | undefined =>
   control.store.getSnapshot().global
 
 describe('the park read budget', () => {
@@ -209,7 +209,7 @@ describe('the park read budget', () => {
     // the answer to the press itself.
     await control.toggle(ADDRESS)
     expect(host.reads).toBe(2)
-    expect(globalStopView(readingOf(control))).toMatchObject({ visible: true, labelKey: 'all.finishing' })
+    expect(globalPauseView(readingOf(control))).toMatchObject({ visible: true, labelKey: 'all.finishing' })
 
     // The drain is long and nothing announces its end, so nothing watches it:
     // the one read the press still owes is the look that closes its own echo
@@ -233,7 +233,7 @@ describe('the park read budget', () => {
     await vi.advanceTimersByTimeAsync(1_000)
     expect(host.reads, 'the announced flush was not read').toBe(5)
     expect(readingOf(control)).toEqual({ kind: 'reported', status: parked })
-    expect(globalStopView(readingOf(control))).toMatchObject({ labelKey: 'all.safe' })
+    expect(globalPauseView(readingOf(control))).toMatchObject({ labelKey: 'all.safe' })
 
     // And silence: a settled park is not read again, however long the page stays
     // open and however many more changes the host announces.
@@ -289,7 +289,7 @@ describe('the park read budget', () => {
     await vi.advanceTimersByTimeAsync(1_000)
     expect(host.reads, 'the hidden transition was never read').toBe(3)
     expect(readingOf(control)).toEqual({ kind: 'reported', status: parked })
-    expect(globalStopView(readingOf(control))).toMatchObject({ labelKey: 'all.safe' })
+    expect(globalPauseView(readingOf(control))).toMatchObject({ labelKey: 'all.safe' })
 
     await vi.advanceTimersByTimeAsync(3_600_000)
     expect(host.reads, 'the trailing look was a watch after all').toBe(3)
@@ -337,7 +337,7 @@ describe('the park read budget', () => {
     control.refreshAll()
     await vi.advanceTimersByTimeAsync(1_000)
     expect(host.reads, 'the announced park point was not read').toBe(2)
-    expect(globalStopView(readingOf(control))).toMatchObject({ labelKey: 'all.finishing', action: 'resume-all' })
+    expect(globalPauseView(readingOf(control))).toMatchObject({ labelKey: 'all.finishing', action: 'resume-all' })
 
     // The flush is still pending and nothing announces anything: the read the
     // transition bought is the last one, not the start of a watch.
@@ -351,7 +351,7 @@ describe('the park read budget', () => {
     await vi.advanceTimersByTimeAsync(1_000)
     expect(host.reads, 'the announced flush was not read').toBe(3)
     expect(readingOf(control)).toEqual({ kind: 'reported', status: parked })
-    expect(globalStopView(readingOf(control))).toMatchObject({ labelKey: 'all.safe' })
+    expect(globalPauseView(readingOf(control))).toMatchObject({ labelKey: 'all.safe' })
 
     // And silence: a settled park is not read again, however long the page stays
     // open and however many more changes the host announces.
@@ -581,7 +581,7 @@ describe('the park read budget', () => {
     // kept on screen in place of an answer nobody gave.
     expect(sessionsOf(host, STATE_ALL_COMMAND)).toEqual([String(ADDRESS), String(ADDRESS), String(OTHER)])
     expect(readingOf(control)).toEqual({ kind: 'unavailable' })
-    expect(globalStopView(readingOf(control))).toMatchObject({ visible: false, enabled: false })
+    expect(globalPauseView(readingOf(control))).toMatchObject({ visible: false, enabled: false })
   })
 
   it('takes the session the user moves to as another chance while no answer has arrived', async () => {
@@ -633,7 +633,7 @@ describe('the park read budget', () => {
     expect(sessionsOf(host, STATE_ALL_COMMAND).at(-1), 'the aggregate stopped using the parked session').toBe('overnight')
 
     await control.decide('overnight', 'leave')
-    expect(sessionsOf(host, 'safe-triage-leave overnight'), 'the decision came from the wrong session').toEqual([String(OTHER)])
+    expect(sessionsOf(host, 'pause-triage-leave overnight'), 'the decision came from the wrong session').toEqual([String(OTHER)])
   })
 
   it('a press after the burst is spent reads again, and a settled answer buys nothing', async () => {
@@ -692,7 +692,7 @@ describe('the park read budget', () => {
     const control = controls(commands)
     await control.refresh(ADDRESS)
     expect(readingOf(control)).toEqual({ kind: 'unavailable' })
-    expect(globalStopView(readingOf(control))).toMatchObject({ visible: false, enabled: false })
+    expect(globalPauseView(readingOf(control))).toMatchObject({ visible: false, enabled: false })
 
     // A host that cannot answer is not a state that is moving: the burst ends.
     const reads = host.reads
@@ -712,7 +712,7 @@ describe('the park read budget', () => {
       list: () => Promise.resolve({ ok: true, value: [] }),
       execute: () => new Promise((resolve) => { pending.push(resolve) }),
     }
-    const control = new SafeStopGlobalControl(commands as never, new AbortController().signal)
+    const control = new PauseGlobalControl(commands as never, new AbortController().signal)
     const stale = control.refresh(ADDRESS)
     const current = control.refresh(ADDRESS)
 
@@ -771,7 +771,7 @@ describe('the per-session read budget', () => {
   it('reads a registry change for every shown session once, and nothing while a phase moves', async () => {
     vi.useFakeTimers()
     const { commands, calls } = sessionDouble({ a: 'draining', b: 'safe' })
-    const control = new SafeStopControl(commands, new AbortController().signal, WINDOW_MS, policy())
+    const control = new PauseControl(commands, new AbortController().signal, WINDOW_MS, policy())
     await control.refresh(SessionId('a'))
     await control.refresh(SessionId('b'))
 
@@ -790,7 +790,7 @@ describe('the per-session read budget', () => {
     vi.useFakeTimers()
     const phases: Record<string, ParkPhase> = { a: 'active' }
     const { commands, calls } = sessionDouble(phases)
-    const control = new SafeStopControl(commands, new AbortController().signal, WINDOW_MS, policy())
+    const control = new PauseControl(commands, new AbortController().signal, WINDOW_MS, policy())
     const statuses = (): number => calls.filter(call => call.line === `/${STATUS_COMMAND}`).length
 
     // The header mounts on a running session: one read, no claim.
@@ -837,7 +837,7 @@ describe('the per-session read budget', () => {
     const { commands, calls } = sessionDouble({ a: 'active' })
     const idle = status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
     let aggregate: GlobalReading = { kind: 'reported', status: idle }
-    const control = new SafeStopControl(commands, new AbortController().signal, WINDOW_MS, policy(), () => aggregate)
+    const control = new PauseControl(commands, new AbortController().signal, WINDOW_MS, policy(), () => aggregate)
     const lists = (): number => calls.filter(call => call.line === 'list').length
 
     // The mount read is kept: it is the first fact the host gives this header.
@@ -864,7 +864,7 @@ describe('the per-session read budget', () => {
   it('absorbs the marker changes a header press causes, and reads a change after the window', async () => {
     vi.useFakeTimers()
     const { commands, calls } = sessionDouble({ a: 'safe' })
-    const control = new SafeStopControl(commands, new AbortController().signal, WINDOW_MS, policy())
+    const control = new PauseControl(commands, new AbortController().signal, WINDOW_MS, policy())
     const lists = (): number => calls.filter(call => call.line === 'list').length
 
     await control.refresh(SessionId('a'))
@@ -900,7 +900,7 @@ describe('the per-session read budget', () => {
     const { commands, calls } = sessionDouble({ a: 'active', b: 'active' })
     const idle = status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
     let aggregate: GlobalReading = { kind: 'reported', status: idle }
-    const control = new SafeStopControl(commands, new AbortController().signal, WINDOW_MS, policy(), () => aggregate)
+    const control = new PauseControl(commands, new AbortController().signal, WINDOW_MS, policy(), () => aggregate)
     const listed = (id: string): number => calls.filter(call => call.line === 'list' && call.session === id).length
 
     // Two headers mount while the park holds nothing: after the mount reads, a
@@ -1101,14 +1101,14 @@ describe('one change, one read', () => {
     toggle: (id: SessionId) => void
     setPanel: (open: boolean) => void
     hooks: {
-      readonly safeStopGlobal?: { getSnapshot: () => GlobalStopState }
-      readonly safeStop?: { getSnapshot: () => SafeStopState }
+      readonly pauseGlobal?: { getSnapshot: () => GlobalPauseState }
+      readonly pause?: { getSnapshot: () => PauseState }
     }
   } {
     const entry = registrations.find(registration => registration.options['name'] === name)
-    if (entry === undefined) throw new Error(`safe-stop: no slot entry registered for ${name}`)
+    if (entry === undefined) throw new Error(`pause: no slot entry registered for ${name}`)
     const face = (entry.options as { inject?: () => never }).inject
-    if (face === undefined) throw new Error(`safe-stop: the ${name} control registered no inject face`)
+    if (face === undefined) throw new Error(`pause: the ${name} control registered no inject face`)
     return face()
   }
 
@@ -1167,7 +1167,7 @@ describe('one change, one read', () => {
     expect(before).toBe(1)
 
     // One park transition registers up to three marker commands per session —
-    // `/safe-resume`, `/safe-state`, `/safe-goal` — and the host announces each
+    // `/pause-resume`, `/pause-state`, `/pause-goal` — and the host announces each
     // one with its own forwarded event (measured: 21 reads in ~2 minutes across
     // ~5 burst sequences per park cycle). Read at 0, 200 and 400ms of the 400ms
     // window: one burst, not one each.
@@ -1261,8 +1261,8 @@ describe('one change, one read', () => {
 
   /** What the pill currently shows: the last answer the control published. */
   const shownBy = (face: {
-    hooks: { safeStopGlobal?: { getSnapshot: () => GlobalStopState } }
-  }): GlobalReading | undefined => face.hooks.safeStopGlobal?.getSnapshot().global
+    hooks: { pauseGlobal?: { getSnapshot: () => GlobalPauseState } }
+  }): GlobalReading | undefined => face.hooks.pauseGlobal?.getSnapshot().global
 
   it('absorbs the unregistration storm a resume causes: one read, not four', async () => {
     vi.useFakeTimers()

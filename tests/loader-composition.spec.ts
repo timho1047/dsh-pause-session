@@ -12,7 +12,7 @@
  * reaches ACTIVE, which is what "the plugin mounted" actually means. The
  * negative case guards both: if the Loader accepted an unloadable row, "it
  * composed" would stop meaning anything.
- * @module dsh-safe-stop/test/loader-composition
+ * @module dsh-pause/test/loader-composition
  */
 
 import { spawnSync } from 'node:child_process'
@@ -34,7 +34,7 @@ interface LoadedRow {
 }
 
 /** The Loader entry id both compositions give the plugin row. */
-const PLUGIN_ROW_ID = 'dsh-safe-stop'
+const PLUGIN_ROW_ID = 'dsh-pause'
 
 /** One cordis.yml naming a single plugin row. */
 function configFor(pluginRow: string): string {
@@ -90,15 +90,15 @@ function compose(configPath: string): LoadedRow[] {
   return (JSON.parse(marker![1]!) as { rows: LoadedRow[] }).rows
 }
 
-const temporaryRoot = mkdtempSync(join(tmpdir(), 'dsh-safe-stop-loader-'))
+const temporaryRoot = mkdtempSync(join(tmpdir(), 'dsh-pause-loader-'))
 
 beforeAll(() => {
   // Build first so the composition exercises the shipped artifact: the
   // plain-Node built entry must load under the real Loader.
-  const build = spawnSync('pnpm', ['run', 'build'], {
+  const build = spawnSync('pnpm run build', {
     cwd: repositoryRoot,
     encoding: 'utf8',
-    shell: process.platform === 'win32',
+    shell: true,
     timeout: 120_000,
   })
   expect(build.status, `build failed:\n${build.stdout}\n${build.stderr}`).toBe(0)
@@ -109,7 +109,7 @@ describe('Loader composition', () => {
     const configPath = join(temporaryRoot, 'bare.yml')
     writeFileSync(configPath, configFor(pathToFileURL(builtEntry).href))
     const rows = compose(configPath)
-    const pluginRow = rows.find(row => row.name === 'dsh-safe-stop')
+    const pluginRow = rows.find(row => row.name === 'dsh-pause')
     expect(pluginRow, `the plugin row is missing from ${JSON.stringify(rows)}`).toBeDefined()
     expect(pluginRow?.id).toContain(PLUGIN_ROW_ID)
     // The honest reading of a bare composition: the entry resolved, its row
@@ -121,7 +121,7 @@ describe('Loader composition', () => {
     const configPath = join(temporaryRoot, 'services.yml')
     writeFileSync(configPath, servicesConfigFor(pathToFileURL(builtEntry).href, join(temporaryRoot, 'storages')))
     const rows = compose(configPath)
-    const pluginRow = rows.find(row => row.name === 'dsh-safe-stop')
+    const pluginRow = rows.find(row => row.name === 'dsh-pause')
     expect(pluginRow, `the plugin row is missing from ${JSON.stringify(rows)}`).toBeDefined()
     // Activated, not merely registered: the fiber's own state is the assertion
     // the bare case cannot make.
@@ -154,7 +154,7 @@ describe('Loader composition', () => {
 describe('shipped host artifact', () => {
   it('exposes a named function plugin, its config, and no default export', async () => {
     const module = await import(pathToFileURL(builtEntry).href) as Record<string, unknown>
-    expect(module.name).toBe('dsh-safe-stop')
+    expect(module.name).toBe('dsh-pause')
     expect(typeof module.apply).toBe('function')
     expect(module.Config).toBeDefined()
     expect('default' in module).toBe(false)

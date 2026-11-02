@@ -14,7 +14,7 @@
  * here would silently drop one paused session; a whole-unit file turns any
  * corruption into a failed `open`, and a failed open fails the plugin's mount
  * loudly instead of resuming everything.
- * @module dsh-safe-stop/registry
+ * @module dsh-pause/registry
  */
 
 import { z } from 'zod'
@@ -26,7 +26,7 @@ import { PARK_PHASES } from './shared.js'
 import type { ParkPhase } from './shared.js'
 
 /** Domain and backend-unit name; one document per profile under the storage root. */
-export const PARK_REGISTRY_DOMAIN = 'safe_stop_registry'
+export const PARK_REGISTRY_DOMAIN = 'pause_registry'
 
 /** One session's stored park outcome. */
 export const parkRecord = z.object({
@@ -128,7 +128,7 @@ export interface ParkRegistry {
  */
 export async function openParkRegistry(ctx: Context): Promise<ParkRegistry> {
   const domain: Domain<typeof parkRegistryDomain> = await ctx.storageDomain.open(parkRegistryDomain)
-  ctx.effect(() => () => domain.close(), 'safe-stop: registry')
+  ctx.effect(() => () => domain.close(), 'pause: registry')
   const sessions = domain.table('sessions')
   /** The entries the cached view was built from; replaced whenever they differ. */
   let cachedFrom: readonly ParkedSession[] = []

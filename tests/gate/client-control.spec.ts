@@ -8,16 +8,16 @@
  * a phase that is still moving is observable at all. The contribution is
  * mounted on a real slot registry so the wiring — the forwarded
  * `commands/change` re-read and the injected face — is exercised too.
- * @module dsh-safe-stop/test/gate/client-control
+ * @module dsh-pause/test/gate/client-control
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { apply, inject } from '../../src/client/index.tsx'
-import type { SafeStopInjected } from '../../src/client/index.tsx'
-import { SafeStopControl } from '../../src/client/control.ts'
-import type { SafeStopReading } from '../../src/client/control.ts'
-import { safeStopView, showsPauseControl } from '../../src/client/view.ts'
+import type { PauseInjected } from '../../src/client/index.tsx'
+import { PauseControl } from '../../src/client/control.ts'
+import type { PauseReading } from '../../src/client/control.ts'
+import { pauseView, showsPauseControl } from '../../src/client/view.ts'
 import {
   encodeParkStatus, foldTreePhases, GOAL_COMMAND, GOAL_DEFINITION_ID, PAUSE_COMMAND, PAUSE_DEFINITION_ID,
   RESUME_COMMAND, RESUME_DEFINITION_ID, STATUS_COMMAND, STATUS_DEFINITION_ID,
@@ -123,22 +123,22 @@ function hostDouble(): { commands: never; host: HostDouble; readsDone: (count: n
   }
 }
 
-const readingOf = (control: SafeStopControl): unknown => control.store.getSnapshot().bySession[String(SID)]
+const readingOf = (control: PauseControl): unknown => control.store.getSnapshot().bySession[String(SID)]
 
 describe('browser control state', () => {
   afterEach(() => { vi.useRealTimers() })
 
   it("shows the host's answer and re-reads it after a press", async () => {
     const { commands, host } = hostDouble()
-    const control = new SafeStopControl(commands, new AbortController().signal)
+    const control = new PauseControl(commands, new AbortController().signal)
 
     // No host answer yet: the control claims nothing.
     expect(readingOf(control)).toBeUndefined()
-    expect(safeStopView(undefined).enabled).toBe(false)
+    expect(pauseView(undefined).enabled).toBe(false)
 
     await control.refresh(SID)
     expect(readingOf(control)).toEqual({ phase: 'active', runningTools: [] })
-    expect(safeStopView({ phase: 'active', runningTools: [] }))
+    expect(pauseView({ phase: 'active', runningTools: [] }))
       .toEqual({ paused: false, enabled: true, ariaKey: 'pause.aria', runningTools: [] })
 
     await control.toggle(SID)
@@ -147,7 +147,7 @@ describe('browser control state', () => {
     expect(host.lines).toEqual([`/${PAUSE_COMMAND}`, `/${STATUS_COMMAND}`])
     // The paused state comes from the host's registry, and it is visible.
     expect(readingOf(control)).toEqual({ phase: 'draining', runningTools: [], rearmGoal: true })
-    expect(safeStopView({ phase: 'draining', runningTools: [] }))
+    expect(pauseView({ phase: 'draining', runningTools: [] }))
       .toMatchObject({ paused: true, enabled: true, labelKey: 'state.draining' })
 
     await control.toggle(SID)
@@ -158,25 +158,25 @@ describe('browser control state', () => {
   it('names the running tool and stops claiming "safe" until the host says so', () => {
     // The screen never rounds a moving phase up to "safe to close", and it
     // passes the host's own tool names through as data.
-    expect(safeStopView({ phase: 'draining', runningTools: ['edit', 'bash'] }))
+    expect(pauseView({ phase: 'draining', runningTools: ['edit', 'bash'] }))
       .toMatchObject({ paused: true, enabled: true, labelKey: 'state.draining', runningTools: ['edit', 'bash'] })
-    expect(safeStopView({ phase: 'parking', runningTools: [] }))
+    expect(pauseView({ phase: 'parking', runningTools: [] }))
       .toMatchObject({ paused: true, enabled: true, labelKey: 'state.parking', runningTools: [] })
-    expect(safeStopView({ phase: 'safe', runningTools: [] }))
+    expect(pauseView({ phase: 'safe', runningTools: [] }))
       .toMatchObject({ paused: true, enabled: true, labelKey: 'state.safe' })
     // A failed flush is a pause the host will not call clean.
-    expect(safeStopView({ phase: 'flush-failed', runningTools: [] }))
+    expect(pauseView({ phase: 'flush-failed', runningTools: [] }))
       .toMatchObject({ paused: true, enabled: true, labelKey: 'state.flushFailed' })
   })
 
   it("carries the record's goal opt-out, and switches it through the session's own verb", async () => {
     const { commands, host } = hostDouble()
-    const control = new SafeStopControl(commands, new AbortController().signal)
+    const control = new PauseControl(commands, new AbortController().signal)
     host.paused = true
     host.phase = 'safe'
     await control.refresh(SID)
     expect(readingOf(control)).toEqual({ phase: 'safe', runningTools: [], rearmGoal: true })
-    expect(safeStopView(readingOf(control) as SafeStopReading)).toMatchObject({ rearmGoal: true })
+    expect(pauseView(readingOf(control) as PauseReading)).toMatchObject({ rearmGoal: true })
 
     await control.toggleGoal(SID)
     // One verb, addressed to the session whose record it changes — the switch
@@ -185,12 +185,12 @@ describe('browser control state', () => {
     // never this control's own flip.
     expect(host.lines).toEqual([`/${STATUS_COMMAND}`, `/${GOAL_COMMAND}`, `/${STATUS_COMMAND}`])
     expect(readingOf(control)).toEqual({ phase: 'safe', runningTools: [], rearmGoal: false })
-    expect(safeStopView(readingOf(control) as SafeStopReading)).toMatchObject({ rearmGoal: false })
+    expect(pauseView(readingOf(control) as PauseReading)).toMatchObject({ rearmGoal: false })
   })
 
   it('shows no goal state when the host did not answer one', async () => {
     const { commands, host } = hostDouble()
-    const control = new SafeStopControl(commands, new AbortController().signal)
+    const control = new PauseControl(commands, new AbortController().signal)
     // A host whose status text carries the phase but no goal field: the control
     // reports exactly what it was told and renders no switch, rather than
     // falling back to the product default and calling it an answer.
@@ -199,22 +199,22 @@ describe('browser control state', () => {
     host.rearmGoal = undefined
     await control.refresh(SID)
     expect(readingOf(control)).toEqual({ phase: 'safe', runningTools: [] })
-    expect(safeStopView(readingOf(control) as SafeStopReading).rearmGoal).toBeUndefined()
+    expect(pauseView(readingOf(control) as PauseReading).rearmGoal).toBeUndefined()
     // The mapping cannot invent it either: only an answered flag becomes a view
     // field, so a reading without one renders no switch at all.
-    expect(safeStopView({ phase: 'safe', runningTools: [] }).rearmGoal).toBeUndefined()
+    expect(pauseView({ phase: 'safe', runningTools: [] }).rearmGoal).toBeUndefined()
 
     // A host that cannot be reached claims nothing about the goal, like the
     // rest of the control.
     host.failList = true
-    const unreachable = new SafeStopControl(commands, new AbortController().signal)
+    const unreachable = new PauseControl(commands, new AbortController().signal)
     await unreachable.refresh(SID)
-    expect(safeStopView(readingOf(unreachable) as SafeStopReading).rearmGoal).toBeUndefined()
+    expect(pauseView(readingOf(unreachable) as PauseReading).rearmGoal).toBeUndefined()
   })
 
   it('follows a state the host changed on its own', async () => {
     const { commands, host } = hostDouble()
-    const control = new SafeStopControl(commands, new AbortController().signal)
+    const control = new PauseControl(commands, new AbortController().signal)
     await control.refresh(SID)
     expect(readingOf(control)).toEqual({ phase: 'active', runningTools: [] })
 
@@ -231,7 +231,7 @@ describe('browser control state', () => {
   it('reads once per announced transition and stops once the phase settles', async () => {
     vi.useFakeTimers()
     const { commands, host } = hostDouble()
-    const control = new SafeStopControl(commands, new AbortController().signal, 25)
+    const control = new PauseControl(commands, new AbortController().signal, 25)
     host.paused = true
     host.phase = 'draining'
     host.runningTools = ['edit']
@@ -261,7 +261,7 @@ describe('browser control state', () => {
   it('reaches the truth on the next trigger when the announcement never arrived', async () => {
     vi.useFakeTimers()
     const { commands, host } = hostDouble()
-    const control = new SafeStopControl(commands, new AbortController().signal, 25)
+    const control = new PauseControl(commands, new AbortController().signal, 25)
     // This page was not listening when the phase moved: all it has is the reading
     // it took itself.
     host.paused = true
@@ -287,16 +287,16 @@ describe('browser control state', () => {
 
   it('claims nothing when the host cannot answer', async () => {
     const { commands, host } = hostDouble()
-    const control = new SafeStopControl(commands, new AbortController().signal)
+    const control = new PauseControl(commands, new AbortController().signal)
     host.failList = true
     await control.refresh(SID)
     expect(readingOf(control)).toEqual({ phase: 'unavailable', runningTools: [] })
-    expect(safeStopView({ phase: 'unavailable', runningTools: [] }).enabled).toBe(false)
+    expect(pauseView({ phase: 'unavailable', runningTools: [] }).enabled).toBe(false)
   })
 
   it('claims nothing while a paused session\'s status read is still in flight', async () => {
     const { commands, host } = hostDouble()
-    const control = new SafeStopControl(commands, new AbortController().signal, 0)
+    const control = new PauseControl(commands, new AbortController().signal, 0)
     host.paused = true
     host.phase = 'safe'
     // The status read never settles. The marker says paused and the host's own
@@ -319,7 +319,7 @@ describe('browser control state', () => {
       list: () => new Promise((resolve) => { pending.push(resolve) }),
       execute: () => Promise.resolve({ ok: true, value: undefined }),
     }
-    const control = new SafeStopControl(commands as never, new AbortController().signal)
+    const control = new PauseControl(commands as never, new AbortController().signal)
     const stale = control.refresh(SID)
     const current = control.refresh(SID)
 
@@ -356,11 +356,11 @@ describe('the header control\'s seat', () => {
     // browser only has to read it, and it must never round a phase up. A
     // `draining` reading keeps the control live so pressing again can take the
     // whole tree back.
-    expect(safeStopView({ phase: 'draining', runningTools: [] }))
+    expect(pauseView({ phase: 'draining', runningTools: [] }))
       .toMatchObject({ paused: true, enabled: true, labelKey: 'state.draining' })
-    expect(safeStopView({ phase: 'parking', runningTools: [] }))
+    expect(pauseView({ phase: 'parking', runningTools: [] }))
       .toMatchObject({ paused: true, enabled: true, labelKey: 'state.parking' })
-    expect(safeStopView({ phase: 'safe', runningTools: [] }))
+    expect(pauseView({ phase: 'safe', runningTools: [] }))
       .toMatchObject({ paused: true, enabled: true, labelKey: 'state.safe' })
   })
 
@@ -388,7 +388,7 @@ describe('browser control wiring', () => {
     const { commands, host, readsDone } = hostDouble()
     const listeners: (() => void)[] = []
     const cleanups: (() => void)[] = []
-    const registrations: { options?: Record<string, unknown>; inject?: (sessionId: SessionId) => SafeStopInjected }[] = []
+    const registrations: { options?: Record<string, unknown>; inject?: (sessionId: SessionId) => PauseInjected }[] = []
     const ctx = {
       effect(callback: () => unknown) {
         const cleanup = callback()
@@ -414,7 +414,7 @@ describe('browser control wiring', () => {
     apply(ctx as never)
     const entry = registrations.find(registration =>
       registration.options?.name === 'conversation.session.header.actions')
-    if (entry === undefined) throw new Error('safe-stop: the control registered no slot entry')
+    if (entry === undefined) throw new Error('pause: the control registered no slot entry')
     return {
       host,
       readsDone,
@@ -422,20 +422,20 @@ describe('browser control wiring', () => {
       cleanups,
       options: entry.options,
       /** The inject face the framework would hand the component. */
-      injected: (sessionId: SessionId): SafeStopInjected => {
-        const face = (entry.options as { inject?: (id: SessionId) => SafeStopInjected }).inject
-        if (face === undefined) throw new Error('safe-stop: the control registered no inject face')
+      injected: (sessionId: SessionId): PauseInjected => {
+        const face = (entry.options as { inject?: (id: SessionId) => PauseInjected }).inject
+        if (face === undefined) throw new Error('pause: the control registered no inject face')
         return face(sessionId)
       },
     }
   }
 
-  const phaseAt = (injected: SafeStopInjected, sessionId: SessionId): string | undefined =>
-    injected.hooks.safeStop.getSnapshot().bySession[String(sessionId)]?.phase
+  const phaseAt = (injected: PauseInjected, sessionId: SessionId): string | undefined =>
+    injected.hooks.pause.getSnapshot().bySession[String(sessionId)]?.phase
 
   it('reads the host once per mounted control and re-reads on a forwarded registry change', async () => {
     const benchRun = bench()
-    expect(benchRun.options).toMatchObject({ id: 'safe-stop', locale: 'safe-stop' })
+    expect(benchRun.options).toMatchObject({ id: 'pause', locale: 'pause' })
     const injected = benchRun.injected(SID)
 
     // Mounting the control reads the host once: the host reports the session
@@ -446,7 +446,7 @@ describe('browser control wiring', () => {
     injected.refresh(SID)
     await benchRun.readsDone(1)
     await until(() => phaseAt(injected, SID) === 'draining')
-    expect(safeStopView(injected.hooks.safeStop.getSnapshot().bySession[String(SID)])).toMatchObject({
+    expect(pauseView(injected.hooks.pause.getSnapshot().bySession[String(SID)])).toMatchObject({
       paused: true,
       enabled: true,
       labelKey: 'state.draining',
@@ -468,10 +468,10 @@ describe('browser control wiring', () => {
     // goal verb, and the switch's next state is the host's answer again.
     benchRun.host.paused = true
     injected.refresh(SID)
-    await until(() => injected.hooks.safeStop.getSnapshot().bySession[String(SID)]?.rearmGoal === true)
+    await until(() => injected.hooks.pause.getSnapshot().bySession[String(SID)]?.rearmGoal === true)
     injected.toggleGoal(SID)
     await until(() => benchRun.host.lines.includes(`/${GOAL_COMMAND}`))
-    await until(() => injected.hooks.safeStop.getSnapshot().bySession[String(SID)]?.rearmGoal === false)
+    await until(() => injected.hooks.pause.getSnapshot().bySession[String(SID)]?.rearmGoal === false)
   })
 
   it('unsubscribes from the host when the plugin unloads', () => {

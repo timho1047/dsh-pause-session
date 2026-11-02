@@ -7,7 +7,7 @@
  * fake timers, and the contrast case uses the harness's own `idleWatchdog` —
  * the timer both shipped adapters arm around an outstanding provider pull — to
  * show that the only timer in play appears with the pull, never with the hold.
- * @module dsh-safe-stop/test/assumptions/held-request-timers
+ * @module dsh-pause/test/assumptions/held-request-timers
  */
 
 import { describe, expect, it, vi } from 'vitest'

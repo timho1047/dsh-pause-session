@@ -7,7 +7,7 @@
  * abort. This suite installs exactly that listener over the real loop and
  * checks the discipline from the outside: delegation counts and the requests
  * that reached the provider.
- * @module dsh-safe-stop/test/assumptions/gate-listener-discipline
+ * @module dsh-pause/test/assumptions/gate-listener-discipline
  */
 
 import { describe, expect, it } from 'vitest'
@@ -65,7 +65,7 @@ function installGate(ctx: Context, lifetime: AbortSignal): ModelRequestGate {
       // The race decides when to stop waiting; the signals decide whether
       // delegating is still allowed at this exact moment.
       if (request.signal?.aborted === true) throw request.signal.reason
-      if (lifetime.aborted) throw new Error('safe-stop: plugin lifetime ended while a request was held')
+      if (lifetime.aborted) throw new Error('pause: plugin lifetime ended while a request was held')
       count += 1
       yield* next()
     })())

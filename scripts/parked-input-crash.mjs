@@ -17,7 +17,7 @@ import { writeSync } from 'node:fs'
 import { Context } from '@deepseek-ai/cordis'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 
 const [root, mode, rawId] = process.argv.slice(2)
 if (root === undefined || mode === undefined || rawId === undefined) {

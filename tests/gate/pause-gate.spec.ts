@@ -7,14 +7,14 @@
  *
  * Every spec drives the plugin through the same host entry point the browser
  * half uses — `ctx.commands.execute` on the real registry.
- * @module dsh-safe-stop/test/gate/pause-gate
+ * @module dsh-pause/test/gate/pause-gate
  */
 
 import { describe, expect, it, vi } from 'vitest'
 import { createUserMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { SessionId } from '@deepseek-ai/dsh-session'
-import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
+import { defineContentToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 import { PAUSE_COMMAND, RESUME_COMMAND } from '../../src/shared.ts'
 import { textResponse } from '../assumptions/fake-provider.ts'
 import { control, mountGatedLoop, turnEnd, until } from './loop.ts'

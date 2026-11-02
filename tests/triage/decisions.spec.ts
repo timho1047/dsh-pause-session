@@ -9,7 +9,7 @@
  * decision is also a target, so the cases that matter include the ones the host
  * must refuse: a command no row was shown for, and a wake that must not land in
  * the log as the user's own words.
- * @module dsh-safe-stop/test/triage/decisions
+ * @module dsh-pause/test/triage/decisions
  */
 
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -54,7 +54,7 @@ function userText(request: { messages: readonly { role: string; content: readonl
  */
 async function lastLoggedSource(home: TriageHome, sessionId: string): Promise<string | undefined> {
   const persistence = home.ctx.get('sessionPersistence')
-  if (persistence === undefined) throw new Error('safe-stop: this home mounts no session persistence')
+  if (persistence === undefined) throw new Error('pause: this home mounts no session persistence')
   // The log is read through its durable form, so the writer's own checkpoint is
   // what puts the wake's message in it.
   const live = home.ctx.sessions.get(SessionId(sessionId))
@@ -72,7 +72,7 @@ async function lastLoggedSource(home: TriageHome, sessionId: string): Promise<st
 
 describe('the decisions on one listed session', () => {
   it('continues with no note: the clean path\'s own invisible wake', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-triage-continue-')
+    const caseRoot = temporaryRoot('dsh-pause-triage-continue-')
     await parkAndLeave(caseRoot, 'overnight-continue', 'draining')
 
     const home = await reviveTriageHome(caseRoot)
@@ -98,7 +98,7 @@ describe('the decisions on one listed session', () => {
       // The wake is this plugin's, and the session's own log says so: a later
       // consumer reads the same durable record and cannot mistake it for the
       // user's words.
-      expect(await lastLoggedSource(home, 'overnight-continue')).toBe('safe-stop')
+      expect(await lastLoggedSource(home, 'overnight-continue')).toBe('pause')
       // A decision is a release: the next process does not re-hold it.
       await recordsUntil(caseRoot, [])
     } finally {
@@ -107,7 +107,7 @@ describe('the decisions on one listed session', () => {
   })
 
   it('continues with a note that says the tool outcome is unknown and forbids a blind retry', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-triage-note-')
+    const caseRoot = temporaryRoot('dsh-pause-triage-note-')
     await parkAndLeave(caseRoot, 'overnight-note', 'draining')
 
     const home = await reviveTriageHome(caseRoot)
@@ -130,7 +130,7 @@ describe('the decisions on one listed session', () => {
       expect(UNKNOWN_OUTCOME_NOTE).toContain('do not retry it blindly')
       // The note is synthesized by the plugin on the user's behalf, and the log
       // keeps that attribution: it is not text the human typed.
-      expect(await lastLoggedSource(home, 'overnight-note')).toBe('safe-stop')
+      expect(await lastLoggedSource(home, 'overnight-note')).toBe('pause')
       // The press is durable: the next process does not re-hold a resumed or
       // refused session, and one that was only opened still holds.
       await recordsUntil(caseRoot, [])
@@ -140,7 +140,7 @@ describe('the decisions on one listed session', () => {
   })
 
   it('answers the review decision without activating anything or spending a request', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-triage-review-')
+    const caseRoot = temporaryRoot('dsh-pause-triage-review-')
     await parkAndLeave(caseRoot, 'overnight-review', 'draining')
 
     const home = await reviveTriageHome(caseRoot)
@@ -166,7 +166,7 @@ describe('the decisions on one listed session', () => {
   })
 
   it('leaves the session alone: no agent, no request, no write', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-triage-leave-')
+    const caseRoot = temporaryRoot('dsh-pause-triage-leave-')
     await parkAndLeave(caseRoot, 'overnight-leave', 'draining')
     const before: [string, string][] = [['overnight-leave', 'draining']]
 
@@ -186,7 +186,7 @@ describe('the decisions on one listed session', () => {
   })
 
   it('refuses a decision on a row this calling session was never shown', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-triage-unshown-')
+    const caseRoot = temporaryRoot('dsh-pause-triage-unshown-')
     await parkAndLeave(caseRoot, 'overnight-unshown', 'draining')
 
     const home = await reviveTriageHome(caseRoot)
@@ -194,12 +194,12 @@ describe('the decisions on one listed session', () => {
       // The row is real and listed, but this session never read the list: the
       // command channel names its target as input, and a name nobody was shown
       // is not a target. Nothing may be resumed, and nothing may be spent.
-      const answered = await home.run('/safe-triage-continue overnight-unshown')
+      const answered = await home.run('/pause-triage-continue overnight-unshown')
       expect(answered.kind).toBe('error')
       expect(answered.text).toBe(TRIAGE_UNSHOWN_TEXT)
       // The goal switch rides the same binding: it changes durable state of a
       // parked session, so a row nobody was shown is not a target for it either.
-      const switched = await home.run('/safe-triage-goal overnight-unshown')
+      const switched = await home.run('/pause-triage-goal overnight-unshown')
       expect(switched.kind).toBe('error')
       expect(switched.text).toBe(TRIAGE_UNSHOWN_TEXT)
       await settles()
@@ -217,7 +217,7 @@ describe('the decisions on one listed session', () => {
   })
 
   it('refuses a park verb issued from inside a model turn', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-triage-unattended-')
+    const caseRoot = temporaryRoot('dsh-pause-triage-unattended-')
     await parkAndLeave(caseRoot, 'overnight-unattended', 'draining')
 
     const home = await reviveTriageHome(caseRoot)
@@ -246,7 +246,7 @@ describe('the decisions on one listed session', () => {
   })
 
   it('refuses a decision aimed at a session that is not on the list', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-triage-not-listed-')
+    const caseRoot = temporaryRoot('dsh-pause-triage-not-listed-')
     await parkAndLeave(caseRoot, 'overnight-clean', 'clean')
 
     const home = await reviveTriageHome(caseRoot)

@@ -7,7 +7,7 @@
  * comes from the job registry, where background work lives outside the agent
  * loop entirely. What is asserted is the report a user reads, decoded the way
  * the browser control decodes it.
- * @module dsh-safe-stop/test/global/report
+ * @module dsh-pause/test/global/report
  */
 
 import { afterAll, describe, expect, it } from 'vitest'
@@ -26,7 +26,7 @@ const ask = (text: string) => createUserMessage({ content: [{ type: 'text', text
 
 describe('the whole-app report', () => {
   it('names a tree on a one-shot route and a background job, and still says it is safe', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-report-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-report-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, { script: blockingScript() })
     let job: ReturnType<typeof home.job> | undefined
     try {
@@ -48,7 +48,7 @@ describe('the whole-app report', () => {
       parent.followup(ask('run the tool'))
       await untilAsync(async () => home.blocking.started() === 1, 'the tool in flight')
 
-      await home.run(parent, 'safe-stop-all')
+      await home.run(parent, 'pause-all')
       home.blocking.release(0)
       await untilAsync(async () => (await home.status(parent)).verdict === 'safe', 'the whole tree to park')
 
@@ -61,7 +61,7 @@ describe('the whole-app report', () => {
 
       // The report a user reads says both things, and says them about the very
       // read that also says the lid can be closed.
-      const answer = await home.run(parent, 'safe-state-all')
+      const answer = await home.run(parent, 'pause-state-all')
       const decoded = answer.text === undefined ? undefined : decodeGlobalStatus(answer.text)
       expect(decoded?.verdict).toBe('safe')
       expect(answer.text).toContain('unresumable: bridge-user')
@@ -83,7 +83,7 @@ describe('the whole-app report', () => {
   })
 
   it('names no route when every child can be resumed', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-report-clean-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-report-clean-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, { script: blockingScript() })
     try {
       const parent = await home.create('plain-parent')
@@ -98,7 +98,7 @@ describe('the whole-app report', () => {
       parent.followup(ask('run the tool'))
       await untilAsync(async () => home.blocking.started() === 1, 'the tool in flight')
 
-      await home.run(parent, 'safe-stop-all')
+      await home.run(parent, 'pause-all')
       home.blocking.release(0)
       await untilAsync(async () => (await home.status(parent)).verdict === 'safe', 'the whole tree to park')
 

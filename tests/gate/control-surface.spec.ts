@@ -4,7 +4,7 @@
  * session's own agent scope. Both are asserted through the real command
  * registry — the same `list`/`execute` calls `ctx.remote.commands` exposes to
  * the Client.
- * @module dsh-safe-stop/test/gate/control-surface
+ * @module dsh-pause/test/gate/control-surface
  */
 
 import { describe, expect, it } from 'vitest'

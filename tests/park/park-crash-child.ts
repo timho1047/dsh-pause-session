@@ -30,8 +30,8 @@ import CommandRuntime from '@deepseek-ai/dsh-commands'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
-import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
-import { apply, inject, name } from 'dsh-safe-stop'
+import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import { apply, inject, name } from 'dsh-pause'
 import { FakeProvider } from '../assumptions/fake-provider.ts'
 import { textResponse } from '../assumptions/fake-provider.ts'
 import { mountParkStorage } from '../registry/storage.ts'
@@ -57,7 +57,7 @@ await ctx.plugin({ name, inject, apply })
 
 // Park the session, then hand it one more message: the loop opens a turn for
 // it, builds the request, and stops at the gate with that input still pending.
-const pause = await ctx.commands.execute(agent, '/safe-stop', [], new AbortController().signal)
+const pause = await ctx.commands.execute(agent, '/pause', [], new AbortController().signal)
 if (pause?.result.kind !== 'success') throw new Error('child: pause did not succeed')
 agent.followup(createUserMessage({
   content: [{ type: 'text', text: 'pending while parked' }],
@@ -65,12 +65,12 @@ agent.followup(createUserMessage({
 }))
 
 // Wait for the session to report safe, read the same way the browser does.
-const statusDefinitionId = 'dsh-safe-stop/status'
-const resumeDefinitionId = 'dsh-safe-stop/resume'
+const statusDefinitionId = 'dsh-pause/status'
+const resumeDefinitionId = 'dsh-pause/resume'
 for (let attempt = 0; attempt < 4000; attempt++) {
   const listed = ctx.commands.list(agent)
   if (listed.some(descriptor => descriptor.definitionId === resumeDefinitionId)) {
-    const status = await ctx.commands.execute(agent, '/safe-state', [], new AbortController().signal)
+    const status = await ctx.commands.execute(agent, '/pause-state', [], new AbortController().signal)
     const text = status?.result.kind === 'success' ? status.result.text : undefined
     if (text?.includes('safe to close') === true) {
       writeSync(1, `CRASH_READY ${text}\n`)

@@ -8,7 +8,7 @@
  * recorder upstream of the gate that captures the request the loop built.
  * Listeners are registered before the plugin, so the recorder sits closer to
  * the loop than the gate does.
- * @module dsh-safe-stop/test/gate/loop
+ * @module dsh-pause/test/gate/loop
  */
 
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -47,7 +47,7 @@ export async function mountGatedLoop(
   options: { idleTimeoutMs?: number; heldWrites?: boolean } = {},
 ): Promise<GatedLoop> {
   const loop = await mountFakeLoop(id, script, options)
-  const storageRoot = mkdtempSync(join(tmpdir(), 'dsh-safe-stop-loop-'))
+  const storageRoot = mkdtempSync(join(tmpdir(), 'dsh-pause-loop-'))
   loop.ctx.effect(() => () => rmSync(storageRoot, { recursive: true, force: true }), 'spec: registry root')
   const held = options.heldWrites === true ? await mountHeldParkStorage(loop.ctx, storageRoot) : undefined
   if (held === undefined) await mountParkStorage(loop.ctx, storageRoot)
@@ -78,9 +78,9 @@ export async function mountGatedLoop(
 /** Run one control command the way the browser half does. */
 export async function control(ctx: Context, agent: Agent, command: string): Promise<void> {
   const execution = await ctx.commands.execute(agent, `/${command}`, [], new AbortController().signal)
-  if (execution === undefined) throw new Error(`safe-stop: /${command} did not resolve for "${agent.id}"`)
+  if (execution === undefined) throw new Error(`pause: /${command} did not resolve for "${agent.id}"`)
   if (execution.result.kind !== 'success') {
-    throw new Error(`safe-stop: /${command} failed for "${agent.id}": ${execution.result.text}`)
+    throw new Error(`pause: /${command} failed for "${agent.id}": ${execution.result.text}`)
   }
 }
 

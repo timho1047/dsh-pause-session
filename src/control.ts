@@ -51,7 +51,7 @@
  * dispatched from inside a model turn is refused. The listed verbs add the
  * one binding their target needs — the row must be one the calling session was
  * shown — and that rule lives with the list (`./triage.ts`).
- * @module dsh-safe-stop/control
+ * @module dsh-pause/control
  */
 
 import type { Context, Fiber } from '@deepseek-ai/cordis'
@@ -62,8 +62,8 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 // Type-only: the optional `ctx.sessionPersistence` observation seam.
 import type {} from '@deepseek-ai/dsh-session-persistence'
 import type { PauseGate } from './gate.js'
-import { mountGlobalStop } from './global.js'
-import type { GlobalStop, LivePark } from './global.js'
+import { mountGlobalPause } from './global.js'
+import type { GlobalPause, LivePark } from './global.js'
 import type { ParkWatch } from './park.js'
 import type { ParkRegistry } from './registry.js'
 import { installResumePath, NOT_PARKED_TEXT } from './resume.js'
@@ -76,7 +76,7 @@ import {
   describeError, encodeParkStatus, encodeTriageList, foldTreePhases, GOAL_COMMAND, GOAL_DEFINITION_ID,
   PAUSE_COMMAND, PAUSE_DEFINITION_ID, RESUME_ALL_COMMAND, RESUME_ALL_DEFINITION_ID, RESUME_COMMAND,
   RESUME_DEFINITION_ID, STATE_ALL_COMMAND, STATE_ALL_DEFINITION_ID, STATUS_COMMAND, STATUS_DEFINITION_ID,
-  STOP_ALL_COMMAND, STOP_ALL_DEFINITION_ID, TRIAGE_COMMAND, TRIAGE_CONTINUE_COMMAND,
+  PAUSE_ALL_COMMAND, PAUSE_ALL_DEFINITION_ID, TRIAGE_COMMAND, TRIAGE_CONTINUE_COMMAND,
   TRIAGE_CONTINUE_DEFINITION_ID, TRIAGE_DEFINITION_ID, TRIAGE_GOAL_COMMAND, TRIAGE_GOAL_DEFINITION_ID,
   TRIAGE_LEAVE_COMMAND, TRIAGE_LEAVE_DEFINITION_ID, TRIAGE_NOTE_COMMAND, TRIAGE_NOTE_DEFINITION_ID,
   TRIAGE_REVIEW_COMMAND, TRIAGE_REVIEW_DEFINITION_ID,
@@ -98,12 +98,12 @@ function pausedText(agents: number): string {
     : agents === 1
       ? 'this session and 1 subagent'
       : `this session and ${String(agents)} subagents`
-  return `safe-stop registered ${registered}. They stop once the work in flight drains.`
+  return `pause registered ${registered}. They stop once the work in flight drains.`
     + ' Press again to cancel the pause.'
 }
 
 /** Result copy for a press or a release the durable registry refused to record. */
-const UNRECORDED_TEXT = 'safe-stop could not write the pause registry, so it did not change the pause state.'
+const UNRECORDED_TEXT = 'pause could not write the pause registry, so it did not change the pause state.'
 
 /**
  * What a tree-wide press reports when it could not read the tree. The session
@@ -111,7 +111,7 @@ const UNRECORDED_TEXT = 'safe-stop could not write the pause registry, so it did
  * vouched for, and the answer names that limit rather than letting the session's
  * own park stand for a tree nobody read.
  */
-const TREE_UNREAD_TEXT = 'safe-stop could not read this session\'s subagent tree, so it did not register its subagents.'
+const TREE_UNREAD_TEXT = 'pause could not read this session\'s subagent tree, so it did not register its subagents.'
 
 /**
  * Result copy for a tree-wide press that could not record part of the tree.
@@ -120,7 +120,7 @@ const TREE_UNREAD_TEXT = 'safe-stop could not read this session\'s subagent tree
  * @returns the copy for the person who pressed.
  */
 function unrecordedTreeText(names: readonly SessionId[]): string {
-  return `safe-stop could not register ${names.map(name => `"${String(name)}"`).join(', ')}`
+  return `pause could not register ${names.map(name => `"${String(name)}"`).join(', ')}`
     + ' in the pause registry, so they are not paused. Everything else in the tree is.'
 }
 
@@ -130,7 +130,7 @@ function unrecordedTreeText(names: readonly SessionId[]): string {
  * own reading of the one signal that separates a person's command from a
  * model's.
  */
-export const UNATTENDED_TEXT = 'safe-stop did not act: this command came from inside a model turn,'
+export const UNATTENDED_TEXT = 'pause did not act: this command came from inside a model turn,'
   + ' and the park verbs act only on a person\'s command.'
 
 /**
@@ -173,7 +173,7 @@ async function sessionReadable(ctx: Context, sessionId: SessionId): Promise<bool
   } catch (error: unknown) {
     // A failing observation is not proof of absence, and dropping a park on a
     // guess is the one direction this control must not take.
-    ctx.logger.warn(`safe-stop: could not look for the stored log of "${sessionId}": ${describeError(error)}`)
+    ctx.logger.warn(`pause: could not look for the stored log of "${sessionId}": ${describeError(error)}`)
     return true
   }
 }
@@ -260,10 +260,10 @@ export function summarizeResume(attempts: readonly ResumeAttempt[]): string {
   const resumed = attempts.filter(attempt => attempt.resumed).length
   const refused = attempts.length - resumed
   const head = resumed === 0
-    ? 'safe-stop resumed no session'
+    ? 'pause resumed no session'
     : resumed === 1
-      ? 'safe-stop resumed 1 session from where it stopped'
-      : `safe-stop resumed ${resumed} sessions from where they stopped`
+      ? 'pause resumed 1 session from where it stopped'
+      : `pause resumed ${resumed} sessions from where they stopped`
   if (refused === 0) return `${head}.`
   const unclean = attempts.filter(attempt => attempt.refusal === 'not-clean').length
   const rest = unclean === refused
@@ -316,7 +316,7 @@ export function installSessionControl(
    * Sessions a press of this process tried to register and the registry
    * refused. They are running, unmarked, and invisible to the live accessor,
    * so this is the only thing that keeps the aggregate from quietly omitting
-   * them; see {@link GlobalStop.markUnrecorded}.
+   * them; see {@link GlobalPause.markUnrecorded}.
    */
   const unrecorded = new Set<SessionId>()
   /** Bumped by every mark and every cancel; a stale generation publishes nothing. */
@@ -328,7 +328,7 @@ export function installSessionControl(
     if (marker === undefined) return
     markers.delete(sessionId)
     void Promise.resolve(marker.fiber.dispose()).catch((error: unknown) => {
-      ctx.logger.warn(`safe-stop: session control cleanup failed: ${describeError(error)}`)
+      ctx.logger.warn(`pause: session control cleanup failed: ${describeError(error)}`)
     })
   }
 
@@ -357,7 +357,7 @@ export function installSessionControl(
     try {
       await registry.record(sessionId, phase)
     } catch (error: unknown) {
-      ctx.logger.warn(`safe-stop: could not record the park state of "${sessionId}" as ${phase}: ${describeError(error)}`)
+      ctx.logger.warn(`pause: could not record the park state of "${sessionId}" as ${phase}: ${describeError(error)}`)
       return false
     }
     const changed = mark.phase !== phase
@@ -396,8 +396,8 @@ export function installSessionControl(
    * @param mark - the session's own mark, whose phase the fold starts from.
    * @returns the phase to publish and the goal opt-out that rides beside it.
    */
-  const treeStatus = async (sessionId: SessionId, mark: ParkMark): Promise<ParkStatus> => {
-    const walk = await walkDescendants(ctx, sessionId)
+  const treeStatus = async (sessionId: SessionId, mark: ParkMark, signal?: AbortSignal): Promise<ParkStatus> => {
+    const walk = await walkDescendants(ctx, sessionId, signal)
     const phases: ParkPhase[] = [mark.phase]
     for (const member of walk.members) {
       const phase = recordedPhase(member.id)
@@ -435,14 +435,14 @@ export function installSessionControl(
     // The record is read per status call rather than frozen into the mark: both
     // the goal opt-out and the members of the tree the press registered are
     // durable state beside the phase, not part of this mark.
-    const status = async (): Promise<string> => encodeParkStatus(await treeStatus(sessionId, mark))
+    const status = async (signal?: AbortSignal): Promise<string> => encodeParkStatus(await treeStatus(sessionId, mark, signal))
     const definition = (): CommandDefinition => ({
       definitionId: CommandDefinitionId(STATUS_DEFINITION_ID),
       name: STATUS_COMMAND,
       // This descriptor is only the marker the browser looks for; the state
       // it reports is derived per call, tree and all.
       description: 'Report this parked tree',
-      handler: async () => ({ kind: 'success', text: await status() }),
+      handler: async (invocation) => ({ kind: 'success', text: await status(invocation.signal) }),
     })
     /** Re-register the status verb, which is the announcement every phase change rides. */
     let announce: (() => void) | undefined
@@ -458,7 +458,7 @@ export function installSessionControl(
         description: 'Resume this parked Session and its subagents',
         handler: async (invocation) => (modelIssued(ctx)
           ? { kind: 'error', text: UNATTENDED_TEXT }
-          : (await resumePath.releaseTree(invocation.agent.id)).answer),
+          : (await resumePath.releaseTree(invocation.agent.id, invocation.signal)).answer),
       })
       /** The status verb's current registration; {@link announce} replaces it. */
       let registered = scope.commands.register(definition())
@@ -543,7 +543,7 @@ export function installSessionControl(
         await ctx.sessions.flush(session)
       } catch (error: unknown) {
         if (!owned()) return
-        ctx.logger.warn(`safe-stop: flush failed for "${sessionId}": ${describeError(error)}`)
+        ctx.logger.warn(`pause: flush failed for "${sessionId}": ${describeError(error)}`)
         await commit(sessionId, mark, 'flush-failed')
         return
       }
@@ -614,14 +614,14 @@ export function installSessionControl(
    * @param sessionId - the session whose tree the user pressed.
    * @returns which members are registered and which could not be.
    */
-  const pressTree = async (sessionId: SessionId): Promise<PressTreeOutcome> => {
+  const pressTree = async (sessionId: SessionId, signal?: AbortSignal): Promise<PressTreeOutcome> => {
     // Nothing live means nothing this press could hold; the check is also what
     // keeps a session disposed in the middle of a press on the path that
     // records the park point it reached.
     if (ctx.sessions.get(sessionId) === undefined) {
       return { members: 0, registered: 0, rootRegistered: false, unrecorded: [], unread: false }
     }
-    const walk = await walkDescendants(ctx, sessionId)
+    const walk = await walkDescendants(ctx, sessionId, signal)
     // A tree this press could not read is not a reason to drop the session
     // itself: the user pressed a session, and its own park is still real. What
     // is refused is the claim about the tree, which is why the count stays at
@@ -633,7 +633,7 @@ export function installSessionControl(
       // way its park still reaches a durable "not clean" instead of a phase
       // that never settles.
       look(sessionId)
-      globalStop.markUnrecorded(sessionId, !pressed)
+      globalPause.markUnrecorded(sessionId, !pressed)
       return {
         members: 1,
         registered: pressed ? 1 : 0,
@@ -659,7 +659,7 @@ export function installSessionControl(
       }
       // The aggregate owns the same fact, so a member the registry refused is
       // named by the whole-app report too.
-      globalStop.markUnrecorded(id, !paused)
+      globalPause.markUnrecorded(id, !paused)
     }
     return {
       members: registered.length + unrecorded.length,
@@ -691,7 +691,7 @@ export function installSessionControl(
     try {
       await registry.forget(sessionId)
     } catch (error: unknown) {
-      ctx.logger.warn(`safe-stop: could not drop "${sessionId}" from the pause registry: ${describeError(error)}`)
+      ctx.logger.warn(`pause: could not drop "${sessionId}" from the pause registry: ${describeError(error)}`)
       return { kind: 'error', text: UNRECORDED_TEXT }
     }
     gate.resume(sessionId)
@@ -722,12 +722,12 @@ export function installSessionControl(
     if (modelIssued(ctx)) return { kind: 'error', text: UNATTENDED_TEXT }
     const target = invocation.rawInput.trim()
     if (target.length === 0) return { kind: 'error', text: TRIAGE_NOT_LISTED_TEXT }
-    return await triage.decide(invocation.agent.id, SessionId(target), action)
+    return await triage.decide(invocation.agent.id, SessionId(target), action, invocation.signal)
   }
 
   // The whole-app park reads the marks through this one accessor, so the
   // aggregate and the per-session control can never describe different states.
-  const globalStop: GlobalStop = mountGlobalStop(ctx, watch, registry, {
+  const globalPause: GlobalPause = mountGlobalPause(ctx, watch, registry, {
     isPaused: sessionId => gate.isPaused(sessionId),
     press,
     look,
@@ -752,7 +752,7 @@ export function installSessionControl(
       handler: async (invocation) => {
         if (modelIssued(ctx)) return { kind: 'error', text: UNATTENDED_TEXT }
         const sessionId = invocation.agent.id
-        const pressed = await pressTree(sessionId)
+        const pressed = await pressTree(sessionId, invocation.signal)
         if (pressed.unrecorded.length > 0) {
           return { kind: 'error', text: unrecordedTreeText(pressed.unrecorded) }
         }
@@ -772,18 +772,20 @@ export function installSessionControl(
     yield ctx.commands.register({
       definitionId: CommandDefinitionId(RESUME_ALL_DEFINITION_ID),
       name: RESUME_ALL_COMMAND,
-      description: 'Resume every Session safe-stop parked',
-      handler: async () => (modelIssued(ctx)
+      description: 'Resume every Session pause parked',
+      handler: async (invocation) => (modelIssued(ctx)
         ? { kind: 'error', text: UNATTENDED_TEXT }
-        : { kind: 'success', text: summarizeResume(await resumePath.resumeParked()) }),
+        : { kind: 'success', text: summarizeResume(await resumePath.resumeParked(invocation.signal)) }),
     })
     // The one-press whole-app park. Registered globally for the same reason:
     // the sessions it registers are the ones the user is not looking at.
     yield ctx.commands.register({
-      definitionId: CommandDefinitionId(STOP_ALL_DEFINITION_ID),
-      name: STOP_ALL_COMMAND,
+      definitionId: CommandDefinitionId(PAUSE_ALL_DEFINITION_ID),
+      name: PAUSE_ALL_COMMAND,
       description: 'Pause every running Session and its subagents',
-      handler: async () => (modelIssued(ctx) ? { kind: 'error', text: UNATTENDED_TEXT } : globalStop.pressAll()),
+      handler: async (invocation) => (modelIssued(ctx)
+        ? { kind: 'error', text: UNATTENDED_TEXT }
+        : globalPause.pressAll(invocation.signal)),
     })
     // The aggregate read behind the whole-app control. Its result carries the
     // state as of this read, which is what makes a moving park observable at
@@ -793,7 +795,7 @@ export function installSessionControl(
       definitionId: CommandDefinitionId(STATE_ALL_DEFINITION_ID),
       name: STATE_ALL_COMMAND,
       description: 'Report whether every parked Session is safe to close',
-      handler: async () => globalStop.readStatus(),
+      handler: async (invocation) => globalPause.readStatus(invocation.signal),
     })
     // The morning decision list, and the four decisions it offers. All five are
     // registered globally for the same reason the whole-app verbs are: the
@@ -805,7 +807,7 @@ export function installSessionControl(
       definitionId: CommandDefinitionId(TRIAGE_DEFINITION_ID),
       name: TRIAGE_COMMAND,
       description: 'List every Session that did not stop cleanly',
-      handler: async (invocation) => ({ kind: 'success', text: encodeTriageList(await triage.read(invocation.agent.id)) }),
+      handler: async (invocation) => ({ kind: 'success', text: encodeTriageList(await triage.read(invocation.agent.id, invocation.signal)) }),
     })
     yield ctx.commands.register({
       definitionId: CommandDefinitionId(TRIAGE_CONTINUE_DEFINITION_ID),
@@ -866,7 +868,7 @@ export function installSessionControl(
       marks.clear()
       await Promise.all(pending)
     }
-  }, 'safe-stop: session control')
+  }, 'pause: session control')
 
   return {
     adopt: async () => {
@@ -879,7 +881,7 @@ export function installSessionControl(
         // verb could ever clear it — and is reported instead.
         if (!await sessionReadable(ctx, entry.sessionId)) {
           unheld.add(entry.sessionId)
-          ctx.logger.warn(`safe-stop: the pause recorded for "${entry.sessionId}" is not held:`
+          ctx.logger.warn(`pause: the pause recorded for "${entry.sessionId}" is not held:`
             + ' this host cannot read that session')
           continue
         }

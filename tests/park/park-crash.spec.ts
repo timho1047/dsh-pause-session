@@ -8,7 +8,7 @@
  * re-reads the same storage from a fresh context, exactly as the premise probe
  * in `tests/assumptions/parked-input-durability.spec.ts` does. The difference
  * is who flushed: here it is the plugin's park flow, not a hand-written append.
- * @module dsh-safe-stop/test/park/park-crash
+ * @module dsh-pause/test/park/park-crash
  */
 
 import { spawn, spawnSync } from 'node:child_process'
@@ -22,23 +22,23 @@ import { Context } from '@deepseek-ai/cordis'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { SessionPersistenceNotFoundError } from '@deepseek-ai/dsh-session-persistence'
-import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const crashChild = join(repositoryRoot, 'tests', 'park', 'park-crash-child.ts')
 
 /** Every case shares one storage root; session ids keep the cases apart. */
-const storageRoot = mkdtempSync(join(tmpdir(), 'dsh-safe-stop-park-crash-'))
+const storageRoot = mkdtempSync(join(tmpdir(), 'dsh-pause-park-crash-'))
 afterAll(() => { rmSync(storageRoot, { recursive: true, force: true }) })
 
 beforeAll(() => {
   // The child imports the plugin's BUILT entry: its own sources use `.js`
   // specifiers for relative imports, which Node's type stripping cannot
   // resolve. Building here keeps this spec runnable on its own.
-  const build = spawnSync('pnpm', ['run', 'build:host'], {
+  const build = spawnSync('pnpm run build:host', {
     cwd: repositoryRoot,
     encoding: 'utf8',
-    shell: process.platform === 'win32',
+    shell: true,
     timeout: 120_000,
   })
   expect(build.status, `build failed:\n${build.stdout}\n${build.stderr}`).toBe(0)

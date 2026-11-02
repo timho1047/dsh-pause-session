@@ -11,7 +11,7 @@
  * A walk is read, not remembered. The tree is a fact that grows — a delegation
  * in flight publishes its child after the parent's catalog was read — so a
  * press walks the tree at press time and a status read walks it at read time.
- * `@module dsh-safe-stop/tree`
+ * `@module dsh-pause/tree`
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -72,13 +72,19 @@ export interface TreeWalk {
  * unknown branch.
  * @param ctx - host context carrying the optional subagent service.
  * @param rootSessionId - the session whose descendants are requested.
+ * @param signal - cancellation for the catalog walk.
  * @returns the descendants found and what of the walk could not be read.
+ * @throws the cancellation reason when `signal` aborts the walk.
  */
-export async function walkDescendants(ctx: Context, rootSessionId: SessionId): Promise<TreeWalk> {
+export async function walkDescendants(
+  ctx: Context,
+  rootSessionId: SessionId,
+  signal?: AbortSignal,
+): Promise<TreeWalk> {
   const subagents = ctx.get('subagents')
   if (subagents === undefined) return { members: [], unread: [], unreadWhole: false }
   try {
-    const rows = await subagents.listDescendants(rootSessionId)
+    const rows = await subagents.listDescendants(rootSessionId, signal)
     const members: TreeMember[] = []
     const unread: UnreadBranch[] = []
     for (const row of rows) {
@@ -90,7 +96,8 @@ export async function walkDescendants(ctx: Context, rootSessionId: SessionId): P
     }
     return { members, unread, unreadWhole: false }
   } catch (error: unknown) {
-    ctx.logger.warn(`safe-stop: could not read the subagent tree of "${rootSessionId}": ${describeError(error)}`)
+    if (signal?.aborted === true) throw error
+    ctx.logger.warn(`pause: could not read the subagent tree of "${rootSessionId}": ${describeError(error)}`)
     return { members: [], unread: [], unreadWhole: true }
   }
 }

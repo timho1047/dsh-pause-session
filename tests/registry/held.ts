@@ -16,7 +16,7 @@
  *
  * The wrapper delegates every other operation to the real JSON backend, so what
  * is under test is the plugin's ordering, not a fake medium.
- * @module dsh-safe-stop/test/registry/held
+ * @module dsh-pause/test/registry/held
  */
 
 import type { Context } from '@deepseek-ai/cordis'

@@ -54,7 +54,7 @@
  * next. All five carry the same binding — the row must be one this caller was
  * shown — because each changes, or declines to change, durable state of a
  * parked session.
- * @module dsh-safe-stop/triage
+ * @module dsh-pause/triage
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -71,21 +71,21 @@ import type { TriageAction, TriageList, TriageRow } from './shared.js'
 type WakeOf = Parameters<ResumePath['resumeSession']>[1]
 
 /** Result copy for a decision the list itself could not carry out. */
-export const TRIAGE_FAILED_TEXT = 'safe-stop could not carry out that decision; the session is exactly as it was.'
+export const TRIAGE_FAILED_TEXT = 'pause could not carry out that decision; the session is exactly as it was.'
 
 /** Result copy for leaving one listed session alone. */
-export const TRIAGE_LEFT_TEXT = 'safe-stop left this session paused; it is still on the list.'
+export const TRIAGE_LEFT_TEXT = 'pause left this session paused; it is still on the list.'
 
 /** Result copy for a decision aimed at a session that is not on the list. */
-export const TRIAGE_NOT_LISTED_TEXT = 'safe-stop has no unfinished park recorded for this session.'
+export const TRIAGE_NOT_LISTED_TEXT = 'pause has no unfinished park recorded for this session.'
 
 /**
  * Result copy for a decision aimed at a row the calling session was not shown.
  * The list is the only thing that legitimizes a target, so a target nobody read
  * is refused rather than acted on.
  */
-export const TRIAGE_UNSHOWN_TEXT = 'safe-stop did not act: this Session has not been shown that row.'
-  + ' Read the list first (/safe-triage).'
+export const TRIAGE_UNSHOWN_TEXT = 'pause did not act: this Session has not been shown that row.'
+  + ' Read the list first (/pause-triage).'
 
 /**
  * Model-facing text that goes with a wake when the user chooses to continue
@@ -151,17 +151,24 @@ export interface TriageListService {
   /**
    * Read the list for one calling session, and record the rows it was shown.
    * @param caller - the session the read was addressed to.
+   * @param signal - cancellation for the stored-log reads.
    * @returns every session that did not stop cleanly, with the facts its own log carries.
    */
-  read(caller: SessionId): Promise<TriageList>
+  read(caller: SessionId, signal?: AbortSignal): Promise<TriageList>
   /**
    * Carry out one decision on one listed session, for the caller that read it.
    * @param caller - the session the decision was addressed to.
    * @param sessionId - the listed session to act on.
    * @param action - which of the listed decisions was taken.
+   * @param signal - cancellation for the cold load and setup.
    * @returns the outcome for whoever asked.
    */
-  decide(caller: SessionId, sessionId: SessionId, action: TriageAction): Promise<CommandResult>
+  decide(
+    caller: SessionId,
+    sessionId: SessionId,
+    action: TriageAction,
+    signal?: AbortSignal,
+  ): Promise<CommandResult>
 }
 
 /**
@@ -201,8 +208,8 @@ export function mountTriageList(
     rearmGoal: entry.rearmGoal,
   })
 
-  const readable = async (entry: ListedPark): Promise<TriageRow> => {
-    const read = await coldRead(ctx, entry.sessionId, windowEvents)
+  const readable = async (entry: ListedPark, signal?: AbortSignal): Promise<TriageRow> => {
+    const read = await coldRead(ctx, entry.sessionId, windowEvents, signal)
     // A log this host could not read says so. An empty row would claim the
     // session left no traces, which is precisely the verdict nobody has.
     if (read.kind === 'unreadable') return unreadable(entry)
@@ -218,7 +225,12 @@ export function mountTriageList(
    * it was. The goal toggle is the user path for the one thing a resume can
    * spend unasked.
    */
-  const decide = async (caller: SessionId, sessionId: SessionId, action: TriageAction): Promise<CommandResult> => {
+  const decide = async (
+    caller: SessionId,
+    sessionId: SessionId,
+    action: TriageAction,
+    signal?: AbortSignal,
+  ): Promise<CommandResult> => {
     if (!(shown.get(caller)?.has(String(sessionId)) ?? false)) return { kind: 'error', text: TRIAGE_UNSHOWN_TEXT }
     const record = registry.get(sessionId)
     // `safe` is not a decision this list owns: that session belongs to the
@@ -231,15 +243,18 @@ export function mountTriageList(
     // Review is its own kind of decision, not a wake-less resume: it leaves the
     // park exactly as it was, so the row is still there for tomorrow and
     // nothing has been continued — or even activated — on the user's behalf.
-    if (action === 'review') return (await resumePath.decideUnclean(sessionId, { kind: 'none' }, 'review')).answer
+    if (action === 'review') {
+      return (await resumePath.decideUnclean(sessionId, { kind: 'none' }, 'review', undefined, signal)).answer
+    }
     const wake: WakeOf = action === 'continue' ? { kind: 'silent' } : { kind: 'message', text: UNKNOWN_OUTCOME_NOTE }
-    return (await resumePath.decideUnclean(sessionId, wake, 'release')).answer
+    return (await resumePath.decideUnclean(sessionId, wake, 'release', undefined, signal)).answer
   }
 
   return {
-    read: async (caller) => {
+    read: async (caller, signal) => {
+      signal?.throwIfAborted()
       const rows = await Promise.all([...registry.parked.values()]
-        .flatMap(entry => entry.phase === 'safe' ? [] : [readable({ ...entry, phase: entry.phase })]))
+        .flatMap(entry => entry.phase === 'safe' ? [] : [readable({ ...entry, phase: entry.phase }, signal)]))
       shown.set(caller, new Set(rows.map(row => row.sessionId)))
       return { rows }
     },

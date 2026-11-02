@@ -1,5 +1,5 @@
 /**
- * Host half of dsh-safe-stop.
+ * Host half of dsh-pause.
  *
  * Mounts the pause gate — the per-session hold at the model-request waterfall —
  * the activity fold the park predicate reads, the durable park registry, the
@@ -10,7 +10,7 @@
  * process left parked is held again by this one without any user action; a
  * registry this build cannot read fails the mount loudly rather than silently
  * resuming every session it named.
- * @module dsh-safe-stop
+ * @module dsh-pause
  */
 
 import { z } from 'zod'
@@ -22,7 +22,7 @@ import { mountParkWatch } from './park.js'
 import { openParkRegistry } from './registry.js'
 
 /** Plugin name; the Loader row and the bundle patch both use it. */
-export const name = 'dsh-safe-stop'
+export const name = 'dsh-pause'
 
 /**
  * Required host services: the model runtime to gate, the stores the control
@@ -84,13 +84,14 @@ export async function apply(ctx: Context, config: Config = Config.parse({})): Pr
   const lifetime = new AbortController()
   // The gate races this signal, so unloading releases every held request
   // instead of stranding a generator no one can reach again.
-  ctx.effect(() => () => { lifetime.abort(new Error('safe-stop: plugin unloaded')) }, 'safe-stop: lifetime')
+  ctx.effect(() => () => { lifetime.abort(new Error('pause: plugin unloaded')) }, 'pause: lifetime')
   const gate = new PauseGate({ lifetime: lifetime.signal })
   ctx.effect(
     () => ctx.on('llm/stream', (request, next) => gate.stream(request, next)),
-    'safe-stop: pause gate',
+    'pause: pause gate',
   )
-  const control = installSessionControl(ctx, gate, mountParkWatch(ctx), registry, {
+  const watch = await mountParkWatch(ctx)
+  const control = installSessionControl(ctx, gate, watch, registry, {
     silentWakeRoutes: config.silentWakeRoutes,
     maxListedLogEvents: config.maxListedLogEvents,
   })

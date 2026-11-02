@@ -34,7 +34,7 @@
  * answered that way — that reading is the newer fact — and the derivation is
  * voided by the next whole-app answer that names a registered session, which
  * the forwarded change a park causes is what brings in.
- * @module dsh-safe-stop/client/control
+ * @module dsh-pause/client/control
  */
 
 import type { ClientRemote } from '@deepseek-ai/dsh-api-remotes/client'
@@ -65,11 +65,11 @@ export type AggregateSource = () => GlobalReading | undefined
  * `safe`; the control shows them rather than rounding them up, because only
  * `safe` means the pending input is durably stored.
  */
-export type SafeStopPhase = 'active' | 'draining' | 'parking' | 'safe' | 'flush-failed' | 'unavailable'
+export type PausePhase = 'active' | 'draining' | 'parking' | 'safe' | 'flush-failed' | 'unavailable'
 
 /** One host answer about one session. */
-export interface SafeStopReading {
-  readonly phase: SafeStopPhase
+export interface PauseReading {
+  readonly phase: PausePhase
   /** Tools the host reported in flight; empty unless the phase is `draining`. */
   readonly runningTools: readonly string[]
   /**
@@ -82,20 +82,20 @@ export interface SafeStopReading {
 }
 
 /** Per-session control state, keyed by Session id so a slot selector can watch one session. */
-export interface SafeStopState {
+export interface PauseState {
   /** Reading per Session id; absent means no host answer yet. Writable: the store updates through a draft. */
-  bySession: Record<string, SafeStopReading | undefined>
+  bySession: Record<string, PauseReading | undefined>
 }
 
-const INITIAL: SafeStopState = { bySession: {} }
+const INITIAL: PauseState = { bySession: {} }
 
 /** Phases that name a moment on the way to a park rather than a state it reached. */
-const MOVING: ReadonlySet<SafeStopPhase> = new Set<SafeStopPhase>(['draining', 'parking'])
+const MOVING: ReadonlySet<PausePhase> = new Set<PausePhase>(['draining', 'parking'])
 
 /** Owns the published reading per session; nothing else writes that state. */
-export class SafeStopControl {
+export class PauseControl {
   /** State source the Session-header contribution binds its selector hook to. */
-  readonly store: SnapshotStore<SafeStopState> = createSnapshotStore(INITIAL)
+  readonly store: SnapshotStore<PauseState> = createSnapshotStore(INITIAL)
 
   /** Sessions this control has shown; a host registry change re-reads every one of them. */
   private readonly shown = new Set<SessionId>()
@@ -257,7 +257,7 @@ export class SafeStopControl {
   }
 
   /** Ask the host what this session's park state is, in the browser's vocabulary. */
-  private async read(sessionId: SessionId): Promise<SafeStopReading> {
+  private async read(sessionId: SessionId): Promise<PauseReading> {
     const listed = await this.commands.list(sessionId)
     if (!listed.ok) return { phase: 'unavailable', runningTools: [] }
     const paused = listed.value.some(descriptor => descriptor.definitionId === RESUME_DEFINITION_ID)
@@ -282,7 +282,7 @@ export class SafeStopControl {
     }
   }
 
-  private publish(sessionId: SessionId, reading: SafeStopReading): void {
+  private publish(sessionId: SessionId, reading: PauseReading): void {
     this.store.update((state) => {
       state.bySession = { ...state.bySession, [String(sessionId)]: reading }
     })

@@ -6,7 +6,7 @@
  * to do with what is left. The child's log is the only input: the list's facts
  * are read back through the plugin's own verbs, which is the same channel the
  * browser half uses.
- * @module dsh-safe-stop/test/triage/list
+ * @module dsh-pause/test/triage/list
  */
 
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -41,7 +41,7 @@ async function records(root: string): Promise<[string, string][]> {
 
 describe('the decision list', () => {
   it('names the tool that was in flight when the process died, and the trace it left', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-triage-draining-')
+    const caseRoot = temporaryRoot('dsh-pause-triage-draining-')
     await parkAndLeave(caseRoot, 'overnight-tools', 'pair')
     // The park never completed, so the durable outcome is the honest one for a
     // session that was still working when the process ended.
@@ -75,7 +75,7 @@ describe('the decision list', () => {
   })
 
   it('reads and decides the exact session whose id carries the list separators', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-triage-separators-')
+    const caseRoot = temporaryRoot('dsh-pause-triage-separators-')
     // Session ids are the host's own data, and the published list is the only
     // place the browser reads a row's target from: an id the encoding folded
     // would come back as a different name, and the decision would be aimed at
@@ -96,7 +96,7 @@ describe('the decision list', () => {
     }
   })
 
-  it('keeps a cleanly parked session off the list and resumes it silently instead', async () => {    const caseRoot = temporaryRoot('dsh-safe-stop-triage-clean-')
+  it('keeps a cleanly parked session off the list and resumes it silently instead', async () => {    const caseRoot = temporaryRoot('dsh-pause-triage-clean-')
     await parkAndLeave(caseRoot, 'overnight-clean', 'clean')
     await recordsUntil(caseRoot, [['overnight-clean', 'safe']])
 
@@ -110,7 +110,7 @@ describe('the decision list', () => {
       // And the morning verb resumes it without the list ever seeing it. The
       // wake is the clean path's: the loop builds one empty message in, and the
       // route drops it, so nothing new reaches the payload.
-      const answered = await home.run('/safe-resume-all')
+      const answered = await home.run('/pause-resume-all')
       expect(answered.kind, answered.text).toBe('success')
       const resumed = home.ctx.agents.get(SessionId('overnight-clean'))
       expect(resumed, 'the clean session was not resumed').toBeDefined()
@@ -127,7 +127,7 @@ describe('the decision list', () => {
   })
 
   it('leaves a record with no readable log unreadable instead of answering for it', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-triage-unreadable-')
+    const caseRoot = temporaryRoot('dsh-pause-triage-unreadable-')
     // A durable record with no session log behind it: the outcome is real, the
     // evidence for it is not readable here.
     await recordParkWithoutLog(caseRoot, 'vault-session', 'draining')
@@ -171,7 +171,7 @@ describe('the decision list', () => {
     const text = encodeTriageList(hostile)
     expect(text.startsWith(TRIAGE_PREFIX)).toBe(true)
     expect(decodeTriageList(text)?.rows[0]?.reading).toBe('unreadable')
-    expect(decodeTriageList('safe-stop: safe to close')).toBeUndefined()
-    expect(decodeTriageList('safe-stop all: safe; registered: 1')).toBeUndefined()
+    expect(decodeTriageList('pause: safe to close')).toBeUndefined()
+    expect(decodeTriageList('pause all: safe; registered: 1')).toBeUndefined()
   })
 })

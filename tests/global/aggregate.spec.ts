@@ -8,14 +8,14 @@
  * one whose subagent tree this process cannot read at all. The park also names
  * the session it belongs to whatever phase it reached — the clean case included
  * — which is the address a window showing something else reads it through.
- * @module dsh-safe-stop/test/global/aggregate
+ * @module dsh-pause/test/global/aggregate
  */
 
 import { afterAll, describe, expect, it } from 'vitest'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import { SafeStopControl } from '../../src/client/control.ts'
-import { SafeStopGlobalControl } from '../../src/client/global.ts'
+import { PauseControl } from '../../src/client/control.ts'
+import { PauseGlobalControl } from '../../src/client/global.ts'
 import { STATE_ALL_COMMAND, STATUS_COMMAND } from '../../src/shared.ts'
 import { readParkRegistry } from '../registry/read.ts'
 import { writeParkRecord } from '../registry/write.ts'
@@ -34,9 +34,9 @@ const ask = (text: string) => createUserMessage({ content: [{ type: 'text', text
 interface EyeReads {
   /** `commands.list` calls: one per session header read. */
   readonly lists: number
-  /** `safe-state` executions: the per-session status the header control reads. */
+  /** `pause-state` executions: the per-session status the header control reads. */
   readonly status: number
-  /** `safe-state-all` executions: the aggregate the pill reads. */
+  /** `pause-state-all` executions: the aggregate the pill reads. */
   readonly aggregate: number
   /**
    * The session each aggregate read was addressed at, in order: a read leaves
@@ -91,7 +91,7 @@ async function commandRuns(home: GlobalHome, sessionId: SessionId): Promise<numb
   const live = home.ctx.sessions.get(sessionId)
   if (live !== undefined) await home.ctx.sessions.flush(live)
   const persistence = home.ctx.get('sessionPersistence')
-  if (persistence === undefined) throw new Error('safe-stop: this home mounts no session persistence')
+  if (persistence === undefined) throw new Error('pause: this home mounts no session persistence')
   const handle = await persistence.open(sessionId, 'read')
   try {
     return (await handle.read(0, undefined)).events.filter(event => event.type === 'command/run').length
@@ -102,13 +102,13 @@ async function commandRuns(home: GlobalHome, sessionId: SessionId): Promise<numb
 
 describe('the aggregate answer', () => {
   it('reaches safe on both readings after a press made while a tool is still running, with no further action', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-agg-cycle-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-agg-cycle-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, { script: blockingScript() })
     const lifetime = new AbortController()
     const eye = clientEye(home)
     // The page's two controls, on burst timings a spec can wait out.
-    const pill = new SafeStopGlobalControl(eye.commands, lifetime.signal, 25, { visible: () => true })
-    const header = new SafeStopControl(
+    const pill = new PauseGlobalControl(eye.commands, lifetime.signal, 25, { visible: () => true })
+    const header = new PauseControl(
       eye.commands, lifetime.signal, 25, { visible: () => true },
       () => pill.store.getSnapshot().global,
     )
@@ -183,7 +183,7 @@ describe('the aggregate answer', () => {
   })
 
   it('turns safe only once every registered session has parked', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-agg-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-agg-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, { script: blockingScript() })
     try {
       const first = await home.create('first-job')
@@ -193,7 +193,7 @@ describe('the aggregate answer', () => {
       second.followup(ask('run the tool'))
       await untilAsync(async () => home.blocking.started() === 2, 'the second tool in flight')
 
-      expect((await home.run(first, 'safe-stop-all')).kind).toBe('success')
+      expect((await home.run(first, 'pause-all')).kind).toBe('success')
       const pressed = await home.status(first)
       expect(pressed.verdict).toBe('waiting')
       expect(pressed.registered).toBe(2)
@@ -228,14 +228,14 @@ describe('the aggregate answer', () => {
   })
 
   it('names a session that never reaches the park point instead of dropping it', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-agg-stuck-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-agg-stuck-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, { script: blockingScript() })
     try {
       const stuck = await home.create('stuck-in-a-tool')
       stuck.followup(ask('run the tool'))
       await untilAsync(async () => home.blocking.started() === 1, 'the tool in flight')
 
-      expect((await home.run(stuck, 'safe-stop-all')).kind).toBe('success')
+      expect((await home.run(stuck, 'pause-all')).kind).toBe('success')
       // Time passing is the point: the aggregate must keep saying "waiting, and
       // here is who" rather than rounding the park up to a number that forgets
       // the session it could not park.
@@ -253,14 +253,14 @@ describe('the aggregate answer', () => {
   })
 
   it('moves a session whose flush failed out of the count and never calls it clean', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-agg-flush-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-agg-flush-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, { script: blockingScript(), failingFlush: true })
     try {
       const only = await home.create('flush-fails')
       only.followup(ask('run the tool'))
       await untilAsync(async () => home.blocking.started() === 1, 'the tool in flight')
 
-      await home.run(only, 'safe-stop-all')
+      await home.run(only, 'pause-all')
       expect((await home.status(only)).draining).toEqual(['flush-fails'])
 
       // The tool lands and the session reaches the park point, but the flush
@@ -281,7 +281,7 @@ describe('the aggregate answer', () => {
   })
 
   it('refuses to call the park safe when a subagent tree could not be read', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-agg-blind-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-agg-blind-', temporaryRoots)
     // A composition with no subagent service at all: the session itself parks
     // cleanly, but nothing here can vouch for the tree it might have.
     const home = await mountGlobalHome(caseRoot, { subagents: false, script: blockingScript() })
@@ -290,7 +290,7 @@ describe('the aggregate answer', () => {
       only.followup(ask('run the tool'))
       await untilAsync(async () => home.blocking.started() === 1, 'the tool in flight')
 
-      await home.run(only, 'safe-stop-all')
+      await home.run(only, 'pause-all')
       home.blocking.release(0)
       await untilAsync(async () => (await home.status(only)).safe === 1, 'the session to park')
 
@@ -308,7 +308,7 @@ describe('the aggregate answer', () => {
   })
 
   it('names a record it could not hold instead of counting it as parked', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-agg-unheld-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-agg-unheld-', temporaryRoots)
     // A durable record with no session log behind it — the child killed inside
     // a tool whose log never materialized. The record is real; the session is
     // not readable, so this process cannot hold it, park it, or clear it.
@@ -339,7 +339,7 @@ describe('the aggregate answer', () => {
   })
 
   it('names a parked session a read can reach rather than only a record it cannot hold', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-agg-name-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-agg-name-', temporaryRoots)
     // A record this host cannot hold is registered before the live park exists,
     // so it is the first session the aggregate walks. It is named in `stalled`
     // like every other record the process cannot hold, and the parked session a
@@ -352,7 +352,7 @@ describe('the aggregate answer', () => {
       parked.followup(ask('run the tool'))
       await untilAsync(async () => home.blocking.started() === 1, 'the tool in flight')
 
-      await home.run(parked, 'safe-stop-all')
+      await home.run(parked, 'pause-all')
       home.blocking.release(0)
       await untilAsync(async () => (await home.status(parked)).safe === 1, 'the session to park')
 
@@ -368,11 +368,11 @@ describe('the aggregate answer', () => {
   })
 
   it('keeps a clean park\'s rows in the parked session, not in the window that reads them', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-agg-window-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-agg-window-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, { script: blockingScript() })
     const lifetime = new AbortController()
     const eye = clientEye(home)
-    const pill = new SafeStopGlobalControl(eye.commands, lifetime.signal, 25, { visible: () => true })
+    const pill = new PauseGlobalControl(eye.commands, lifetime.signal, 25, { visible: () => true })
     home.ctx.on('commands/change', () => { pill.refreshAll() })
     try {
       const parked = await home.create('parked-job')
@@ -383,7 +383,7 @@ describe('the aggregate answer', () => {
       // The other window parks everything, and the park reaches `safe`: nothing
       // is draining, stalled, unresumable or unread, so the park's own name is
       // the only thing in the answer that says which session it belongs to.
-      await home.run(bystander, 'safe-stop-all')
+      await home.run(bystander, 'pause-all')
       home.blocking.release(0)
       await untilAsync(async () => (await home.status(bystander)).verdict === 'safe', 'the park to finish cleanly')
 
@@ -400,7 +400,7 @@ describe('the aggregate answer', () => {
       // window, and the read it buys goes through the session the park belonged
       // to — the transcript the rows are about — while the session this window
       // is showing gains nothing.
-      await home.run(parked, 'safe-resume-all')
+      await home.run(parked, 'pause-resume-all')
       await untilAsync(async () => eye.reads().aggregateAt.length > 1, 'the forwarded change to be read')
       const addresses = eye.reads().aggregateAt
       expect(new Set(addresses.slice(1)), 'a row about the park landed in the session on screen')

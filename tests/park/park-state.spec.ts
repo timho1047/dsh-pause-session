@@ -12,7 +12,7 @@
  * Every spec drives the plugin through the same host entry points the browser
  * half uses — `ctx.commands.execute` on the real registry, plus `commands.list`
  * to see what the host published.
- * @module dsh-safe-stop/test/park/park-state
+ * @module dsh-pause/test/park/park-state
  */
 
 import { describe, expect, it } from 'vitest'
@@ -22,7 +22,7 @@ import type { CommandResult } from '@deepseek-ai/dsh-commands'
 import { createUserMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
+import { defineContentToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 import { UNATTENDED_TEXT } from '../../src/control.ts'
 import {
   decodeGlobalStatus, decodeParkStatus, GOAL_COMMAND, PAUSE_COMMAND, RESUME_COMMAND, RESUME_DEFINITION_ID,
@@ -58,18 +58,18 @@ async function published(ctx: Context, agent: Agent): Promise<ParkStatus | undef
   const listed = ctx.commands.list(agent)
   if (!listed.some(descriptor => descriptor.definitionId === RESUME_DEFINITION_ID)) return undefined
   const execution = await ctx.commands.execute(agent, `/${STATUS_COMMAND}`, [], new AbortController().signal)
-  if (execution === undefined) throw new Error('safe-stop: the status command is not registered')
-  if (execution.result.kind !== 'success') throw new Error(`safe-stop: status read failed: ${execution.result.text}`)
+  if (execution === undefined) throw new Error('pause: the status command is not registered')
+  if (execution.result.kind !== 'success') throw new Error(`pause: status read failed: ${execution.result.text}`)
   const text = execution.result.text
   const decoded = text === undefined ? undefined : decodeParkStatus(text)
-  if (decoded === undefined) throw new Error(`safe-stop: status read answered in an unknown vocabulary: ${String(text)}`)
+  if (decoded === undefined) throw new Error(`pause: status read answered in an unknown vocabulary: ${String(text)}`)
   return decoded
 }
 
 /** Run one control command and hand back its answer, refusals included. */
 async function answer(ctx: Context, agent: Agent, command: string): Promise<CommandResult> {
   const execution = await ctx.commands.execute(agent, `/${command}`, [], new AbortController().signal)
-  if (execution === undefined) throw new Error(`safe-stop: /${command} is not registered for "${agent.id}"`)
+  if (execution === undefined) throw new Error(`pause: /${command} is not registered for "${agent.id}"`)
   return execution.result
 }
 
@@ -81,7 +81,7 @@ async function answer(ctx: Context, agent: Agent, command: string): Promise<Comm
 async function settles(predicate: () => boolean, describe: string): Promise<void> {
   const deadline = Date.now() + 5_000
   while (!predicate()) {
-    if (Date.now() > deadline) throw new Error(`safe-stop: never settled: ${describe}`)
+    if (Date.now() > deadline) throw new Error(`pause: never settled: ${describe}`)
     await new Promise(resolve => setTimeout(resolve, 10))
   }
 }
@@ -99,7 +99,7 @@ async function aggregate(ctx: Context, agent: Agent): Promise<GlobalStatus> {
   const execution = await ctx.commands.execute(agent, `/${STATE_ALL_COMMAND}`, [], new AbortController().signal)
   const text = execution?.result.kind === 'success' ? execution.result.text : undefined
   const decoded = text === undefined ? undefined : decodeGlobalStatus(text)
-  if (decoded === undefined) throw new Error(`safe-stop: the aggregate answered in an unknown vocabulary: ${String(text)}`)
+  if (decoded === undefined) throw new Error(`pause: the aggregate answered in an unknown vocabulary: ${String(text)}`)
   return decoded
 }
 
@@ -149,7 +149,7 @@ function heldFlush(ctx: Context): { calls: () => number; release: () => void } {
  */
 function liveSession(loop: GatedLoop, agent: Agent): void {
   if (loop.ctx.sessions.get(agent.id) === undefined) {
-    throw new Error(`safe-stop: no live session for "${agent.id}"`)
+    throw new Error(`pause: no live session for "${agent.id}"`)
   }
 }
 
@@ -345,7 +345,7 @@ describe('park state: what the control reports between the press and the park', 
     const { ctx, agent } = loop
     liveSession(loop, agent)
     const held = loop.held
-    if (held === undefined) throw new Error('safe-stop: this case asked for held registry writes')
+    if (held === undefined) throw new Error('pause: this case asked for held registry writes')
     try {
       // The press is a durable promise: it answers only after `draining` is on
       // the medium, and the move to `parking` is the write after that.
@@ -380,7 +380,7 @@ describe('park state: what the control reports between the press and the park', 
     const loop = await mountGatedLoop('park-vanished', [], { heldWrites: true })
     const { ctx } = loop
     const held = loop.held
-    if (held === undefined) throw new Error('safe-stop: this case asked for held registry writes')
+    if (held === undefined) throw new Error('pause: this case asked for held registry writes')
     const target = SessionId('park-vanished-target')
     // A session with a handle: the spec can take it away mid-press, which is
     // what closing a session the user just paused looks like to this plugin.
@@ -406,7 +406,7 @@ describe('park state: what the control reports between the press and the park', 
       // And the report says the same: this session will not finish parking in
       // this process, which is a fact the user is owed rather than a "still
       // finishing" that never ends.
-      const answered = await ctx.commands.execute(loop.agent, '/safe-state-all', [], new AbortController().signal)
+      const answered = await ctx.commands.execute(loop.agent, '/pause-state-all', [], new AbortController().signal)
       const text = answered?.result.kind === 'success' ? answered.result.text : undefined
       expect(text === undefined ? undefined : decodeGlobalStatus(text)).toMatchObject({
         verdict: 'waiting',

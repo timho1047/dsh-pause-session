@@ -6,7 +6,7 @@
  * session storage, real storage hub and JSON backend, the plugin under test —
  * in a fresh context over the same roots. The parent keeps a recorder upstream
  * of the gate, so "what reached the model" is observable without a network.
- * @module dsh-safe-stop/test/resume/home
+ * @module dsh-pause/test/resume/home
  */
 
 import { spawn } from 'node:child_process'
@@ -20,12 +20,12 @@ import GoalService from '@deepseek-ai/dsh-goal'
 import * as GoalRoundDriver from '@deepseek-ai/dsh-goal-round-driver'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import type { AgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { apply, Config, inject, name } from '../../src/index.ts'
-import type { Config as SafeStopConfig } from '../../src/index.ts'
-import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
+import type { Config as PauseConfig } from '../../src/index.ts'
+import { defineContentToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 import { FakeProvider, textResponse } from '../assumptions/fake-provider.ts'
 import { mountParkStorage } from '../registry/storage.ts'
 import type { ParkMode } from './case.ts'
@@ -116,7 +116,7 @@ export interface ResumeHomeOptions {
    */
   readonly tools?: boolean
   /** The plugin's own route knowledge, when a case declares it. */
-  readonly config?: SafeStopConfig
+  readonly config?: PauseConfig
 }
 
 /**
@@ -162,10 +162,10 @@ export async function reviveHome(caseRoot: string, options: ResumeHomeOptions = 
 
 /** Press the morning verb the way the browser half does, and read its answer. */
 export async function resumeAll(home: ResumeHome): Promise<string> {
-  const execution = await home.ctx.commands.execute(home.desk, '/safe-resume-all', [], new AbortController().signal)
-  if (execution === undefined) throw new Error('safe-stop: the global resume verb is not registered')
+  const execution = await home.ctx.commands.execute(home.desk, '/pause-resume-all', [], new AbortController().signal)
+  if (execution === undefined) throw new Error('pause: the global resume verb is not registered')
   if (execution.result.kind !== 'success') {
-    throw new Error(`safe-stop: resume-all failed: ${execution.result.text}`)
+    throw new Error(`pause: resume-all failed: ${execution.result.text}`)
   }
   return execution.result.text ?? ''
 }

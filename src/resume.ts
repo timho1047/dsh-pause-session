@@ -29,7 +29,7 @@
  * holds whether or not the recorded session happens to be live in this process:
  * liveness is not the park outcome, and a session can be live without ever
  * having stopped.
- * @module dsh-safe-stop/resume
+ * @module dsh-pause/resume
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -41,6 +41,7 @@ import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 // Type-only: brings `ctx.get('goals')` and the goal view this path reads.
 import type {} from '@deepseek-ai/dsh-goal'
 import type { PauseGate } from './gate.js'
+import { UnresumableSessionError, restoreComposition } from './composition.js'
 import { owesReply } from './history.js'
 import type { ParkRegistry } from './registry.js'
 import { describeError } from './shared.js'
@@ -49,12 +50,12 @@ import { walkDescendants } from './tree.js'
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
     /**
-     * Text dsh-safe-stop synthesized on the session's behalf: the wake this
+     * Text dsh-pause synthesized on the session's behalf: the wake this
      * path delivers and the unknown-outcome note a decision adds. Declared so
      * the log, and anything reading it, can tell plugin-authored input from the
      * user's own.
      */
-    'safe-stop': { kind: 'safe-stop' }
+    'pause': { kind: 'pause' }
   }
 }
 
@@ -63,7 +64,7 @@ declare module '@deepseek-ai/dsh-llm' {
  * names its producer, because it lands in the same user turn as the input the
  * model owes an answer to and must not read as part of it.
  */
-export const WAKE_MARKER = '[safe-stop: resumed from a pause]'
+export const WAKE_MARKER = '[pause: resumed from a pause]'
 
 /**
  * How one resume asks the loop for the request it owes the session:
@@ -89,14 +90,17 @@ export const RESUMED_TEXT = 'This session resumed from where it paused.'
  * Result copy for a registered session this path refuses: its durable state is
  * not the outcome of a completed park, so waking it would be a guess.
  */
-export const UNCLEAN_TEXT = 'safe-stop did not resume this session: it did not stop cleanly,'
+export const UNCLEAN_TEXT = 'pause did not resume this session: it did not stop cleanly,'
   + ' so its pending work needs your decision rather than a silent wake.'
 
 /** Result copy when nothing is parked under that session. */
-export const NOT_PARKED_TEXT = 'safe-stop has no pause recorded for this session.'
+export const NOT_PARKED_TEXT = 'pause has no pause recorded for this session.'
 
 /** Result copy for a session that is parked but could not be loaded back. */
-export const ACTIVATION_FAILED_TEXT = 'safe-stop could not open this session from its stored log, so it stayed paused.'
+export const ACTIVATION_FAILED_TEXT = 'pause could not open this session from its stored log, so it stayed paused.'
+
+/** Result copy for a one-shot subagent route: its Session exists, but no resume may reactivate it. */
+export const UNRESUMABLE_TEXT = 'pause did not resume this session: it is a one-shot subagent route and cannot be resumed.'
 
 /**
  * Result copy for the review decision. It is the one answer that promises
@@ -104,18 +108,18 @@ export const ACTIVATION_FAILED_TEXT = 'safe-stop could not open this session fro
  * action in their session list — and activating its agent here would start a
  * session they asked only to look at.
  */
-export const REVIEW_TEXT = 'safe-stop did not activate this session: it is still parked, and nothing was sent to a model.'
+export const REVIEW_TEXT = 'pause did not activate this session: it is still parked, and nothing was sent to a model.'
   + ' Open it from your session list when you want to read it.'
 
 /** Result copy for a change the durable registry refused to record. */
-export const UNRECORDED_TEXT = 'safe-stop could not write the pause registry, so it did not change the pause state.'
+export const UNRECORDED_TEXT = 'pause could not write the pause registry, so it did not change the pause state.'
 
 /** Copy for one goal opt-out change. */
-export const REARM_GOAL_ON_TEXT = 'safe-stop will re-open this session\'s goal when it resumes it.'
-export const REARM_GOAL_OFF_TEXT = 'safe-stop will leave this session\'s goal closed when it resumes it.'
+export const REARM_GOAL_ON_TEXT = 'pause will re-open this session\'s goal when it resumes it.'
+export const REARM_GOAL_OFF_TEXT = 'pause will leave this session\'s goal closed when it resumes it.'
 
 /** Why one record did not produce a running session. */
-export type ResumeRefusal = 'not-parked' | 'not-clean' | 'activation-failed' | 'unrecorded' | 'not-activated'
+export type ResumeRefusal = 'not-parked' | 'not-clean' | 'activation-failed' | 'unrecorded' | 'not-activated' | 'unresumable'
 
 /** What one resume attempt did. */
 export interface ResumeOutcome {
@@ -164,9 +168,15 @@ export interface ResumePath {
    * @param sessionId - the session to resume.
    * @param request - which wake this resume delivers; see {@link WakeRequest}.
    * @param parentId - the direct parent a batch release already brought back, when there is one.
+   * @param signal - cancellation for the cold load and setup.
    * @returns what happened, and the copy for whoever asked.
    */
-  resumeSession(sessionId: SessionId, request: WakeRequest, parentId?: SessionId): Promise<ResumeAttempt>
+  resumeSession(
+    sessionId: SessionId,
+    request: WakeRequest,
+    parentId?: SessionId,
+    signal?: AbortSignal,
+  ): Promise<ResumeAttempt>
   /**
    * Resume one session the decision list officially owns — a record that is
    * known NOT to be clean, which the clean path above must refuse and this entry
@@ -178,6 +188,7 @@ export interface ResumePath {
    * nothing: opening a session to read it is the user's own action, not this
    * plugin's.
    * @param parentId - the direct parent a batch release already brought back, when there is one.
+   * @param signal - cancellation for the cold load and setup.
    * @returns what happened, and the copy for whoever asked.
    */
   decideUnclean(
@@ -185,13 +196,15 @@ export interface ResumePath {
     request: WakeRequest,
     finalize: 'release' | 'review',
     parentId?: SessionId,
+    signal?: AbortSignal,
   ): Promise<ResumeAttempt>
   /**
    * Resume every session the registry remembers, clean ones only. One session's
    * failure never stops the others.
+   * @param signal - cancellation checked between release levels and forwarded to each load.
    * @returns one attempt per recorded session, in registry order.
    */
-  resumeParked(): Promise<readonly ResumeAttempt[]>
+  resumeParked(signal?: AbortSignal): Promise<readonly ResumeAttempt[]>
   /**
    * Record or clear one session's goal opt-out.
    * @param sessionId - the parked session to change.
@@ -203,9 +216,10 @@ export interface ResumePath {
    * Release one parked session and the registered members of its tree: the
    * counterpart of a press that registered a whole tree.
    * @param sessionId - the session whose tree the user released.
+   * @param signal - cancellation for the tree read and each member's load.
    * @returns what happened to the tree, and the copy for whoever asked.
    */
-  releaseTree(sessionId: SessionId): Promise<ReleaseTreeOutcome>
+  releaseTree(sessionId: SessionId, signal?: AbortSignal): Promise<ReleaseTreeOutcome>
 }
 
 /** What releasing one session's registered tree did. */
@@ -225,15 +239,15 @@ export interface ReleaseTreeOutcome {
  * sentence about all of it: what came back, and — by name, because those rows
  * are what the morning list is for — what did not.
  * @param released - the sessions this release covered, in release order.
- * @returns the result text, e.g. `safe-stop resumed 2 sessions from where they stopped; "child" did not stop cleanly`.
+ * @returns the result text, e.g. `pause resumed 2 sessions from where they stopped; "child" did not stop cleanly`.
  */
 export function summarizeTreeRelease(released: readonly ResumeAttempt[]): string {
   const resumed = released.filter(attempt => attempt.resumed).length
   const head = resumed === 0
-    ? 'safe-stop resumed nothing from this tree'
+    ? 'pause resumed nothing from this tree'
     : resumed === 1
-      ? 'safe-stop resumed 1 session from where it stopped'
-      : `safe-stop resumed ${resumed} sessions from where they stopped`
+      ? 'pause resumed 1 session from where it stopped'
+      : `pause resumed ${resumed} sessions from where they stopped`
   const refused = released.filter(attempt => !attempt.resumed)
   if (refused.length === 0) return `${head}.`
   const named = refused
@@ -323,7 +337,7 @@ export function installResumePath(
     const content: ContentBlock[] = request.kind === 'message'
       ? [{ type: 'text', text: request.text }]
       : wakeContent(provider)
-    agent.followup(createUserMessage({ content, source: { kind: 'safe-stop' } }))
+    agent.followup(createUserMessage({ content, source: { kind: 'pause' } }))
   }
 
   /**
@@ -345,7 +359,7 @@ export function installResumePath(
       if (goal.roundsStarted >= goal.maxGoalRounds) return
       goals.resume(agent, { id: goal.id, revision: goal.revision })
     } catch (error: unknown) {
-      ctx.logger.warn(`safe-stop: could not re-open the goal of "${agent.id}": ${describeError(error)}`)
+      ctx.logger.warn(`pause: could not re-open the goal of "${agent.id}": ${describeError(error)}`)
     }
   }
 
@@ -364,24 +378,37 @@ export function installResumePath(
    * when there is one. A subagent child resumed under its live parent is the
    * shape the harness's own cold resume uses; with no live parent the session
    * comes back on its own, which is all that can be done with it.
+   * @param signal - cancellation for the stored composition read and load.
    */
   const activate = async (
     sessionId: SessionId,
     request: WakeRequest,
     rearm: boolean,
     parentId?: SessionId,
+    signal?: AbortSignal,
   ): Promise<ResumeAttempt> => {
     const parent = parentId === undefined ? undefined : ctx.agents.get(parentId)
     let agent: Agent
     try {
+      const composition = await restoreComposition(ctx, sessionId, parent, signal)
       // Owned by the root, not by this plugin's fiber: the session is the
       // user's, and it must outlive a plugin reload.
       agent = (await ctx.root.agents.resume({
         resumeSessionId: sessionId,
         ...parent === undefined ? {} : { parentAgent: parent },
+        ...composition,
+        ...signal === undefined ? {} : { signal },
       })).agent
     } catch (error: unknown) {
-      ctx.logger.warn(`safe-stop: could not open "${sessionId}" from its stored log: ${describeError(error)}`)
+      if (error instanceof UnresumableSessionError) {
+        return {
+          sessionId,
+          resumed: false,
+          refusal: 'unresumable',
+          answer: { kind: 'error', text: UNRESUMABLE_TEXT },
+        }
+      }
+      ctx.logger.warn(`pause: could not open "${sessionId}" from its stored log: ${describeError(error)}`)
       return {
         sessionId,
         resumed: false,
@@ -400,7 +427,7 @@ export function installResumePath(
     try {
       await registry.forget(sessionId)
     } catch (error: unknown) {
-      ctx.logger.warn(`safe-stop: could not drop "${sessionId}" from the pause registry: ${describeError(error)}`)
+      ctx.logger.warn(`pause: could not drop "${sessionId}" from the pause registry: ${describeError(error)}`)
       return { sessionId, resumed: false, refusal: 'unrecorded', answer: { kind: 'error', text: UNRECORDED_TEXT } }
     }
     gate.resume(sessionId)
@@ -429,6 +456,7 @@ export function installResumePath(
    * or only answers it (`'review'`); a review activates nothing and writes
    * nothing.
    * @param parentId - the direct parent a batch release already brought back, when there is one.
+   * @param signal - cancellation for the cold load and setup.
    * @returns what happened, and the copy for whoever asked.
    */
   const decideUnclean = async (
@@ -436,6 +464,7 @@ export function installResumePath(
     request: WakeRequest,
     finalize: 'release' | 'review',
     parentId?: SessionId,
+    signal?: AbortSignal,
   ): Promise<ResumeAttempt> => {
     const record = registry.get(sessionId)
     if (record === undefined) {
@@ -449,7 +478,7 @@ export function installResumePath(
       return { sessionId, resumed: false, refusal: 'not-activated', answer: { kind: 'success', text: REVIEW_TEXT } }
     }
     const live = ctx.agents.get(sessionId)
-    if (live === undefined) return await activate(sessionId, request, record.rearmGoal, parentId)
+    if (live === undefined) return await activate(sessionId, request, record.rearmGoal, parentId, signal)
     if (!gate.isPaused(sessionId)) {
       // This process holds nothing for the session — its record was found
       // unreadable at mount, or something else already released it. The session
@@ -460,7 +489,7 @@ export function installResumePath(
       try {
         await registry.forget(sessionId)
       } catch (error: unknown) {
-        ctx.logger.warn(`safe-stop: could not drop "${sessionId}" from the pause registry: ${describeError(error)}`)
+        ctx.logger.warn(`pause: could not drop "${sessionId}" from the pause registry: ${describeError(error)}`)
         return { sessionId, resumed: false, refusal: 'unrecorded', answer: { kind: 'error', text: UNRECORDED_TEXT } }
       }
       if (record.rearmGoal) rearmGoal(live)
@@ -493,9 +522,15 @@ export function installResumePath(
    * @param sessionId - the recorded session to resume.
    * @param request - which wake this resume delivers; see {@link WakeRequest}.
    * @param parentId - the direct parent a batch release already brought back, when there is one.
+   * @param signal - cancellation for the cold load and setup.
    * @returns what happened, and the copy for whoever asked.
    */
-  const resumeSession = async (sessionId: SessionId, request: WakeRequest, parentId?: SessionId): Promise<ResumeAttempt> => {
+  const resumeSession = async (
+    sessionId: SessionId,
+    request: WakeRequest,
+    parentId?: SessionId,
+    signal?: AbortSignal,
+  ): Promise<ResumeAttempt> => {
     const record = registry.get(sessionId)
     const live = ctx.agents.get(sessionId)
 
@@ -517,7 +552,7 @@ export function installResumePath(
         try {
           await registry.forget(sessionId)
         } catch (error: unknown) {
-          ctx.logger.warn(`safe-stop: could not drop "${sessionId}" from the pause registry: ${describeError(error)}`)
+          ctx.logger.warn(`pause: could not drop "${sessionId}" from the pause registry: ${describeError(error)}`)
           return { sessionId, resumed: false, refusal: 'unrecorded', answer: { kind: 'error', text: UNRECORDED_TEXT } }
         }
         ensureRoute(live)
@@ -556,7 +591,7 @@ export function installResumePath(
     if (record.phase !== 'safe') {
       return { sessionId, resumed: false, refusal: 'not-clean', answer: { kind: 'error', text: UNCLEAN_TEXT } }
     }
-    return await activate(sessionId, request, record.rearmGoal, parentId)
+    return await activate(sessionId, request, record.rearmGoal, parentId, signal)
   }
 
   /**
@@ -566,20 +601,23 @@ export function installResumePath(
    * session actually has), never guessed from ids; a branch whose catalog
    * cannot be read simply has no known parent and is released with the roots.
    * @param sessionIds - every recorded session, in registry order.
+   * @param signal - cancellation for each catalog read.
    * @returns the parent of each child, and one list per depth level, shallowest first.
    */
-  const releaseOrder = async (sessionIds: readonly SessionId[]): Promise<ReleaseOrder> => {
+  const releaseOrder = async (sessionIds: readonly SessionId[], signal?: AbortSignal): Promise<ReleaseOrder> => {
     const owned = new Set(sessionIds)
     const parentOf = new Map<SessionId, SessionId>()
     const subagents = ctx.get('subagents')
     if (subagents !== undefined) {
       for (const sessionId of sessionIds) {
+        signal?.throwIfAborted()
         try {
-          for (const child of await subagents.listChildren(sessionId)) {
+          for (const child of await subagents.listChildren(sessionId, signal)) {
             if (owned.has(child.id)) parentOf.set(child.id, sessionId)
           }
         } catch (error: unknown) {
-          ctx.logger.warn(`safe-stop: could not read the children of "${sessionId}": ${describeError(error)}`)
+          if (signal?.aborted === true) throw error
+          ctx.logger.warn(`pause: could not read the children of "${sessionId}": ${describeError(error)}`)
         }
       }
     }
@@ -611,11 +649,11 @@ export function installResumePath(
   return {
     resumeSession,
     decideUnclean,
-    releaseTree: async (sessionId) => {
+    releaseTree: async (sessionId, signal) => {
       // The tree is read here, not taken from the press: the members that were
       // registered are exactly the members whose records exist, and a member
       // the walk cannot reach has no record to release either.
-      const rooted = [sessionId, ...(await walkDescendants(ctx, sessionId)).members.map(member => member.id)]
+      const rooted = [sessionId, ...(await walkDescendants(ctx, sessionId, signal)).members.map(member => member.id)]
       const registered = rooted.filter(member => registry.get(member) !== undefined)
       if (registered.length === 0) {
         return { members: 0, resumed: 0, refusals: [], answer: { kind: 'success', text: NOT_PARKED_TEXT } }
@@ -631,14 +669,16 @@ export function installResumePath(
       const released: ResumeAttempt[] = []
       if (cancelling) {
         for (const member of registered) {
+          signal?.throwIfAborted()
           const answer = await deps.release(member, RESUMED_TEXT)
           released.push(answer.kind === 'error'
             ? { sessionId: member, resumed: false, refusal: 'unrecorded', answer }
             : { sessionId: member, resumed: true, answer })
         }
       } else {
-        const release = await releaseOrder(registered)
+        const release = await releaseOrder(registered, signal)
         for (const level of release.levels) {
+          signal?.throwIfAborted()
           for (const member of level) {
             // The rule, applied here rather than left to the entry points
             // below: a pause this process pressed is normally the user's own
@@ -655,7 +695,7 @@ export function installResumePath(
               })
               continue
             }
-            released.push(await resumeSession(member, { kind: 'silent' }, release.parents.get(member)))
+            released.push(await resumeSession(member, { kind: 'silent' }, release.parents.get(member), signal))
           }
         }
       }
@@ -675,14 +715,15 @@ export function installResumePath(
           : { kind: refusals.length === 0 && root.resumed ? 'success' : 'error', text: summarizeTreeRelease(released) },
       }
     },
-    resumeParked: async () => {
-      const release = await releaseOrder(registry.list().map(entry => entry.sessionId))
+    resumeParked: async (signal) => {
+      const release = await releaseOrder(registry.list().map(entry => entry.sessionId), signal)
       const attempts: ResumeAttempt[] = []
       for (const level of release.levels) {
+        signal?.throwIfAborted()
         // One release per level and no concurrency cap inside it: the levels
         // are the milliseconds a child's wake needs, not a queue.
         attempts.push(...await Promise.all(level.map(sessionId =>
-          resumeSession(sessionId, { kind: 'silent' }, release.parents.get(sessionId)))))
+          resumeSession(sessionId, { kind: 'silent' }, release.parents.get(sessionId), signal))))
       }
       return attempts
     },
@@ -690,7 +731,7 @@ export function installResumePath(
       try {
         await registry.setRearmGoal(sessionId, rearmGoal)
       } catch (error: unknown) {
-        ctx.logger.warn(`safe-stop: could not record the goal opt-out of "${sessionId}": ${describeError(error)}`)
+        ctx.logger.warn(`pause: could not record the goal opt-out of "${sessionId}": ${describeError(error)}`)
         return { kind: 'error', text: UNRECORDED_TEXT }
       }
       return { kind: 'success', text: rearmGoal ? REARM_GOAL_ON_TEXT : REARM_GOAL_OFF_TEXT }

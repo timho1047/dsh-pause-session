@@ -8,7 +8,7 @@
  * all, so every session is activated from its own stored log by the one press.
  * That is the case the ordering exists for: waking a child needs its direct
  * parent to be live first.
- * @module dsh-safe-stop/test/global/resume-all
+ * @module dsh-pause/test/global/resume-all
  */
 
 import { afterAll, describe, expect, it } from 'vitest'
@@ -31,7 +31,7 @@ const SOLO = SessionId('resume-solo')
 
 describe('resume all after a park', () => {
   it('releases every registered session at once, parents before children', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-resume-all-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-resume-all-', temporaryRoots)
 
     // One process: park a real tree plus a session that hangs from nothing.
     const before = await mountGlobalHome(caseRoot, { script: blockingScript() })
@@ -51,7 +51,7 @@ describe('resume all after a park', () => {
       solo.followup(ask('solo work'))
       await untilAsync(async () => before.blocking.started() === 3, 'three tools in flight')
 
-      expect((await before.run(solo, 'safe-stop-all')).kind).toBe('success')
+      expect((await before.run(solo, 'pause-all')).kind).toBe('success')
       before.blocking.releaseAll()
       await untilAsync(async () => (await before.status(solo)).verdict === 'safe', 'the whole park to settle')
       expect((await readParkRegistry(storageOf(caseRoot))).map(entry => [String(entry.sessionId), entry.phase]).sort())
@@ -82,9 +82,9 @@ describe('resume all after a park', () => {
         return undefined
       })
 
-      const answer = await home.run(desk, 'safe-resume-all')
+      const answer = await home.run(desk, 'pause-resume-all')
       expect(answer.kind, JSON.stringify(answer)).toBe('success')
-      expect(answer.text).toBe('safe-stop resumed 3 sessions from where they stopped.')
+      expect(answer.text).toBe('pause resumed 3 sessions from where they stopped.')
 
       // One press released all three: every session is live afterwards.
       await until(() => home.ctx.agents.get(PARENT) !== undefined, 'the parent to come back')

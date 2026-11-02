@@ -1,14 +1,20 @@
-# dsh-safe-stop
+# dsh-pause
 
-Stop every running DSH session — and its subagents — at a safe point before you
+Pause every running DSH session — and its subagents — at a safe point before you
 leave, then resume them the next morning as if nothing was interrupted.
+
+Requires DSH `>=0.2.2-alpha.2 <0.3.0-0`; the package declares that range as
+`engines.dsh`, so the plugin manager refuses an older runtime instead of
+starting an incompatible resume path.
 
 **Status: feature-complete, awaiting the end-to-end rehearsal.** One press
 parks every running session tree at its next model-request boundary and reports
 when it is safe to close the lid; the pause survives a restart; the next press
-resumes the cleanly parked sessions with nothing added to the request, and
-anything that did not stop cleanly goes to a decision list instead. What is not
-yet verified on a real machine is listed in [REHEARSAL.md](REHEARSAL.md).
+resumes the cleanly parked sessions with the Agent preset composition they ran
+under (scoped tools, prompt sections, and subagent delegation context restored),
+with nothing added to the request, and anything that did not stop cleanly goes
+to a decision list instead. What is not yet verified on a real machine is listed
+in [REHEARSAL.md](REHEARSAL.md).
 
 ## Install
 
@@ -20,7 +26,7 @@ Installation adds the package, selects the bundle and activates it.
 ## Uninstall
 
 Remove the bundle from the same Plugins page, or with `plugin_manager`
-(`remove_bundle`, `target` = `dsh-safe-stop`). The session header loses the
+(`remove_bundle`, `target` = `dsh-pause`). The session header loses the
 control and no other part of the profile changes.
 
 ## Develop
@@ -33,12 +39,12 @@ pnpm run build      # tsc (both faces) then tsdown bundles lib/index.js and lib/
 
 The host half builds to `lib/index.js` and is loaded by the Loader; the client
 half builds to `lib/client.js`, the `window.__ModuleLoader__` bundle the browser
-loads with the id `dsh-safe-stop`. `tsdown.client.ts` is the vendored
+loads with the id `dsh-pause`. `tsdown.client.ts` is the vendored
 client-bundle preset shared by the plugins in this directory.
 
 ## Design record
 
-The spec and the task breakdown live under `.scratch/safe-stop/`, which is
+The spec and the task breakdown live under `.scratch/pause/`, which is
 local-only by this directory's convention.
 
 The load-bearing findings behind the design — where a safe point actually is,

@@ -12,7 +12,7 @@
  * The rule is a property of the RECORD, not of whether the session happens to
  * be live: a session the user has just opened is still one that never parked,
  * and the same refusal — and the same row — must hold for it.
- * @module dsh-safe-stop/test/resume/unclean-refusal
+ * @module dsh-pause/test/resume/unclean-refusal
  */
 
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -46,7 +46,7 @@ async function records(root: string): Promise<[string, string][]> {
 
 describe('the clean resume path refuses a session that did not finish parking', () => {
   it('wakes none of the three unfinished parks', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-resume-unclean-')
+    const caseRoot = temporaryRoot('dsh-pause-resume-unclean-')
     await parkAndLeave(caseRoot, 'overnight-draining', 'draining')
     await parkAndLeave(caseRoot, 'overnight-parking', 'parking')
     await parkAndLeave(caseRoot, 'overnight-flush-failed', 'flush-failed')
@@ -58,7 +58,7 @@ describe('the clean resume path refuses a session that did not finish parking', 
 
     const home = await reviveHome(caseRoot)
     try {
-      expect(await resumeAll(home)).toBe('safe-stop resumed no session; 3 did not stop cleanly and need your decision.')
+      expect(await resumeAll(home)).toBe('pause resumed no session; 3 did not stop cleanly and need your decision.')
       await settles()
 
       // Neither session was activated, so nothing was woken and no request was
@@ -80,7 +80,7 @@ describe('the clean resume path refuses a session that did not finish parking', 
   })
 
   it('refuses the same record again once its session is live, and keeps the row for the list', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-resume-live-unclean-')
+    const caseRoot = temporaryRoot('dsh-pause-resume-live-unclean-')
     await parkAndLeave(caseRoot, 'overnight-draining-live', 'draining')
     expect(await records(storageOf(caseRoot))).toEqual([['overnight-draining-live', 'draining']])
 
@@ -95,7 +95,7 @@ describe('the clean resume path refuses a session that did not finish parking', 
 
       // The whole-app release runs this same path, live or not.
       expect(await resumeAll(home))
-        .toBe('safe-stop resumed no session; 1 did not stop cleanly and need your decision.')
+        .toBe('pause resumed no session; 1 did not stop cleanly and need your decision.')
       await settles()
       // Nothing was woken and nothing was released: the one request the park
       // was holding is still held, and no new one was asked for.
@@ -104,7 +104,7 @@ describe('the clean resume path refuses a session that did not finish parking', 
 
       // The refusal is what puts the row in front of the user, and it is still
       // on the list — with the record that holds it.
-      const listed = await home.ctx.commands.execute(home.desk, '/safe-triage', [], new AbortController().signal)
+      const listed = await home.ctx.commands.execute(home.desk, '/pause-triage', [], new AbortController().signal)
       const text = listed?.result.kind === 'success' ? listed.result.text : undefined
       expect(text === undefined ? undefined : decodeTriageList(text)?.rows.map(row => row.sessionId))
         .toEqual(['overnight-draining-live'])

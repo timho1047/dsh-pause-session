@@ -8,7 +8,7 @@
  * never recovered from. The record is real and durable; only the session is
  * missing. Kept apart from the read helper because the write opens the root for
  * writing and must therefore happen before the case mounts the plugin over it.
- * @module dsh-safe-stop/test/registry/write
+ * @module dsh-pause/test/registry/write
  */
 
 import { Context } from '@deepseek-ai/cordis'

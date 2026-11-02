@@ -6,7 +6,7 @@
  * real one: a child session the parent's own subagent catalog records. What is
  * asserted is the durable registry on disk plus what the browser can read back,
  * not any internal set.
- * @module dsh-safe-stop/test/global/stop-all
+ * @module dsh-pause/test/global/pause-all
  */
 
 import { afterAll, describe, expect, it } from 'vitest'
@@ -30,7 +30,7 @@ const ask = (text: string) => createUserMessage({ content: [{ type: 'text', text
 
 describe('one press over every running session tree', () => {
   it('registers the running tree and its subagent descendant, and nothing else', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-global-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-global-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, { script: BLOCKING_SCRIPT })
     try {
       const busy = await home.create('busy-root')
@@ -50,7 +50,7 @@ describe('one press over every running session tree', () => {
       busy.followup(ask('run the tool'))
       await until(() => home.blocking.started() === 1, 'the tool in flight')
 
-      const answer = await home.run(idle, 'safe-stop-all')
+      const answer = await home.run(idle, 'pause-all')
       expect(answer.kind, JSON.stringify(answer)).toBe('success')
 
       // Both members of the tree are registered the moment the press answers:
@@ -83,7 +83,7 @@ describe('one press over every running session tree', () => {
   })
 
   it('leaves a tree member that is not live alone, and still reaches safe', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-global-inactive-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-global-inactive-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, { script: blockingScript() })
     try {
       const parent = await home.create('busy-parent')
@@ -110,7 +110,7 @@ describe('one press over every running session tree', () => {
 
       parent.followup(ask('parent work'))
       await untilAsync(async () => home.blocking.started() === 2, 'the parent tool in flight')
-      expect((await home.run(parent, 'safe-stop-all')).kind).toBe('success')
+      expect((await home.run(parent, 'pause-all')).kind).toBe('success')
 
       // The tree walk names the finished child, and the press leaves it alone:
       // it has nothing to hold and no session-level flush to run, so a record
@@ -132,18 +132,18 @@ describe('one press over every running session tree', () => {
   })
 
   it('leaves a session that was paused first exactly where it was', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-global-idempotent-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-global-idempotent-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot)
     try {
       const idle = await home.create('idle-pressed')
       // Pressed while idle: it parks immediately, and a later whole-app press
       // must not restart its park (a new episode would re-derive an outcome the
       // first press already reached).
-      expect((await home.run(idle, 'safe-stop')).kind).toBe('success')
+      expect((await home.run(idle, 'pause')).kind).toBe('success')
       await untilAsync(async () => (await home.status(idle)).safe === 1, 'the first press to park')
       const parked = await readParkRegistry(storageOf(caseRoot))
 
-      expect((await home.run(idle, 'safe-stop-all')).kind).toBe('success')
+      expect((await home.run(idle, 'pause-all')).kind).toBe('success')
 
       expect(await readParkRegistry(storageOf(caseRoot))).toEqual(parked)
       expect((await home.status(idle)).safe).toBe(1)
@@ -153,7 +153,7 @@ describe('one press over every running session tree', () => {
   })
 
   it('registers a session that is owed an unclaimed reply, and not the one at rest', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-global-inbox-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-global-inbox-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot)
     try {
       const resting = await home.create('at-rest')
@@ -162,7 +162,7 @@ describe('one press over every running session tree', () => {
       // session is not running yet, but it owes a turn the moment it is.
       delivered.inbox.append('next-turn', ask('do this tomorrow'))
 
-      expect((await home.run(resting, 'safe-stop-all')).kind).toBe('success')
+      expect((await home.run(resting, 'pause-all')).kind).toBe('success')
 
       const ids = (await readParkRegistry(storageOf(caseRoot))).map(entry => String(entry.sessionId)).sort()
       expect(ids).toEqual(['delivered-unclaimed'])

@@ -9,7 +9,7 @@
  * record still allows it. The round driver is mounted here, as it is in the
  * shipped composition, so "the rounds continue" is observed as real model
  * requests rather than as an activation flag.
- * @module dsh-safe-stop/test/resume/goal-resume
+ * @module dsh-pause/test/resume/goal-resume
  */
 
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -39,13 +39,13 @@ beforeAll(() => { ensureHostEntry() })
 
 describe('a parked session with a goal', () => {
   it('re-arms the goal and keeps its rounds going', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-resume-goal-')
+    const caseRoot = temporaryRoot('dsh-pause-resume-goal-')
     const parked = await parkAndLeave(caseRoot, 'overnight-goal', 'goal')
     expect(parked.request, 'the child finished its ordinary turn before parking').toBeDefined()
 
     const home = await reviveHome(caseRoot, { goals: true })
     try {
-      expect(await resumeAll(home)).toBe('safe-stop resumed 1 session from where it stopped.')
+      expect(await resumeAll(home)).toBe('pause resumed 1 session from where it stopped.')
       const agent = home.ctx.agents.get(SessionId('overnight-goal'))
       expect(agent, 'the parked session was not activated').toBeDefined()
 
@@ -66,7 +66,7 @@ describe('a parked session with a goal', () => {
   })
 
   it('leaves the goal closed when the record opted out, and spends nothing', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-resume-goal-optout-')
+    const caseRoot = temporaryRoot('dsh-pause-resume-goal-optout-')
     await parkAndLeave(caseRoot, 'overnight-goal-off', 'goal')
     // The opt-out is durable state of the parked session, written the way the
     // host control writes it — before the morning process mounts.
@@ -76,7 +76,7 @@ describe('a parked session with a goal', () => {
 
     const home = await reviveHome(caseRoot, { goals: true })
     try {
-      expect(await resumeAll(home)).toBe('safe-stop resumed 1 session from where it stopped.')
+      expect(await resumeAll(home)).toBe('pause resumed 1 session from where it stopped.')
       const agent = home.ctx.agents.get(SessionId('overnight-goal-off'))
       // The session is resumed — only its goal stays closed.
       expect(agent).toBeDefined()

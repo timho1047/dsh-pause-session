@@ -1,7 +1,7 @@
 /**
- * The glyphs both safe-stop controls are drawn with, so the session-header
+ * The glyphs both pause controls are drawn with, so the session-header
  * control and the whole-app pill cannot drift apart.
- * @module dsh-safe-stop/client/icons
+ * @module dsh-pause/client/icons
  */
 
 import type { ReactNode } from 'react'

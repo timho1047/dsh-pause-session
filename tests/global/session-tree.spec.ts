@@ -2,8 +2,8 @@
  * The session-header control's own unit of work: one session AND its subagent
  * tree, nested members included.
  *
- * These cases drive the very verbs the header control runs — `/safe-stop` and
- * `/safe-resume` on the session they sit on — through the real command registry
+ * These cases drive the very verbs the header control runs — `/pause` and
+ * `/pause-resume` on the session they sit on — through the real command registry
  * and assert what is durable afterwards plus what the header's own status read
  * says. The tree is a real one: each parent's own subagent catalog records its
  * child, and the recursive walk is the harness's.
@@ -11,7 +11,7 @@
  * Which session's tool call runs first is request order, not session order, so
  * a case that must hold a named member in flight addresses its call by the id
  * argument it passed rather than by a start index.
- * @module dsh-safe-stop/test/global/session-tree
+ * @module dsh-pause/test/global/session-tree
  */
 
 import { afterAll, describe, expect, it } from 'vitest'
@@ -121,7 +121,7 @@ async function allSafe(caseRoot: string, expected: Readonly<Record<string, strin
 
 describe('the session-header press covers the tree it owns', () => {
   it('registers a nested tree in one press and says how many it registered', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-tree-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-tree-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, { script: gatedIn(['tree-root', 'tree-child', 'tree-grandchild']) })
     try {
       const root = await home.create('tree-root')
@@ -138,7 +138,7 @@ describe('the session-header press covers the tree it owns', () => {
       expect(answer.kind, answer.text).toBe('success')
       // The count is what makes the press unmistakable for stopping one thing:
       // the session plus the two subagents under it.
-      expect(answer.text).toBe('safe-stop registered this session and 2 subagents.'
+      expect(answer.text).toBe('pause registered this session and 2 subagents.'
         + ' They stop once the work in flight drains. Press again to cancel the pause.')
       expect(await phases(caseRoot)).toEqual({
         'tree-root': 'draining',
@@ -159,7 +159,7 @@ describe('the session-header press covers the tree it owns', () => {
   })
 
   it('releases the same tree symmetrically, parents before children', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-tree-release-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-tree-release-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, { script: gatedIn(['release-root', 'release-child', 'release-grandchild']) })
     try {
       const root = await home.create('release-root')
@@ -195,7 +195,7 @@ describe('the session-header press covers the tree it owns', () => {
   })
 
   it('leaves a member that did not stop cleanly parked and named while the others resume', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-tree-unclean-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-tree-unclean-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, { script: gatedIn(['unclean-root', 'unclean-child', 'unclean-grandchild']) })
     try {
       const root = await home.create('unclean-root')
@@ -226,7 +226,7 @@ describe('the session-header press covers the tree it owns', () => {
       // named, because an unclean session is never silently woken.
       const answer = await home.release(root)
       expect(answer.kind, answer.text).toBe('error')
-      expect(answer.text).toBe('safe-stop resumed 1 session from where it stopped;'
+      expect(answer.text).toBe('pause resumed 1 session from where it stopped;'
         + ' "unclean-root", "unclean-child" did not stop cleanly.')
       expect(await phases(caseRoot)).toEqual({
         'unclean-root': 'draining',
@@ -251,7 +251,7 @@ describe('the session-header press covers the tree it owns', () => {
   })
 
   it('reports the tree\'s phase, so a still-draining member is never called safe', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-tree-status-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-tree-status-', temporaryRoots)
     // The child's request is the one that calls the tool; the root answers
     // outright, so the child is the member still draining once the root has
     // nothing left to do.
@@ -300,7 +300,7 @@ describe('the session-header press covers the tree it owns', () => {
   })
 
   it('names the member whose record it could not write instead of counting it as paused', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-tree-unrecorded-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-tree-unrecorded-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, {
       script: gatedIn(['unrecorded-root', 'unrecorded-child', 'unrecorded-grandchild']),
       failingRecordKeys: key => key === 'unrecorded-grandchild',
@@ -324,7 +324,7 @@ describe('the session-header press covers the tree it owns', () => {
       // the press does not report the tree as registered.
       const answer = await home.stop(root)
       expect(answer.kind, answer.text).toBe('error')
-      expect(answer.text).toBe('safe-stop could not register "unrecorded-grandchild" in the pause registry,'
+      expect(answer.text).toBe('pause could not register "unrecorded-grandchild" in the pause registry,'
         + ' so they are not paused. Everything else in the tree is.')
       expect(await phases(caseRoot)).toEqual({ 'unrecorded-root': 'draining', 'unrecorded-child': 'draining' })
 
@@ -348,7 +348,7 @@ describe('the session-header press covers the tree it owns', () => {
   })
 
   it('refuses the tree-wide press issued from inside a model turn', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-tree-unattended-', temporaryRoots)
+    const caseRoot = temporaryRoot('dsh-pause-tree-unattended-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot)
     try {
       const root = await home.create('unattended-root')

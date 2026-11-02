@@ -1,5 +1,5 @@
 /**
- * Browser half of dsh-safe-stop.
+ * Browser half of dsh-pause.
  *
  * Registers two controls: one in the session header's title-adjacent action
  * group (`conversation.session.header.actions`), which pauses or resumes the
@@ -22,7 +22,7 @@
  * header control also reads the whole-app answer the whole-app control
  * publishes, so a park that holds nothing does not cost a host round-trip per
  * header.
- * @module dsh-safe-stop/client
+ * @module dsh-pause/client
  */
 
 import { useEffect } from 'react'
@@ -39,32 +39,32 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
-import { SafeStopControl } from './control.js'
-import type { SafeStopState } from './control.js'
-import { SafeStopGlobalControl } from './global.js'
+import { PauseControl } from './control.js'
+import type { PauseState } from './control.js'
+import { PauseGlobalControl } from './global.js'
 import { GoalIcon, PauseIcon, ResumeIcon } from './icons.js'
-import { SafeStopPill } from './pill.js'
-import type { SafeStopPillInjected } from './pill.js'
-import { safeStopView, showsPauseControl } from './view.js'
-import { en, zh, type SafeStopKey } from './locales.js'
+import { PausePill } from './pill.js'
+import type { PausePillInjected } from './pill.js'
+import { pauseView, showsPauseControl } from './view.js'
+import { en, zh, type PauseKey } from './locales.js'
 import styles from './button.module.css'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
-    /** The safe-stop control's copy. */
-    'safe-stop': SafeStopKey
+    /** The pause control's copy. */
+    'pause': PauseKey
   }
 }
 
 /** Dictionary namespace owned by this plugin. */
-const NS = 'safe-stop'
+const NS = 'pause'
 
 /** Required services: the slot registry, the locale registry, and the host round-trip. */
 export const inject = ['slots', 'locale', 'remote', 'remote.commands']
 
 /** Browser state and operations injected into the Session-header contribution. */
-export interface SafeStopInjected {
-  hooks: { safeStop: ObservableSnapshot<SafeStopState> }
+export interface PauseInjected {
+  hooks: { pause: ObservableSnapshot<PauseState> }
   /** Read the host's state for one session (the control calls this once per mount). */
   refresh: (sessionId: SessionId) => void
   /** Press the control for one session. */
@@ -73,13 +73,13 @@ export interface SafeStopInjected {
   toggleGoal: (sessionId: SessionId) => void
 }
 
-/** Full props of the Session-header safe-stop control. */
-export type SafeStopButtonProps = PropsRuntime<'conversation.session.header.actions'>
-  & InjectFace<SafeStopInjected>
-  & PropsLocale<'safe-stop'>
+/** Full props of the Session-header pause control. */
+export type PauseButtonProps = PropsRuntime<'conversation.session.header.actions'>
+  & InjectFace<PauseInjected>
+  & PropsLocale<'pause'>
 
 /**
- * The session's safe-stop control: pause the session and its subagents before
+ * The session's pause control: pause the session and its subagents before
  * their next model request, or resume them, with the host's own state on screen.
  * Once the host reports the park's goal opt-out, a second switch sits beside it
  * — the only place a session that stopped CLEANLY can be told not to re-open its
@@ -92,20 +92,20 @@ export type SafeStopButtonProps = PropsRuntime<'conversation.session.header.acti
  * @param props - session runtime, host operations, and localized copy.
  * @returns the header action, or nothing on a subagent session.
  */
-export function SafeStopButton(props: SafeStopButtonProps): ReactNode {
+export function PauseButton(props: PauseButtonProps): ReactNode {
   const { sessionId, refresh, toggle, toggleGoal, t, useSession } = props
-  const reading = props.useSafeStop(state => state.bySession[String(sessionId)])
-  const view = safeStopView(reading)
+  const reading = props.usePause(state => state.bySession[String(sessionId)])
+  const view = pauseView(reading)
   const visible = showsPauseControl(useSession(snapshot => snapshot.subagent))
   // Read once per mounted control: the host is the source of truth, and the
   // forwarded registry change keeps it current afterwards.
   useEffect(() => { refresh(sessionId) }, [refresh, sessionId])
   if (!visible) return null
   return (
-    <span className={styles.dsss}>
+    <span className={styles.dsp}>
       <button
         type="button"
-        className={styles.dsssBtn}
+        className={styles.dspBtn}
         aria-label={t(view.ariaKey)}
         aria-pressed={view.paused}
         disabled={!view.enabled}
@@ -120,7 +120,7 @@ export function SafeStopButton(props: SafeStopButtonProps): ReactNode {
         : (
           <button
             type="button"
-            className={styles.dsssGoal}
+            className={styles.dspGoal}
             aria-label={t('goal.aria')}
             aria-pressed={view.rearmGoal}
             title={t(view.rearmGoal ? 'goal.on.tip' : 'goal.off.tip')}
@@ -132,7 +132,7 @@ export function SafeStopButton(props: SafeStopButtonProps): ReactNode {
       {view.labelKey === undefined
         ? null
         : (
-          <span className={styles.dsssState}>
+          <span className={styles.dspState}>
             {t(view.labelKey)}
             {view.runningTools.length === 0 ? null : `: ${view.runningTools.join(', ')}`}
           </span>
@@ -148,11 +148,11 @@ export function SafeStopButton(props: SafeStopButtonProps): ReactNode {
  * @param ctx - client context carrying slots, locale, and the Remote face.
  */
 export function apply(ctx: ClientContext): void {
-  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'safe-stop: dictionaries')
+  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'pause: dictionaries')
   const lifetime = new AbortController()
-  ctx.effect(() => () => { lifetime.abort(new Error('safe-stop: client unloaded')) }, 'safe-stop: lifetime')
-  const globalControl = new SafeStopGlobalControl(ctx.remote.commands, lifetime.signal)
-  const control = new SafeStopControl(
+  ctx.effect(() => () => { lifetime.abort(new Error('pause: client unloaded')) }, 'pause: lifetime')
+  const globalControl = new PauseGlobalControl(ctx.remote.commands, lifetime.signal)
+  const control = new PauseControl(
     ctx.remote.commands,
     lifetime.signal,
     undefined,
@@ -164,7 +164,7 @@ export function apply(ctx: ClientContext): void {
   // one the park just took.
   ctx.effect(
     () => globalControl.store.subscribe(() => { control.reconsider() }),
-    'safe-stop: the whole-app answer serves the session headers',
+    'pause: the whole-app answer serves the session headers',
   )
   // The host publishes no push channel of its own, so the forwarded command
   // registry change is what makes these controls live: every one of them is a
@@ -183,7 +183,7 @@ export function apply(ctx: ClientContext): void {
       control.refreshAll()
       globalControl.refreshAll()
     }),
-    'safe-stop: host command registry changes',
+    'pause: host command registry changes',
   )
   // A page that is not on screen is not being read: the controls stop their
   // re-read timers while it is hidden and continue them when it comes back.
@@ -195,7 +195,7 @@ export function apply(ctx: ClientContext): void {
     }
     document.addEventListener('visibilitychange', onVisibility)
     return () => { document.removeEventListener('visibilitychange', onVisibility) }
-  }, 'safe-stop: page visibility')
+  }, 'pause: page visibility')
   ctx.slots.inject('conversation.session.header.actions', () =>
     ctx.slots.register(
       {
@@ -203,14 +203,14 @@ export function apply(ctx: ClientContext): void {
         id: NS,
         order: 40,
         locale: NS,
-        inject: (): SafeStopInjected => ({
-          hooks: { safeStop: control.store },
+        inject: (): PauseInjected => ({
+          hooks: { pause: control.store },
           refresh: (sessionId) => { void control.refresh(sessionId) },
           toggle: (sessionId) => { void control.toggle(sessionId) },
           toggleGoal: (sessionId) => { void control.toggleGoal(sessionId) },
         }),
       },
-      SafeStopButton,
+      PauseButton,
     ),
   )
   // The whole-app control goes in the header's right-aligned utilities row:
@@ -221,18 +221,18 @@ export function apply(ctx: ClientContext): void {
     ctx.slots.register(
       {
         name: 'conversation.session.header.utilities',
-        id: 'safe-stop-all',
+        id: 'pause-all',
         order: 60,
         locale: NS,
-        inject: (): SafeStopPillInjected => ({
-          hooks: { safeStopGlobal: globalControl.store },
+        inject: (): PausePillInjected => ({
+          hooks: { pauseGlobal: globalControl.store },
           refresh: (sessionId) => { void globalControl.refresh(sessionId) },
           toggle: (sessionId) => { void globalControl.toggle(sessionId) },
           setPanel: (open) => { globalControl.setPanel(open) },
           decide: (sessionId, action) => { void globalControl.decide(sessionId, action) },
         }),
       },
-      SafeStopPill,
+      PausePill,
     ),
   )
 }

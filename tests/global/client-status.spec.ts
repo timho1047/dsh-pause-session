@@ -8,25 +8,25 @@
  * all. The phase → view mapping and the address picker are pure functions and
  * are asserted directly; the contribution is mounted on a stand-in slot
  * registry so the wiring is exercised too.
- * @module dsh-safe-stop/test/global/client-status
+ * @module dsh-pause/test/global/client-status
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { apply, inject } from '../../src/client/index.tsx'
-import type { SafeStopPillInjected } from '../../src/client/pill.tsx'
-import { SafeStopGlobalControl, addressingSession, parkedAddress } from '../../src/client/global.ts'
+import type { PausePillInjected } from '../../src/client/pill.tsx'
+import { PauseGlobalControl, addressingSession, parkedAddress } from '../../src/client/global.ts'
 import type { GlobalReading } from '../../src/client/global.ts'
-import { globalStopView, showsPauseControl } from '../../src/client/view.ts'
+import { globalPauseView, showsPauseControl } from '../../src/client/view.ts'
 import {
-  decodeGlobalStatus, encodeGlobalStatus, RESUME_ALL_COMMAND, STATE_ALL_COMMAND, STOP_ALL_COMMAND,
+  decodeGlobalStatus, encodeGlobalStatus, RESUME_ALL_COMMAND, STATE_ALL_COMMAND, PAUSE_ALL_COMMAND,
 } from '../../src/shared.ts'
 import type { GlobalStatus } from '../../src/shared.ts'
 import { until } from './home.ts'
 
 /** The whole-app verbs, spelled once so the double answers the real names. */
 const STATE_ALL_LINE = STATE_ALL_COMMAND
-const STOP_ALL_LINE = STOP_ALL_COMMAND
+const PAUSE_ALL_LINE = PAUSE_ALL_COMMAND
 
 const ADDRESS = SessionId('client-address')
 const OTHER = SessionId('other-session')
@@ -83,7 +83,7 @@ function hostDouble(): { commands: never; host: HostDouble; readsDone: (count: n
         })
       }
       // The two verbs flip the host's state the way the real commands do.
-      host.answered = line === `/${STOP_ALL_COMMAND}`
+      host.answered = line === `/${PAUSE_ALL_COMMAND}`
         ? status({ verdict: 'waiting', safe: 0, draining: ['overnight'], registered: 1 })
         : status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
       return Promise.resolve({ ok: true, value: { commandId: 'c', result: { kind: 'success' } } })
@@ -98,7 +98,7 @@ function hostDouble(): { commands: never; host: HostDouble; readsDone: (count: n
   }
 }
 
-const readingOf = (control: SafeStopGlobalControl): GlobalReading | undefined =>
+const readingOf = (control: PauseGlobalControl): GlobalReading | undefined =>
   control.store.getSnapshot().global
 
 describe('the whole-app control state', () => {
@@ -106,16 +106,16 @@ describe('the whole-app control state', () => {
 
   it("publishes the host's aggregate and nothing before it", async () => {
     const { commands, host } = hostDouble()
-    const control = new SafeStopGlobalControl(commands, new AbortController().signal)
+    const control = new PauseGlobalControl(commands, new AbortController().signal)
 
     // No host answer yet: the control claims nothing and renders nothing.
     expect(readingOf(control)).toBeUndefined()
-    expect(globalStopView(undefined).visible).toBe(false)
+    expect(globalPauseView(undefined).visible).toBe(false)
 
     await control.refresh(ADDRESS)
     expect(readingOf(control)).toEqual({ kind: 'reported', status: status() })
     expect(host.lines).toEqual([`/${STATE_ALL_LINE}`])
-    expect(globalStopView(readingOf(control))).toMatchObject({
+    expect(globalPauseView(readingOf(control))).toMatchObject({
       visible: true,
       enabled: true,
       action: 'resume-all',
@@ -126,18 +126,18 @@ describe('the whole-app control state', () => {
 
   it('presses the park while nothing is parked, and the release once something is', async () => {
     const { commands, host } = hostDouble()
-    const control = new SafeStopGlobalControl(commands, new AbortController().signal)
+    const control = new PauseGlobalControl(commands, new AbortController().signal)
     host.answered = status({ verdict: 'idle', registered: 0, safe: 0, draining: [] })
     await control.refresh(ADDRESS)
     // Nothing is parked: the pill is the bare affordance, with no sentence
     // about a park that does not exist.
-    expect(globalStopView(readingOf(control)).labelKey).toBeUndefined()
-    expect(globalStopView(readingOf(control)).action).toBe('stop-all')
+    expect(globalPauseView(readingOf(control)).labelKey).toBeUndefined()
+    expect(globalPauseView(readingOf(control)).action).toBe('pause-all')
 
     await control.toggle(ADDRESS)
     // The press runs the whole-app verb; reading the state afterwards is the
     // status read, which is a command call like any other.
-    expect(host.lines).toEqual([`/${STATE_ALL_LINE}`, `/${STOP_ALL_LINE}`, `/${STATE_ALL_LINE}`])
+    expect(host.lines).toEqual([`/${STATE_ALL_LINE}`, `/${PAUSE_ALL_LINE}`, `/${STATE_ALL_LINE}`])
     expect(readingOf(control)).toEqual({
       kind: 'reported',
       status: status({ verdict: 'waiting', registered: 1, safe: 0, draining: ['overnight'] }),
@@ -145,7 +145,7 @@ describe('the whole-app control state', () => {
 
     await control.toggle(ADDRESS)
     expect(host.lines.at(-2)).toBe(`/${RESUME_ALL_COMMAND}`)
-    expect(globalStopView(readingOf(control))).toMatchObject({ action: 'stop-all' })
+    expect(globalPauseView(readingOf(control))).toMatchObject({ action: 'pause-all' })
   })
 
   it('reads once per announced transition, and stops once it settles', async () => {
@@ -156,7 +156,7 @@ describe('the whole-app control state', () => {
     // flush that settles it is a phase change, and that is what the host
     // announces.
     host.answered = status({ safe: 1, draining: [], parking: 1 })
-    const control = new SafeStopGlobalControl(commands, new AbortController().signal, 25)
+    const control = new PauseGlobalControl(commands, new AbortController().signal, 25)
     await control.refresh(ADDRESS)
     expect(readingOf(control)).toMatchObject({ kind: 'reported' })
     const readsAtMount = host.lines.length
@@ -171,7 +171,7 @@ describe('the whole-app control state', () => {
     control.refreshAll()
     await vi.advanceTimersByTimeAsync(100)
     expect(readingOf(control)).toEqual({ kind: 'reported', status: parked })
-    expect(globalStopView(readingOf(control))).toMatchObject({ labelKey: 'all.safe', action: 'resume-all' })
+    expect(globalPauseView(readingOf(control))).toMatchObject({ labelKey: 'all.safe', action: 'resume-all' })
 
     // A settled park is not polled: no further host round-trip is issued.
     const settledReads = host.lines.length
@@ -181,11 +181,11 @@ describe('the whole-app control state', () => {
 
   it('claims nothing when the host cannot answer, and acts on nothing either', async () => {
     const { commands, host } = hostDouble()
-    const control = new SafeStopGlobalControl(commands, new AbortController().signal)
+    const control = new PauseGlobalControl(commands, new AbortController().signal)
     host.fail = true
     await control.refresh(ADDRESS)
     expect(readingOf(control)).toEqual({ kind: 'unavailable' })
-    expect(globalStopView(readingOf(control))).toEqual({
+    expect(globalPauseView(readingOf(control))).toEqual({
       visible: false,
       enabled: false,
       ariaKey: 'unavailable.aria',
@@ -209,7 +209,7 @@ describe('the whole-app control state', () => {
       list: () => Promise.resolve({ ok: true, value: [] }),
       execute: () => new Promise((resolve) => { pending.push(resolve) }),
     }
-    const control = new SafeStopGlobalControl(commands as never, new AbortController().signal)
+    const control = new PauseGlobalControl(commands as never, new AbortController().signal)
     const stale = control.refresh(ADDRESS)
     const current = control.refresh(ADDRESS)
 
@@ -275,9 +275,9 @@ describe('the whole-app status encoding', () => {
   })
 
   it('decodes nothing from text that is not a whole-app status', () => {
-    expect(decodeGlobalStatus('safe-stop: draining; tools: edit')).toBeUndefined()
-    expect(decodeGlobalStatus('safe-stop all: maybe; registered: 1')).toBeUndefined()
-    expect(decodeGlobalStatus('safe-stop all: idle; registered: -4; safe: nope')).toMatchObject({
+    expect(decodeGlobalStatus('pause: draining; tools: edit')).toBeUndefined()
+    expect(decodeGlobalStatus('pause all: maybe; registered: 1')).toBeUndefined()
+    expect(decodeGlobalStatus('pause all: idle; registered: -4; safe: nope')).toMatchObject({
       verdict: 'idle',
       registered: 0,
       safe: 0,
@@ -309,7 +309,7 @@ describe('the whole-app status encoding', () => {
   it('reads an older text with no park name as no address at all', () => {
     // A reading written before the field existed: it must still decode, and the
     // absence must not be turned into a session to look up.
-    const older = 'safe-stop all: safe; registered: 1; safe: 1; draining: -; parking: 0'
+    const older = 'pause all: safe; registered: 1; safe: 1; draining: -; parking: 0'
       + '; stalled: -; unresumable: -; unread-trees: -; jobs: -; blind: -'
     const decoded = decodeGlobalStatus(older)
     expect(decoded?.verdict).toBe('safe')
@@ -332,7 +332,7 @@ describe('the whole-app status encoding', () => {
 
 describe('the whole-app view', () => {
   it('names every fact the report carries, and never rounds a moving park up', () => {
-    const view = globalStopView({
+    const view = globalPauseView({
       kind: 'reported',
       status: status({
         jobs: ['bash-3'],
@@ -351,7 +351,7 @@ describe('the whole-app view', () => {
   })
 
   it('gives a park nobody can finish its own headline and no release to press', () => {
-    const view = globalStopView({ kind: 'reported', status: status({ safe: 0, draining: [], stalled: ['late'] }) })
+    const view = globalPauseView({ kind: 'reported', status: status({ safe: 0, draining: [], stalled: ['late'] }) })
     expect(view).toMatchObject({
       labelKey: 'all.unclean',
       detail: '1',
@@ -369,7 +369,7 @@ describe('the whole-app view', () => {
     // Stopped and standing still, flush pending: nothing is "still working", but
     // this session is one the host can release, so it is not the unclean case
     // either.
-    const view = globalStopView({ kind: 'reported', status: status({ safe: 0, draining: [], parking: 1, registered: 1 }) })
+    const view = globalPauseView({ kind: 'reported', status: status({ safe: 0, draining: [], parking: 1, registered: 1 }) })
     expect(view).toMatchObject({
       visible: true,
       enabled: true,
@@ -381,12 +381,12 @@ describe('the whole-app view', () => {
 
   it('runs no verb for a reading its own view does not turn into one', async () => {
     const { commands, host } = hostDouble()
-    const control = new SafeStopGlobalControl(commands, new AbortController().signal)
+    const control = new PauseGlobalControl(commands, new AbortController().signal)
     // The whole park is held, and none of it can be woken from here: the same
     // shape the pill refuses to press.
     host.answered = status({ verdict: 'waiting', safe: 0, draining: [], stalled: ['late'] })
     await control.refresh(ADDRESS)
-    expect(globalStopView(readingOf(control)).action).toBe('none')
+    expect(globalPauseView(readingOf(control)).action).toBe('none')
 
     const before = host.lines.length
     await control.toggle(ADDRESS)
@@ -396,7 +396,7 @@ describe('the whole-app view', () => {
   })
 
   it('names a missing surface instead of listing everything it blinds', () => {
-    const view = globalStopView({
+    const view = globalPauseView({
       kind: 'reported',
       status: status({ blind: ['trees', 'jobs'], unreadTrees: ['a', 'b'], jobs: [] }),
     })
@@ -442,7 +442,7 @@ describe('the whole-app contribution', () => {
     const listeners: (() => void)[] = []
     const cleanups: (() => void)[] = []
     const injected: string[] = []
-    const registrations: { options: Record<string, unknown>; inject?: () => SafeStopPillInjected }[] = []
+    const registrations: { options: Record<string, unknown>; inject?: () => PausePillInjected }[] = []
     const ctx = {
       effect(callback: () => unknown) {
         const cleanup = callback()
@@ -467,7 +467,7 @@ describe('the whole-app contribution', () => {
     }
     apply(ctx as never)
     const entry = registrations.find(registration => registration.options.name === 'conversation.session.header.utilities')
-    if (entry === undefined) throw new Error('safe-stop: the whole-app control registered no slot entry')
+    if (entry === undefined) throw new Error('pause: the whole-app control registered no slot entry')
     return { host, readsDone, listeners, cleanups, injected, options: entry.options, entry }
   }
 
@@ -476,8 +476,8 @@ describe('the whole-app contribution', () => {
     expect(benchRun.injected).toEqual(['conversation.session.header.actions', 'conversation.session.header.utilities'])
     expect(benchRun.options).toMatchObject({
       name: 'conversation.session.header.utilities',
-      id: 'safe-stop-all',
-      locale: 'safe-stop',
+      id: 'pause-all',
+      locale: 'pause',
     })
   })
 
@@ -492,14 +492,14 @@ describe('the whole-app contribution', () => {
 
   it('reads the host once at mount and re-reads on a forwarded registry change', async () => {
     const benchRun = bench()
-    const face = (benchRun.options as { inject?: () => SafeStopPillInjected }).inject
-    if (face === undefined) throw new Error('safe-stop: the pill registered no inject face')
+    const face = (benchRun.options as { inject?: () => PausePillInjected }).inject
+    if (face === undefined) throw new Error('pause: the pill registered no inject face')
     const injected = face()
 
     injected.refresh(ADDRESS)
     await benchRun.readsDone(1)
-    await until(() => injected.hooks.safeStopGlobal.getSnapshot().global !== undefined, 'the first reading')
-    expect(globalStopView(injected.hooks.safeStopGlobal.getSnapshot().global))
+    await until(() => injected.hooks.pauseGlobal.getSnapshot().global !== undefined, 'the first reading')
+    expect(globalPauseView(injected.hooks.pauseGlobal.getSnapshot().global))
       .toMatchObject({ visible: true, labelKey: 'all.finishing' })
 
     // The forwarded registry change is the only notification there is: it is

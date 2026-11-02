@@ -1,10 +1,10 @@
-.dsss {
+.dsp {
   position: relative;
   display: inline-flex;
   align-items: center;
 }
 
-.dsssBtn {
+.dspBtn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -20,23 +20,23 @@
   transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
 }
 
-.dsssBtn:hover {
+.dspBtn:hover {
   color: var(--dsw-alias-label-primary);
   background: var(--dsw-alias-bg-layer-2);
   border-color: var(--dsw-alias-border-l1);
 }
 
-.dsssBtn:focus-visible {
+.dspBtn:focus-visible {
   outline: 2px solid var(--dsw-alias-state-business-primary);
   outline-offset: 1px;
 }
 
-.dsssBtn:disabled {
+.dspBtn:disabled {
   cursor: default;
   opacity: 0.5;
 }
 
-.dsssBtn:disabled:hover {
+.dspBtn:disabled:hover {
   color: var(--dsw-alias-label-secondary);
   background: transparent;
   border-color: transparent;
@@ -46,7 +46,7 @@
    apart from it, because it does not act on the park — it decides what the next
    resume of this session may spend. Pressed (re-arm on) is the state that costs
    money, so it is also the one that is drawn. */
-.dsssGoal {
+.dspGoal {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -63,23 +63,23 @@
   transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
 }
 
-.dsssGoal[aria-pressed='true'] {
+.dspGoal[aria-pressed='true'] {
   color: var(--dsw-alias-label-secondary);
 }
 
-.dsssGoal:hover {
+.dspGoal:hover {
   color: var(--dsw-alias-label-primary);
   background: var(--dsw-alias-bg-layer-2);
   border-color: var(--dsw-alias-border-l1);
 }
 
-.dsssGoal:focus-visible {
+.dspGoal:focus-visible {
   outline: 2px solid var(--dsw-alias-state-business-primary);
   outline-offset: 1px;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .dsssGoal {
+  .dspGoal {
     transition: none;
   }
 }
@@ -87,7 +87,7 @@
 /* The paused state is stated on screen, not only on hover: the harness keeps
    reporting a held session as running, so this label is the only "paused" the
    user sees. */
-.dsssState {
+.dspState {
   padding-left: 6px;
   font-size: 12px;
   line-height: 18px;
@@ -96,7 +96,7 @@
   user-select: none;
 }
 
-.dsssTip {
+.dspTip {
   position: absolute;
   top: calc(100% + 6px);
   left: 0;
@@ -119,15 +119,15 @@
   transition: opacity 120ms ease, transform 120ms ease;
 }
 
-.dsss:hover .dsssTip,
-.dsssBtn:focus-visible + .dsssTip {
+.dsp:hover .dspTip,
+.dspBtn:focus-visible + .dspTip {
   opacity: 1;
   transform: translateY(0);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .dsssBtn,
-  .dsssTip {
+  .dspBtn,
+  .dspTip {
     transition: none;
   }
 }
@@ -136,13 +136,13 @@
    row, inside the column it answers for, so whatever covers that area — a
    sidebar or a drawer — covers the control with it. The wrapper is the panel's
    containing block, which is what keeps the panel anchored to the control. */
-.dsssPill {
+.dspPill {
   position: relative;
   display: inline-flex;
   align-items: center;
 }
 
-.dsssPillBtn {
+.dspPillBtn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -160,49 +160,49 @@
   transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
 }
 
-.dsssPillBtn:hover {
+.dspPillBtn:hover {
   color: var(--dsw-alias-label-primary);
   border-color: var(--dsw-alias-border-l2);
 }
 
 /* Nothing parked: the pill is the bare affordance, so it stays a small round
    chip in the corner instead of a labelled surface over the app. */
-.dsssPillIcon {
+.dspPillIcon {
   width: 28px;
   height: 28px;
   padding: 0;
   justify-content: center;
 }
 
-.dsssPillBtn:focus-visible {
+.dspPillBtn:focus-visible {
   outline: 2px solid var(--dsw-alias-state-business-primary);
   outline-offset: 1px;
 }
 
-.dsssPillBtn:disabled {
+.dspPillBtn:disabled {
   cursor: default;
   opacity: 0.5;
 }
 
-.dsssPillText {
+.dspPillText {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 /* Host numbers, not copy: the same field carries "2/3" and a bare count. */
-.dsssPillDetail {
+.dspPillDetail {
   font-variant-numeric: tabular-nums;
   color: var(--dsw-alias-label-tertiary);
 }
 
-.dsssPillWarn {
+.dspPillWarn {
   color: var(--dsw-alias-state-warn-primary, var(--dsw-alias-label-primary));
   font-weight: 600;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .dsssPillBtn {
+  .dspPillBtn {
     transition: none;
   }
 }
@@ -210,7 +210,7 @@
 /* The decision list's own entry point: a second, quieter control beside the
    pill, present only while something did not stop cleanly. It sits before the
    pill in the flow so the pill itself never moves when the count appears. */
-.dsssPillTriage {
+.dspPillTriage {
   display: inline-flex;
   align-items: center;
   gap: 2px;
@@ -227,12 +227,12 @@
   user-select: none;
 }
 
-.dsssPillTriage:hover {
+.dspPillTriage:hover {
   color: var(--dsw-alias-label-primary);
   border-color: var(--dsw-alias-border-l2);
 }
 
-.dsssPillTriage:focus-visible {
+.dspPillTriage:focus-visible {
   outline: 2px solid var(--dsw-alias-state-business-primary);
   outline-offset: 1px;
 }
@@ -241,7 +241,7 @@
    below. The header clips nothing, so the panel crosses its bottom edge; the
    z-index clears the view tab strip (z-index 1) where the two overlap at that
    edge. */
-.dsssPillPanel {
+.dspPillPanel {
   position: absolute;
   right: 0;
   top: calc(100% + 6px);
@@ -260,7 +260,7 @@
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.22);
 }
 
-.dsssPillPanelHead {
+.dspPillPanelHead {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -268,14 +268,14 @@
   font-weight: 600;
 }
 
-.dsssPillPanelNote {
+.dspPillPanelNote {
   margin: 0;
   font-size: 12px;
   line-height: 18px;
   color: var(--dsw-alias-label-secondary);
 }
 
-.dsssPillRows {
+.dspPillRows {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -284,7 +284,7 @@
   list-style: none;
 }
 
-.dsssPillRow {
+.dspPillRow {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -293,26 +293,26 @@
   border-radius: 6px;
 }
 
-.dsssPillRowHead {
+.dspPillRowHead {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
 }
 
-.dsssPillRowId {
+.dspPillRowId {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
   word-break: break-all;
 }
 
-.dsssPillRowPhase {
+.dspPillRowPhase {
   flex: none;
   font-size: 12px;
   color: var(--dsw-alias-state-warn-primary, var(--dsw-alias-label-primary));
 }
 
-.dsssPillRowFacts {
+.dspPillRowFacts {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -321,14 +321,14 @@
   color: var(--dsw-alias-label-secondary);
 }
 
-.dsssPillRowActions {
+.dspPillRowActions {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   padding-top: 2px;
 }
 
-.dsssPillAction {
+.dspPillAction {
   padding: 3px 8px;
   font-size: 12px;
   line-height: 16px;
@@ -340,12 +340,12 @@
   user-select: none;
 }
 
-.dsssPillAction:hover {
+.dspPillAction:hover {
   color: var(--dsw-alias-label-primary);
   border-color: var(--dsw-alias-border-l2);
 }
 
-.dsssPillAction:focus-visible {
+.dspPillAction:focus-visible {
   outline: 2px solid var(--dsw-alias-state-business-primary);
   outline-offset: 1px;
 }

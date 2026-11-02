@@ -4,7 +4,7 @@
  * The harness keeps its equivalent (`packages/core/agent-loop/tests/mock-adapter.ts`)
  * behind an exports map that publishes only `.` and `./invariant`, so the
  * scripted-adapter pattern is copied here instead of imported.
- * @module dsh-safe-stop/test/assumptions/fake-provider
+ * @module dsh-pause/test/assumptions/fake-provider
  */
 
 import { LlmAdapter, LlmError } from '@deepseek-ai/dsh-llm'

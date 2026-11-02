@@ -9,7 +9,7 @@
  * session's next message is held while a session the registry never named is
  * served normally. The empty-registry case is the control that makes the first
  * one mean something: the pause is in the registry, not in the session log.
- * @module dsh-safe-stop/test/registry/restart
+ * @module dsh-pause/test/registry/restart
  */
 
 import { spawn, spawnSync } from 'node:child_process'
@@ -27,7 +27,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import type { AgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { apply, inject, name } from '../../src/index.ts'
 import { RESUME_DEFINITION_ID } from '../../src/shared.ts'
 import { FakeProvider, textResponse } from '../assumptions/fake-provider.ts'
@@ -59,10 +59,10 @@ beforeAll(() => {
   // The child imports the plugin's BUILT entry, which only the full build
   // produces (tsc alone refreshes `lib/types`, not the bundled `lib/index.js`).
   // Without this, the child would run whatever bundle was left behind.
-  const build = spawnSync('pnpm', ['run', 'build'], {
+  const build = spawnSync('pnpm run build', {
     cwd: repositoryRoot,
     encoding: 'utf8',
-    shell: process.platform === 'win32',
+    shell: true,
     timeout: 120_000,
   })
   expect(build.status, `build failed:\n${build.stdout}\n${build.stderr}`).toBe(0)
@@ -187,7 +187,7 @@ async function settles(): Promise<void> {
 
 describe('the park registry across a real process restart', () => {
   it('holds a session the previous process parked, and only that one', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-restart-')
+    const caseRoot = temporaryRoot('dsh-pause-restart-')
     await parkAndLeave(caseRoot, 'restart-registered', 'kill')
     expect((await readParkRegistry(storageOf(caseRoot))).map(entry => [String(entry.sessionId), entry.phase]))
       .toEqual([['restart-registered', 'safe']])
@@ -223,7 +223,7 @@ describe('the park registry across a real process restart', () => {
 
       // Held, not dropped: releasing the pause sends the very request that was
       // standing at the gate, and the release is durable.
-      await loop.ctx.commands.execute(woken, '/safe-resume', [], new AbortController().signal)
+      await loop.ctx.commands.execute(woken, '/pause-resume', [], new AbortController().signal)
       await until(() => loop.provider.requests.length === 2)
       expect(loop.provider.requests).toContain(loop.seen[0])
       expect(await readParkRegistry(storageOf(caseRoot))).toEqual([])
@@ -233,7 +233,7 @@ describe('the park registry across a real process restart', () => {
   })
 
   it('does not hold the same session when the registry is empty', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-restart-empty-')
+    const caseRoot = temporaryRoot('dsh-pause-restart-empty-')
     const loop = await revive(caseRoot)
     try {
       const agent = await openFresh(loop, 'restart-registered', 'nothing was ever parked here')
@@ -246,7 +246,7 @@ describe('the park registry across a real process restart', () => {
   })
 
   it('re-applies the pause after a clean exit too', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-restart-clean-')
+    const caseRoot = temporaryRoot('dsh-pause-restart-clean-')
     await parkAndLeave(caseRoot, 'restart-clean-exit', 'exit')
     expect((await readParkRegistry(storageOf(caseRoot))).map(entry => entry.phase)).toEqual(['safe'])
 

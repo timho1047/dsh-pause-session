@@ -54,9 +54,9 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { createUserMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
-import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
-import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
-import { apply, inject, name } from 'dsh-safe-stop'
+import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import { defineContentToolFixture } from '@deepseek-ai/dsh-tool-testkit'
+import { apply, inject, name } from 'dsh-pause'
 import { FakeProvider, textResponse } from '../assumptions/fake-provider.ts'
 import { mountParkStorage } from '../registry/storage.ts'
 import { GOAL_OBJECTIVE, PENDING_INPUT } from './case.ts'
@@ -178,7 +178,7 @@ const signal = new AbortController().signal
 
 /** Press the pause verb the way the browser half does. */
 async function pause(): Promise<void> {
-  const pressed = await ctx.commands.execute(agent, '/safe-stop', [], signal)
+  const pressed = await ctx.commands.execute(agent, '/pause', [], signal)
   if (pressed?.result.kind !== 'success') {
     throw new Error(`child: pause did not succeed: ${JSON.stringify(pressed?.result)}`)
   }
@@ -187,8 +187,8 @@ async function pause(): Promise<void> {
 /** The park state the browser reads, as of this read. */
 async function phase(): Promise<string | undefined> {
   const listed = ctx.commands.list(agent)
-  if (!listed.some(descriptor => descriptor.definitionId === 'dsh-safe-stop/resume')) return undefined
-  const status = await ctx.commands.execute(agent, '/safe-state', [], signal)
+  if (!listed.some(descriptor => descriptor.definitionId === 'dsh-pause/resume')) return undefined
+  const status = await ctx.commands.execute(agent, '/pause-state', [], signal)
   return status?.result.kind === 'success' ? status.result.text : undefined
 }
 

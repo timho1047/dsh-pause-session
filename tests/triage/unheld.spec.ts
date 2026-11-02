@@ -9,7 +9,7 @@
  * the record must not become a permanent row: the paths that can now read it
  * are the ones that clear it, and the clean-only rule still decides which of
  * them may.
- * @module dsh-safe-stop/test/triage/unheld
+ * @module dsh-pause/test/triage/unheld
  */
 
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -33,7 +33,7 @@ function temporaryRoot(prefix: string): string {
 
 describe('a record whose session became readable after the mount', () => {
   it('is cleared by the clean path when the session is live and the park finished', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-unheld-clean-')
+    const caseRoot = temporaryRoot('dsh-pause-unheld-clean-')
     // The record is real and durable; the session log it names does not exist
     // yet, so the mount cannot hold anything for it.
     await recordParkWithoutLog(caseRoot, 'late-clean', 'safe')
@@ -48,9 +48,9 @@ describe('a record whose session became readable after the mount', () => {
       await home.harness.create(SessionId('late-clean'), { provider: 'deepseek-official', model: 'model' })
       expect(home.ctx.agents.get(SessionId('late-clean'))).toBeDefined()
 
-      const answered = await home.run('/safe-resume-all')
+      const answered = await home.run('/pause-resume-all')
       expect(answered.kind, answered.text).toBe('success')
-      expect(answered.text).toBe('safe-stop resumed 1 session from where it stopped.')
+      expect(answered.text).toBe('pause resumed 1 session from where it stopped.')
       // The record is gone: the park is over for a session that is already
       // back, and a record left behind would be named for a park that is not
       // holding anything.
@@ -62,7 +62,7 @@ describe('a record whose session became readable after the mount', () => {
   })
 
   it('keeps an unclean one, and the list is what clears it', async () => {
-    const caseRoot = temporaryRoot('dsh-safe-stop-unheld-unclean-')
+    const caseRoot = temporaryRoot('dsh-pause-unheld-unclean-')
     await recordParkWithoutLog(caseRoot, 'late-unclean', 'draining')
 
     const home = await reviveTriageHome(caseRoot)
@@ -71,9 +71,9 @@ describe('a record whose session became readable after the mount', () => {
 
       // Liveness is not a park outcome: the clean path refuses exactly as it
       // would for a session that is not live at all.
-      const refused = await home.run('/safe-resume-all')
+      const refused = await home.run('/pause-resume-all')
       expect(refused.kind, refused.text).toBe('success')
-      expect(refused.text).toBe('safe-stop resumed no session; 1 did not stop cleanly and need your decision.')
+      expect(refused.text).toBe('pause resumed no session; 1 did not stop cleanly and need your decision.')
       await recordsUntil(caseRoot, [['late-unclean', 'draining']])
 
       // The row is the user's to decide, and deciding it is what clears the

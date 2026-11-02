@@ -1,13 +1,13 @@
 /**
  * Make sure the child processes can import the BUILT host entry.
  *
- * The children import `dsh-safe-stop` from `lib/index.js` — the plugin's own
+ * The children import `dsh-pause` from `lib/index.js` — the plugin's own
  * sources use `.js` specifiers for relative imports, which Node's type
  * stripping does not resolve — so a spec that runs before the artifact exists
  * has to build it. A fresh artifact is left alone on purpose: `verify` builds
  * before it tests, and several forked specs running tsc and tsdown over the
  * same output directory at once is a race with nothing to win.
- * @module dsh-safe-stop/test/resume/build
+ * @module dsh-pause/test/resume/build
  */
 
 import { spawnSync } from 'node:child_process'
@@ -40,10 +40,10 @@ export function ensureHostEntry(): void {
     // Absent: build below.
   }
   if (built >= newestMtime(join(repositoryRoot, 'src'))) return
-  const build = spawnSync('pnpm', ['run', 'build'], {
+  const build = spawnSync('pnpm run build', {
     cwd: repositoryRoot,
     encoding: 'utf8',
-    shell: process.platform === 'win32',
+    shell: true,
     timeout: 120_000,
   })
   if (build.status !== 0) {

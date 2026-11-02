@@ -1,5 +1,5 @@
 /**
- * The identities both halves of dsh-safe-stop name, the status encodings they
+ * The identities both halves of dsh-pause name, the status encodings they
  * share, and the one spelling a host log line gives a caught value.
  *
  * The browser bundle may value-import only the shell's baseline module table,
@@ -20,89 +20,89 @@
  * data and may contain the `;`, `,`, `/`, or newline a field is separated by; a
  * folded spelling would decode as a different name — a different row, looked up
  * again.
- * @module dsh-safe-stop/shared
+ * @module dsh-pause/shared
  */
 
 /** Command that pauses the receiving session before its next model request. */
-export const PAUSE_COMMAND = 'safe-stop'
+export const PAUSE_COMMAND = 'pause'
 
 /** Command that resumes the receiving session; registered only while that session is paused. */
-export const RESUME_COMMAND = 'safe-resume'
+export const RESUME_COMMAND = 'pause-resume'
 
 /** Command that resumes every parked session the registry remembers. */
-export const RESUME_ALL_COMMAND = 'safe-resume-all'
+export const RESUME_ALL_COMMAND = 'pause-resume-all'
 
 /** Command that registers and parks every running session tree in one action. */
-export const STOP_ALL_COMMAND = 'safe-stop-all'
+export const PAUSE_ALL_COMMAND = 'pause-all'
 
 /** Command that reports the whole-app park state; registered globally, always. */
-export const STATE_ALL_COMMAND = 'safe-state-all'
+export const STATE_ALL_COMMAND = 'pause-state-all'
 
 /** Command that reports the receiving session's park state; registered only while it is paused. */
-export const STATUS_COMMAND = 'safe-state'
+export const STATUS_COMMAND = 'pause-state'
 
 /** Command that turns the receiving session's own goal re-arm on or off; registered only while it is paused. */
-export const GOAL_COMMAND = 'safe-goal'
+export const GOAL_COMMAND = 'pause-goal'
 
 /** Command that reports every session that did not stop cleanly. */
-export const TRIAGE_COMMAND = 'safe-triage'
+export const TRIAGE_COMMAND = 'pause-triage'
 
 /** Command that resumes one session from the decision list exactly as the clean path would. */
-export const TRIAGE_CONTINUE_COMMAND = 'safe-triage-continue'
+export const TRIAGE_CONTINUE_COMMAND = 'pause-triage-continue'
 
 /** Command that resumes one session from the decision list with the unknown-outcome note. */
-export const TRIAGE_NOTE_COMMAND = 'safe-triage-note'
+export const TRIAGE_NOTE_COMMAND = 'pause-triage-note'
 
 /** Command that opens one session from the decision list without spending a request. */
-export const TRIAGE_REVIEW_COMMAND = 'safe-triage-review'
+export const TRIAGE_REVIEW_COMMAND = 'pause-triage-review'
 
 /** Command that leaves one session from the decision list exactly as it is. */
-export const TRIAGE_LEAVE_COMMAND = 'safe-triage-leave'
+export const TRIAGE_LEAVE_COMMAND = 'pause-triage-leave'
 
 /** Command that turns one listed session's goal re-arm on or off. */
-export const TRIAGE_GOAL_COMMAND = 'safe-triage-goal'
+export const TRIAGE_GOAL_COMMAND = 'pause-triage-goal'
 
 /** Stable definition id of the pause command, matched by identity rather than by copy. */
-export const PAUSE_DEFINITION_ID = 'dsh-safe-stop/pause'
+export const PAUSE_DEFINITION_ID = 'dsh-pause/pause'
 
 /** Stable definition id of the resume command: the host's own "this session is paused" fact. */
-export const RESUME_DEFINITION_ID = 'dsh-safe-stop/resume'
+export const RESUME_DEFINITION_ID = 'dsh-pause/resume'
 
 /** Stable definition id of the global resume command, matched by identity rather than by copy. */
-export const RESUME_ALL_DEFINITION_ID = 'dsh-safe-stop/resume-all'
+export const RESUME_ALL_DEFINITION_ID = 'dsh-pause/resume-all'
 
 /** Stable definition id of the whole-app pause command. */
-export const STOP_ALL_DEFINITION_ID = 'dsh-safe-stop/stop-all'
+export const PAUSE_ALL_DEFINITION_ID = 'dsh-pause/pause-all'
 
 /** Stable definition id of the whole-app status read. */
-export const STATE_ALL_DEFINITION_ID = 'dsh-safe-stop/state-all'
+export const STATE_ALL_DEFINITION_ID = 'dsh-pause/state-all'
 
 /** Stable definition id of the status read, matched by identity rather than by copy. */
-export const STATUS_DEFINITION_ID = 'dsh-safe-stop/status'
+export const STATUS_DEFINITION_ID = 'dsh-pause/status'
 
 /** Stable definition id of the paused session's own goal re-arm toggle. */
-export const GOAL_DEFINITION_ID = 'dsh-safe-stop/goal'
+export const GOAL_DEFINITION_ID = 'dsh-pause/goal'
 
 /** Stable definition id of the decision-list read. */
-export const TRIAGE_DEFINITION_ID = 'dsh-safe-stop/triage'
+export const TRIAGE_DEFINITION_ID = 'dsh-pause/triage'
 
 /** Stable definition id of the decision-list "continue" verb. */
-export const TRIAGE_CONTINUE_DEFINITION_ID = 'dsh-safe-stop/triage-continue'
+export const TRIAGE_CONTINUE_DEFINITION_ID = 'dsh-pause/triage-continue'
 
 /** Stable definition id of the decision-list "continue with the unknown-outcome note" verb. */
-export const TRIAGE_NOTE_DEFINITION_ID = 'dsh-safe-stop/triage-note'
+export const TRIAGE_NOTE_DEFINITION_ID = 'dsh-pause/triage-note'
 
 /** Stable definition id of the decision-list "open without activating" verb. */
-export const TRIAGE_REVIEW_DEFINITION_ID = 'dsh-safe-stop/triage-review'
+export const TRIAGE_REVIEW_DEFINITION_ID = 'dsh-pause/triage-review'
 
 /** Stable definition id of the decision-list "leave it alone today" verb. */
-export const TRIAGE_LEAVE_DEFINITION_ID = 'dsh-safe-stop/triage-leave'
+export const TRIAGE_LEAVE_DEFINITION_ID = 'dsh-pause/triage-leave'
 
 /** Stable definition id of the decision-list goal re-arm toggle. */
-export const TRIAGE_GOAL_DEFINITION_ID = 'dsh-safe-stop/triage-goal'
+export const TRIAGE_GOAL_DEFINITION_ID = 'dsh-pause/triage-goal'
 
 /** First token of every encoded status, so a descriptor is never parsed by accident. */
-export const STATUS_PREFIX = 'safe-stop: '
+export const STATUS_PREFIX = 'pause: '
 
 /**
  * One list field's text when the list is empty. A value that would itself spell
@@ -278,7 +278,7 @@ export interface ParkStatus {
 /**
  * Encode one status for a command descriptor.
  * @param status - the state to publish.
- * @returns the descriptor text, e.g. `safe-stop: draining; tools: edit, bash; goal: on`.
+ * @returns the descriptor text, e.g. `pause: draining; tools: edit, bash; goal: on`.
  */
 export function encodeParkStatus(status: ParkStatus): string {
   const head = `${STATUS_PREFIX}${PHASE_WORD[status.phase]}`
@@ -316,7 +316,7 @@ export function decodeParkStatus(text: string): ParkStatus | undefined {
  * First token of every encoded whole-app status. A different prefix from the
  * per-session status on purpose: one decoder must never read the other's text.
  */
-export const GLOBAL_STATUS_PREFIX = 'safe-stop all: '
+export const GLOBAL_STATUS_PREFIX = 'pause all: '
 
 /** The whole-app answer to "can I close the lid?". */
 export type GlobalVerdict = 'idle' | 'waiting' | 'safe'
@@ -427,7 +427,7 @@ function decodeNames(field: string | undefined): string[] {
  * Encode one whole-app status for a command result.
  * @param status - the state to publish.
  * @returns the result text, e.g.
- * `safe-stop all: waiting; registered: 3; safe: 1; parked-at: overnight; draining: overnight; parking: 1; stalled: -; unresumable: -; unread-trees: -; jobs: bash-1; blind: -`.
+ * `pause all: waiting; registered: 3; safe: 1; parked-at: overnight; draining: overnight; parking: 1; stalled: -; unresumable: -; unread-trees: -; jobs: bash-1; blind: -`.
  */
 export function encodeGlobalStatus(status: GlobalStatus): string {
   return `${GLOBAL_STATUS_PREFIX}${status.verdict}`
@@ -489,7 +489,7 @@ export function decodeGlobalStatus(text: string): GlobalStatus | undefined {
  * whole-app status prefixes on purpose, for the same reason those two are
  * separate: one decoder must never read another's text.
  */
-export const TRIAGE_PREFIX = 'safe-stop triage: '
+export const TRIAGE_PREFIX = 'pause triage: '
 
 /** How one decision-list row was read out of the session's own stored log. */
 export type TriageReading = 'read' | 'unreadable'
@@ -603,7 +603,7 @@ function encodeStop(row: TriageRow): string {
 /**
  * Encode one decision list for a command result.
  * @param list - the rows to publish.
- * @returns the result text, e.g. `safe-stop triage: 1; row: overnight; phase: draining; stopped: tool/call/turn 1 step 1; tools: gated; wake: yes`.
+ * @returns the result text, e.g. `pause triage: 1; row: overnight; phase: draining; stopped: tool/call/turn 1 step 1; tools: gated; wake: yes`.
  */
 export function encodeTriageList(list: TriageList): string {
   const head = `${TRIAGE_PREFIX}${String(list.rows.length)}`
