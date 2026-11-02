@@ -2,36 +2,80 @@
 
 [English](README.md) | 中文
 
-在离开前把每个运行中的 DSH 会话及其子代理停在安全点，第二天再恢复，就像从未中断。
+<p align="center"><img src="icon.svg" width="64" height="64" alt="dsh-pause 图标"></p>
 
-要求 DSH `>=0.2.2-alpha.2 <0.3.0-0`；包通过 `engines.dsh` 声明该范围，因此插件管理器会拒绝旧版本运行时，而不是启动不兼容的恢复路径。
+在离开前暂停所有运行中的 DSH 会话及其子代理，之后再恢复。
 
-**状态：功能完成，等待完整端到端演练。** 按一次会把每个运行中的会话树停在模型的下一条请求边界，并报告所有会话是否都已暂停；暂停状态可跨进程重启；下一次按下会用会话原来的 Agent preset 组合（恢复作用域工具、prompt section 和子代理委派上下文）恢复干净暂停的会话，不向请求中额外添加内容；没有完全暂停的会话会进入决策清单。真实机器上尚未验证的部分见 [REHEARSAL.md](REHEARSAL.md)。
+dsh-pause 会把每个会话停在同一个点：当前已经运行的工具先跑完，然后拦住下一条模型请求。子代理树也会一起暂停，暂停状态可以跨 DSH 重启保留。
 
-## 安装
+> 状态：beta。已针对 DSH `0.2.2-alpha.2` 验证；完整的实机演练见 [REHEARSAL.md](REHEARSAL.md)。
 
-通过 Web 侧边栏的 **Plugins** 页面安装 bundle，或在目标 profile 的会话里使用 `plugin_manager`（`install_bundle`，`target` 指向本目录的绝对路径）。安装会添加包、选中 bundle 并激活。
+## 快速开始
 
-## 卸载
+1. 如果安装的是源码 checkout 而不是已打包的 release，先执行 `pnpm run build`。然后打开 DSH Web 侧边栏的 **Plugins** 页面，把本目录作为 bundle 安装。也可以在该 profile 的会话里用 `plugin_manager` 的 `install_bundle`，传入本目录的绝对路径。本地开发布局见 [DEVELOPMENT.md](DEVELOPMENT.md)。
+2. 打开要暂停的会话。按标题旁的暂停按钮，会暂停这个会话及其子代理；按头部右侧的胶囊，会暂停所有运行中的会话树。
+3. 控件会先显示 **正在暂停**（Pausing），等运行中的工具结束、下一条模型请求被拦住后，才会变成 **已暂停**（Paused）。全局胶囊变成 **全部已暂停**（All Paused）时，所有已登记的会话都已停住。
+4. 下次按 **全部已暂停** 可以恢复所有干净暂停的会话；按会话旁的控制可以只恢复这一个会话及其子代理。
 
-在同一个 Plugins 页面移除 bundle，或使用 `plugin_manager`（`remove_bundle`，`target` = `dsh-pause`）。会话头部不再显示该控件，profile 的其他部分不变。
+## 两个控件
+
+| 控件 | 范围 | 作用 |
+|---|---|---|
+| 会话标题旁 | 一个会话及其子代理 | 暂停当前会话树，之后恢复同一个会话树。 |
+| 头部右侧胶囊 | 所有运行中的会话树 | 暂停所有已登记会话，之后恢复所有干净暂停的会话。 |
+
+有工具在运行时，会话显示 **正在暂停**。只有工具返回、下一条模型请求被拦住并且会话状态已保存后，才会进入 **已暂停**。
+
+## 暂停具体做了什么
+
+- 已经在运行的工具会先跑完；暂停生效后不会再发新的工具调用或模型请求。
+- 下一条模型请求会在到达供应商之前被拦住。
+- 已经登记在暂停树里的子代理会按同样规则停下。
+- 暂停状态是持久化的。DSH 退出或重启后，下次挂载会重新拦住这些会话。
+- 输入框保持可用；暂停要通过同一个控件释放，而不是靠再发一条消息。
+
+## 哪些东西不会被停住
+
+- agent loop 之外的后台任务和 shell 任务不会被停住；全局控件会把它们列为限制。
+- Codex、Claude Code、ACP、DSH SDK 等外部一次性子代理不能继续下一轮，也不能冷恢复。它们会被报告为不可恢复，不会登记成本地暂停会话。
+- 暂停中的会话在 DSH 的部分生命周期里仍显示为 `running`。退出 DSH 可能需要约 5 秒；归档、上下文压缩和 `wait_agent` 在会话被拦住时的行为可能不同。
+
+## 恢复与目标
+
+干净暂停的会话会从停下的位置恢复。会话目标默认会在恢复时重新打开，这意味着它可以自己继续跑轮次并产生消耗。离开前如果不想这样，可以在会话控件上关掉目标开关。这个设置会写进暂停记录，在该会话恢复时生效。
+
+没有干净暂停的会话不会被静默恢复。全局控件会打开决策清单，每一行可以继续、带说明继续（说明工具结果未知）、只看不运行，或保持暂停。
+
+## 命令
+
+按钮驱动的就是这些命令；脚本和键盘操作用得上：
+
+| 命令 | 作用 |
+|---|---|
+| `/pause` | 暂停当前会话及其子代理。 |
+| `/pause-resume` | 恢复当前暂停的会话树。 |
+| `/pause-resume-all` | 恢复所有干净暂停的会话。 |
+| `/pause-all` | 暂停所有运行中的会话树。 |
+| `/pause-state` | 读取当前会话树的暂停状态。 |
+| `/pause-state-all` | 读取整体暂停状态。 |
+| `/pause-goal` | 切换当前会话恢复时是否重新打开目标。 |
+| `/pause-triage` | 读取未干净暂停会话的决策清单。 |
+| `/pause-triage-continue`、`note`、`review`、`leave`、`goal` | 对清单中的一个会话执行对应决策。 |
+
+状态读取本身也是命令，所以会在会话转录里留下命令行。
+
+## 要求
+
+- DSH `>=0.2.2-alpha.2 <0.3.0-0`。包通过 `engines.dsh` 声明该范围；插件管理器会拒绝旧版本运行时，而不是启动不兼容的恢复路径。
+- 标准 Web profile。它会挂载 `sessionQuery` 和 `agentPresets`，恢复路径用它们重建每个会话原本的 Agent 组合。
+- 如果从本仓库构建，还需要满足 [DEVELOPMENT.md](DEVELOPMENT.md) 里的本地开发布局。
+
+插件不发起网络请求。暂停记录保存在 profile 的存储中，会话状态仍保存在原有会话日志里。
 
 ## 开发
 
-```sh
-pnpm install
-pnpm run verify     # typecheck + build + tests
-pnpm run build      # tsc（两个面）然后由 tsdown 打包 lib/index.js 和 lib/client.js
-```
+工作区布局、构建命令、测试和本地 DeepSeek Harness 依赖链接见 [DEVELOPMENT.md](DEVELOPMENT.md)。完整的人工验收流程见 [REHEARSAL.md](REHEARSAL.md)。
 
-宿主半边构建为 `lib/index.js`，由 Loader 加载；浏览器半边构建为 `lib/client.js`，即浏览器按 id `dsh-pause` 加载的 `window.__ModuleLoader__` bundle。`tsdown.client.ts` 是本目录插件共用的 vendored client-bundle preset。
+## 许可证
 
-这是个人插件仓库，`dsh-plugins/` 不属于 DSH 官方源码树。开发依赖通过相对链接指向 `../../deepseek-harness` 的 DeepSeek Harness checkout，因此本地 typecheck、build 和 test 需要在相同的相对深度存在该 checkout。npm 上已发布的包版本低于本插件使用的 `0.2.2-alpha.2` API，所以新 clone 可以执行 `pnpm pack`，但在匹配版本的包发布前无法运行完整验证。
-
-## 设计记录
-
-规格与任务拆分在 `.scratch/pause/`，按本目录约定只保留在本地。
-
-设计中真正承重的发现——安全点到底在哪、一次暂停会给周围应用带来什么成本、重启会把一个已暂停的会话变成什么——记录在 spec 的 evidence 部分。改动暂停或恢复路径前先读它。
-
-[REHEARSAL.md](REHEARSAL.md) 是端到端验收流程：自动化套件已经证明了什么、如何安装、手动步骤，以及 profile 起不来时如何回滚。
+MIT，见 [LICENSE](LICENSE)。
