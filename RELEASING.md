@@ -1,0 +1,53 @@
+# Releasing
+
+This repository publishes one npm package, `dsh-pause-session`, from a Git tag.
+
+## First npm seed
+
+A brand-new npm package cannot use trusted publishing until it exists. Seed the
+first version manually:
+
+```sh
+pnpm run verify
+pnpm run build
+git add lib CHANGELOG.md package.json
+git commit -m "chore: release v0.1.0"
+npm publish --access public
+```
+
+Then open the package settings on npmjs.com and configure a Trusted Publisher:
+
+- Owner: `timho1047`
+- Repository: `dsh-pause-session`
+- Workflow: `release.yml`
+- Permission: Publish
+
+After that, tag pushes publish through GitHub Actions OIDC and do not need a
+long-lived `NPM_TOKEN`.
+
+## Normal release
+
+1. Run `pnpm run verify`.
+2. Bump `version` in `package.json`.
+3. Add a matching section to `CHANGELOG.md`.
+4. Run `pnpm run build` and commit the rebuilt `lib/` tree with the source.
+5. Commit, tag, and push:
+
+```sh
+git tag vX.Y.Z
+git push origin main --follow-tags
+```
+
+The `release` workflow validates the tag and committed bundles, packs the
+package, publishes only when that exact version is absent, and creates or
+updates the GitHub Release with the matching changelog section.
+
+## Notes
+
+- `lib/` is committed because the release runner does not install the local
+  DeepSeek Harness checkout required by the source devDependencies.
+- The workflow skips npm publishing when the version is already present, which
+  is what allows the first manual seed and a later tag to share one version.
+- If trusted publishing is temporarily unavailable, publish the generated
+  tarball manually with `npm publish`, then rerun the tag workflow to create the
+  GitHub Release.

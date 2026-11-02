@@ -18,7 +18,7 @@ dsh-pause-session 会把每个会话停在同一个点：当前已经运行的�
 
 ## 快速开始
 
-1. 如果安装的是源码 checkout 而不是已打包的 release，先执行 `pnpm run build`。然后打开 DSH Web 侧边栏的 **Plugins** 页面，把本目录作为 bundle 安装。也可以在该 profile 的会话里用 `plugin_manager` 的 `install_bundle`，传入本目录的绝对路径。本地开发布局见 [DEVELOPMENT.md](DEVELOPMENT.md)。
+1. 打开 DSH Web 侧边栏的 **Plugins** 页面，把本目录作为 bundle 安装。仓库里已经提交了构建好的 `lib/`；如果改过源码，先执行 `pnpm run build`。也可以在该 profile 的会话里用 `plugin_manager` 的 `install_bundle`，传入本目录的绝对路径。本地开发布局见 [DEVELOPMENT.md](DEVELOPMENT.md)。
 2. 打开要暂停的会话。按标题旁的暂停按钮，会暂停这个会话及其子代理；按头部右侧的胶囊，会暂停所有运行中的会话树。
 3. 控件会先显示 **正在暂停**（Pausing），等运行中的工具结束、下一条模型请求被拦住后，才会变成 **已暂停**（Paused）。全局胶囊变成 **全部已暂停**（All Paused）时，所有已登记的会话都已停住。
 4. 下次按 **全部已暂停** 可以恢复所有干净暂停的会话；按会话旁的控制可以只恢复这一个会话及其子代理。
@@ -81,6 +81,10 @@ dsh-pause-session 会把每个会话停在同一个点：当前已经运行的�
 ## 开发
 
 工作区布局、构建命令、测试和本地 DeepSeek Harness 依赖链接见 [DEVELOPMENT.md](DEVELOPMENT.md)。完整的人工验收流程见 [REHEARSAL.md](REHEARSAL.md)。
+
+## 更新记录
+
+发布记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 许可证
 

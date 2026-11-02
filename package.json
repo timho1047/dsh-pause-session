@@ -29,6 +29,7 @@
     "README.zh.md",
     "DEVELOPMENT.md",
     "REHEARSAL.md",
+    "CHANGELOG.md",
     "LICENSE",
     "cordis.patch.yml",
     "locale/*.json",
@@ -38,7 +39,7 @@
   "scripts": {
     "build:host": "tsc -p tsconfig.json",
     "build:client": "tsc -p tsconfig.client.json && tsdown",
-    "build": "npm run build:host && npm run build:client",
+    "build": "npm run build:host && npm run build:client && node scripts/trim-build-whitespace.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "test": "vitest run",
     "verify": "npm run typecheck && npm run build && npm run test"

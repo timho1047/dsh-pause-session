@@ -22,9 +22,9 @@ included, and the pause survives a DSH restart.
 
 ## Quick start
 
-1. If you are installing from a checkout rather than a packaged release, run
-   `pnpm run build` first. Then open the **Plugins** page in the DSH Web sidebar
-   and install this directory as a bundle. From a session in that profile,
+1. Open the **Plugins** page in the DSH Web sidebar and install this directory
+   as a bundle. The repository ships the built `lib/` tree; if you changed the
+   source, run `pnpm run build` first. From a session in that profile,
    `plugin_manager` can do the same with `install_bundle` and the directory's
    absolute path. The local development layout is in
    [DEVELOPMENT.md](DEVELOPMENT.md).
@@ -121,6 +121,10 @@ and session state stays in the existing session logs.
 See [DEVELOPMENT.md](DEVELOPMENT.md) for the workspace layout, build commands,
 test suite, and the local DeepSeek Harness dependency links. The end-to-end
 manual acceptance run lives in [REHEARSAL.md](REHEARSAL.md).
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ## License
 

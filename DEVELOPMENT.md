@@ -9,8 +9,8 @@ official DSH source tree; it is only the author's local layout.
   triage, and host services.
 - `src/client/` — Web client TypeScript/React: the session control, global
   control, state mapping, and locale dictionaries.
-- `lib/` — build output, ignored by Git. It is created by `pnpm run build` and
-  is not present in a fresh clone.
+- `lib/` — committed build output. Run `pnpm run build` to refresh it before a
+  release commit.
 - `.scratch/pause-session/` — local-only design record (ignored by Git).
 - `REHEARSAL.md` — the manual end-to-end acceptance run.
 

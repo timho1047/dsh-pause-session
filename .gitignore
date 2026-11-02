@@ -1,8 +1,9 @@
 node_modules/
-lib/
 *.tsbuildinfo
 .e2e/
 .scratch/
+.release/
+*.tgz
 
 .env
 .env.*
