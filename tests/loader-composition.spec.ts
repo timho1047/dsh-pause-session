@@ -10,8 +10,10 @@
  * waiting rather than partly mounted. The second case mounts those services —
  * the same rows the shipped base bundle mounts — and asserts the entry's fiber
  * reaches ACTIVE, which is what "the plugin mounted" actually means. The
- * negative case guards both: if the Loader accepted an unloadable row, "it
- * composed" would stop meaning anything.
+ * negative cases guard both: a rejected config must leave its row failed, and
+ * an unloadable row must stay unmounted, so "it composed" keeps meaning
+ * something. Loader 1.1 reports those failures on the tree instead of exiting
+ * the process, which is why the runner reports rows and unmounted entries.
  * @module dsh-pause-session/test/loader-composition
  */
 
@@ -31,6 +33,12 @@ interface LoadedRow {
   readonly id: string | null
   readonly name: string | null
   readonly state: string
+}
+
+/** One entry the Loader kept but never mounted because its import failed. */
+interface UnmountedEntry {
+  readonly id: string
+  readonly name: string | null
 }
 
 /** The Loader entry id both compositions give the plugin row. */
@@ -81,13 +89,13 @@ function runRunner(configPath: string): { status: number | null; stdout: string;
   return { status: result.status, stdout: result.stdout, stderr: result.stderr }
 }
 
-/** Run one composition and read the rows it mounted. */
-function compose(configPath: string): LoadedRow[] {
+/** Run one composition and read the rows it mounted and the entries it failed to import. */
+function compose(configPath: string): { rows: LoadedRow[]; unmounted: UnmountedEntry[] } {
   const evidence = runRunner(configPath)
   expect(evidence.status, `stdout:\n${evidence.stdout}\nstderr:\n${evidence.stderr}`).toBe(0)
   const marker = evidence.stdout.match(/DSH_LOADER_RESULT (.+)$/mu)
   expect(marker).not.toBeNull()
-  return (JSON.parse(marker![1]!) as { rows: LoadedRow[] }).rows
+  return JSON.parse(marker![1]!) as { rows: LoadedRow[]; unmounted: UnmountedEntry[] }
 }
 
 const temporaryRoot = mkdtempSync(join(tmpdir(), 'dsh-pause-session-loader-'))
@@ -108,7 +116,7 @@ describe('Loader composition', () => {
   it('registers the built host entry as a row, and leaves it pending without the services it injects', () => {
     const configPath = join(temporaryRoot, 'bare.yml')
     writeFileSync(configPath, configFor(pathToFileURL(builtEntry).href))
-    const rows = compose(configPath)
+    const { rows } = compose(configPath)
     const pluginRow = rows.find(row => row.name === 'dsh-pause-session')
     expect(pluginRow, `the plugin row is missing from ${JSON.stringify(rows)}`).toBeDefined()
     expect(pluginRow?.id).toContain(PLUGIN_ROW_ID)
@@ -120,7 +128,7 @@ describe('Loader composition', () => {
   it('activates the same entry once the composition provides what it injects', () => {
     const configPath = join(temporaryRoot, 'services.yml')
     writeFileSync(configPath, servicesConfigFor(pathToFileURL(builtEntry).href, join(temporaryRoot, 'storages')))
-    const rows = compose(configPath)
+    const { rows } = compose(configPath)
     const pluginRow = rows.find(row => row.name === 'dsh-pause-session')
     expect(pluginRow, `the plugin row is missing from ${JSON.stringify(rows)}`).toBeDefined()
     // Activated, not merely registered: the fiber's own state is the assertion
@@ -129,25 +137,30 @@ describe('Loader composition', () => {
     expect(rows.filter(row => row.state === 'failed')).toEqual([])
   })
 
-  it("fails the composition loudly when a row's config is not what the plugin accepts", () => {
+  it("records a failed row when a row's config is not what the plugin accepts", () => {
     const configPath = join(temporaryRoot, 'bad-config.yml')
     writeFileSync(configPath, servicesConfigFor(
       pathToFileURL(builtEntry).href,
       join(temporaryRoot, 'storages'),
       ['  config:', '    silentWakeRoutes: not-an-array'],
     ))
-    const evidence = runRunner(configPath)
-    // The plugin's own schema is what the Loader applies, so a config it cannot
-    // read fails the mount with the offending path instead of being ignored.
-    expect(evidence.status, `stdout:\n${evidence.stdout}\nstderr:\n${evidence.stderr}`).not.toBe(0)
-    expect(evidence.stderr).toContain('silentWakeRoutes')
+    // Loader 1.1 records a rejected config on the offending row instead of
+    // failing the whole composition: the plugin's own schema still applies,
+    // so the row must end up failed rather than silently accepted.
+    const { rows } = compose(configPath)
+    const pluginRow = rows.find(row => row.name === 'dsh-pause-session')
+    expect(pluginRow, `the plugin row is missing from ${JSON.stringify(rows)}`).toBeDefined()
+    expect(pluginRow?.state).toBe('failed')
   })
 
-  it('fails loud when the configured row cannot be loaded', () => {
+  it('leaves an unloadable row unmounted instead of accepting it', () => {
     const configPath = join(temporaryRoot, 'unloadable.yml')
     writeFileSync(configPath, configFor(pathToFileURL(join(temporaryRoot, 'absent-entry.js')).href))
-    const evidence = runRunner(configPath)
-    expect(evidence.status, `stdout:\n${evidence.stdout}\nstderr:\n${evidence.stderr}`).not.toBe(0)
+    // An import failure keeps the entry in the tree without a fiber, so no row
+    // for it exists: the composition stays up, but the row is not mounted.
+    const { rows, unmounted } = compose(configPath)
+    expect(rows.some(row => row.name?.includes('absent-entry.js'))).toBe(false)
+    expect(unmounted.some(entry => entry.name?.includes('absent-entry.js'))).toBe(true)
   })
 })
 

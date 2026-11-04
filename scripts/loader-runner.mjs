@@ -58,7 +58,12 @@ try {
     name: typeof runtime.name === 'string' ? runtime.name : null,
     state: FIBER_STATE[fiber.state] ?? String(fiber.state),
   })))
-  process.stdout.write(`DSH_LOADER_RESULT ${JSON.stringify({ mounted: rows.length, rows })}\n`)
+  // An entry that never got a fiber failed to import: the Loader records the
+  // failure on the entry instead of failing the whole composition.
+  const unmounted = [...ctx.loader.entries()]
+    .filter(entry => !entry.disabled && entry.fiber === undefined)
+    .map(entry => ({ id: entry.id, name: entry.options.name ?? null }))
+  process.stdout.write(`DSH_LOADER_RESULT ${JSON.stringify({ mounted: rows.length, rows, unmounted })}\n`)
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error))
   process.exit(1)
