@@ -42,9 +42,6 @@ jobs:
         with:
           node-version: 22
 
-      - name: Use npm with trusted-publishing support
-        run: npm install --global npm@11
-
       - name: Validate tag, manifest, and committed bundles
         run: |
           node - <<'NODE'
@@ -113,7 +110,7 @@ jobs:
           if npm view "dsh-pause-session@$VERSION" version >/dev/null 2>&1; then
             echo "dsh-pause-session@$VERSION is already published; skipping npm publish."
           else
-            npm publish "$TGZ" --access public --provenance
+            pnpm publish "$TGZ" --access public --provenance --no-git-checks
           fi
 
       - name: Extract release notes from the changelog
