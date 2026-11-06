@@ -1,6 +1,6 @@
 {
   "name": "dsh-pause-session",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "DSH plugin: pause every running session (and its subagents) at a safe point before you leave, then resume them the next morning as if nothing was interrupted.",
   "type": "module",
   "main": "lib/index.js",

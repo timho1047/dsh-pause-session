@@ -5,7 +5,7 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.1.1] - 2026-11-06
 
 ### Changed
 
@@ -47,4 +47,5 @@ and this project uses [Semantic Versioning](https://semver.org/).
   exit, archive, compaction, and `wait_agent` can behave differently while held.
 - External one-shot subagent routes cannot be cold-resumed.
 
+[0.1.1]: https://github.com/timho1047/dsh-pause-session/releases/tag/v0.1.1
 [0.1.0]: https://github.com/timho1047/dsh-pause-session/releases/tag/v0.1.0
