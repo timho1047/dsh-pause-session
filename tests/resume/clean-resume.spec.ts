@@ -18,7 +18,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { RESUME_DEFINITION_ID } from '../../src/shared.ts'
+import { resume, statusOf } from '../native-driver.ts'
 import { turnEnd } from '../gate/loop.ts'
 import { readParkRegistry } from '../registry/read.ts'
 import { PENDING_INPUT } from './case.ts'
@@ -116,12 +116,12 @@ describe('a cleanly parked session resumed in a fresh process', () => {
       // Opening a session this morning activates its agent; the pause is what
       // stops it from running, not the absence of an agent.
       const opened = (await home.ctx.agents.resume({ resumeSessionId: SessionId('overnight-open') })).agent
-      expect(home.ctx.commands.list(opened).map(descriptor => descriptor.definitionId))
-        .toContain(RESUME_DEFINITION_ID)
+      expect(await statusOf(home.ctx, opened), 'the opened session was not held')
+        .toBeDefined()
       expect(home.provider.requests).toHaveLength(0)
 
-      const execution = await home.ctx.commands.execute(opened, '/pause-resume', [], new AbortController().signal)
-      expect(execution?.result.kind, JSON.stringify(execution?.result)).toBe('success')
+      const execution = await resume(home.ctx, opened)
+      expect(execution.ok, JSON.stringify(execution)).toBe(true)
 
       await until(() => home.provider.requests.length === 1, 'the model answering the pending input')
       await opened.whenIdle()

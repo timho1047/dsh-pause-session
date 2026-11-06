@@ -40,7 +40,6 @@ export declare const DEFAULT_SILENT_WAKE_ROUTES: readonly ["deepseek-official", 
 declare const ConfigShape: z.ZodObject<{
     silentWakeRoutes: z.ZodDefault<z.ZodArray<z.ZodString>>;
     maxListedLogEvents: z.ZodDefault<z.ZodNumber>;
-    exposeCommands: z.ZodDefault<z.ZodBoolean>;
 }, z.core.$strip>;
 /** Validated plugin configuration. */
 export type Config = z.infer<typeof ConfigShape>;
@@ -52,7 +51,6 @@ export type Config = z.infer<typeof ConfigShape>;
 export declare const Config: z.ZodPreprocess<z.ZodObject<{
     silentWakeRoutes: z.ZodDefault<z.ZodArray<z.ZodString>>;
     maxListedLogEvents: z.ZodDefault<z.ZodNumber>;
-    exposeCommands: z.ZodDefault<z.ZodBoolean>;
 }, z.core.$strip>>;
 /**
  * Mount the durable pause registry, the pause gate, the activity fold, their

@@ -20,7 +20,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { decodeTriageList } from '../../src/shared.ts'
+import { triage } from '../native-driver.ts'
 import { readParkRegistry } from '../registry/read.ts'
 import { ensureHostEntry } from './build.ts'
 import { parkAndLeave, resumeAll, reviveHome, settles, storageOf } from './home.ts'
@@ -104,10 +104,8 @@ describe('the clean resume path refuses a session that did not finish parking', 
 
       // The refusal is what puts the row in front of the user, and it is still
       // on the list — with the record that holds it.
-      const listed = await home.ctx.commands.execute(home.desk, '/pause-triage', [], new AbortController().signal)
-      const text = listed?.result.kind === 'success' ? listed.result.text : undefined
-      expect(text === undefined ? undefined : decodeTriageList(text)?.rows.map(row => row.sessionId))
-        .toEqual(['overnight-draining-live'])
+      const listed = await triage(home.ctx, home.desk)
+      expect(listed.map(row => row.sessionId)).toEqual(['overnight-draining-live'])
       expect(await records(storageOf(caseRoot))).toEqual([['overnight-draining-live', 'draining']])
     } finally {
       await home.ctx.fiber.dispose()

@@ -16,8 +16,6 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import CommandRuntime from '@deepseek-ai/dsh-commands'
-import type { CommandResult } from '@deepseek-ai/dsh-commands'
 import GoalService from '@deepseek-ai/dsh-goal'
 import * as GoalRoundDriver from '@deepseek-ai/dsh-goal-round-driver'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
@@ -27,8 +25,10 @@ import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deep
 import type { AgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { defineContentToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 import { apply, Config, inject, name } from '../../src/index.ts'
-import { decodeGlobalStatus, decodeTriageList, STATE_ALL_COMMAND, TRIAGE_COMMAND } from '../../src/shared.ts'
-import type { GlobalStatus, ParkPhase, TriageAction, TriageList } from '../../src/shared.ts'
+import type { GlobalStatusWire, PauseActionResultWire, TriageRowWire } from '../../src/remote.ts'
+import type { ParkPhase, TriageAction, TriageList } from '../../src/shared.ts'
+import type { PauseVerb } from '../native-driver.ts'
+import { aggregate, decide as nativeDecide, press, triage as nativeTriage } from '../native-driver.ts'
 import { FakeProvider, textResponse } from '../assumptions/fake-provider.ts'
 import { readParkRegistry } from '../registry/read.ts'
 import { mountParkStorage } from '../registry/storage.ts'
@@ -82,6 +82,14 @@ export async function parkAndLeave(caseRoot: string, sessionId: string, mode: Pa
   }
 }
 
+/** The wire row as the in-process list type, with the optional call id made explicit. */
+function sharedRow(row: TriageRowWire): TriageList['rows'][number] {
+  return {
+    ...row,
+    traces: row.traces.map(trace => ({ tool: trace.tool, callId: trace.callId ?? '' })),
+  }
+}
+
 /** One fresh morning over a killed process's park state. */
 export interface TriageHome {
   readonly ctx: Context
@@ -91,14 +99,19 @@ export interface TriageHome {
   readonly seen: GenerateOptions[]
   /** The session the user has open this morning; every command is addressed to it. */
   readonly desk: Agent
-  /** Run one slash command on the desk session, exactly as the browser half does. */
-  run(line: string): Promise<CommandResult>
-  /** Read the decision list through the verb the browser half executes. */
+  /** Press one native action on the desk session, named by its test-side verb. */
+  run(verb: PauseVerb): Promise<PauseActionResultWire>
+  /** Read the decision list through the native namespace. */
   triage(): Promise<TriageList>
-  /** Read the whole-app aggregate through the verb the browser half executes. */
-  status(): Promise<GlobalStatus>
-  /** Take one of the listed verbs on one listed session. */
-  decide(sessionId: string, action: TriageAction): Promise<CommandResult>
+  /** Read the whole-app aggregate from the native snapshot. */
+  status(): Promise<GlobalStatusWire>
+  /** Take one of the listed verbs on one listed session, after reading the list. */
+  decide(sessionId: string, action: TriageAction): Promise<PauseActionResultWire>
+  /**
+   * Take one decision without reading the list first: the direct namespace
+   * call, which is what makes the shown-row binding observable.
+   */
+  decideRaw(sessionId: string, action: TriageAction): Promise<PauseActionResultWire>
 }
 
 /** Options of one morning. */
@@ -121,7 +134,6 @@ export async function reviveTriageHome(caseRoot: string, options: TriageHomeOpti
   const ctx = new Context()
   await mountAgentLoopTestDependencies(ctx)
   await ctx.plugin(JsonlSessionPersistence, { root: sessionRootOf(caseRoot), compression: 'none' })
-  await ctx.plugin(CommandRuntime)
   await mountParkStorage(ctx, storageOf(caseRoot))
   if (options.goals === true) {
     await ctx.plugin(GoalService)
@@ -155,11 +167,7 @@ export async function reviveTriageHome(caseRoot: string, options: TriageHomeOpti
   const desk = await harness.create(SessionId('morning-desk'), { provider: route, model: 'model' })
   const signal = new AbortController().signal
 
-  const run = async (line: string): Promise<CommandResult> => {
-    const execution = await ctx.commands.execute(desk, line, [], signal)
-    if (execution === undefined) throw new Error(`pause: "${line}" did not resolve`)
-    return execution.result
-  }
+  const run = async (verb: PauseVerb): Promise<PauseActionResultWire> => press(ctx, desk, verb, signal)
 
   return {
     ctx,
@@ -169,23 +177,17 @@ export async function reviveTriageHome(caseRoot: string, options: TriageHomeOpti
     desk,
     run,
     triage: async () => {
-      const answer = await run(`/${TRIAGE_COMMAND}`)
-      const list = answer.text === undefined ? undefined : decodeTriageList(answer.text)
-      if (list === undefined) throw new Error(`pause: the decision list answered in an unknown vocabulary: ${String(answer.text)}`)
-      return list
+      const rows = await nativeTriage(ctx, desk, signal)
+      return { rows: rows.map(row => sharedRow(row)) }
     },
-    status: async () => {
-      const answer = await run(`/${STATE_ALL_COMMAND}`)
-      const status = answer.text === undefined ? undefined : decodeGlobalStatus(answer.text)
-      if (status === undefined) throw new Error(`pause: the aggregate answered in an unknown vocabulary: ${String(answer.text)}`)
-      return status
-    },
+    status: async () => await aggregate(ctx, signal),
     decide: async (sessionId, action) => {
       // The browser reads the list before it decides a row, and that read is
       // what shows this session the row the host then acts on.
-      await run(`/${TRIAGE_COMMAND}`)
-      return await run(`/pause-triage-${action} ${sessionId}`)
+      await nativeTriage(ctx, desk, signal)
+      return await nativeDecide(ctx, desk, sessionId, action, signal)
     },
+    decideRaw: async (sessionId, action) => await nativeDecide(ctx, desk, sessionId, action, signal),
   }
 }
 

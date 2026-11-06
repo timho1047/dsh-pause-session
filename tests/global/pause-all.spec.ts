@@ -13,7 +13,6 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { textResponse } from '../assumptions/fake-provider.ts'
-import { RESUME_DEFINITION_ID } from '../../src/shared.ts'
 import { readParkRegistry } from '../registry/read.ts'
 import {
   blockingScript, cleanRoots, mountGlobalHome, storageOf, temporaryRoot, toolCallResponse, until, untilAsync,
@@ -51,7 +50,7 @@ describe('one press over every running session tree', () => {
       await until(() => home.blocking.started() === 1, 'the tool in flight')
 
       const answer = await home.run(idle, 'pause-all')
-      expect(answer.kind, JSON.stringify(answer)).toBe('success')
+      expect(answer.ok, JSON.stringify(answer)).toBe(true)
 
       // Both members of the tree are registered the moment the press answers:
       // the record is written before the press reports success.
@@ -68,8 +67,7 @@ describe('one press over every running session tree', () => {
       // The idle session is untouched in every way the browser can observe:
       // no record, no marker of its own, and no request it never asked for.
       expect(ids).not.toContain('idle-bystander')
-      expect(home.ctx.commands.list(idle).map(descriptor => descriptor.definitionId))
-        .not.toContain(RESUME_DEFINITION_ID)
+      expect(await home.headerStatus(idle), 'the bystander was held by a press it never took').toBeUndefined()
       expect(home.provider.requests).toHaveLength(1)
 
       const status = await home.status(idle)
@@ -110,7 +108,7 @@ describe('one press over every running session tree', () => {
 
       parent.followup(ask('parent work'))
       await untilAsync(async () => home.blocking.started() === 2, 'the parent tool in flight')
-      expect((await home.run(parent, 'pause-all')).kind).toBe('success')
+      expect((await home.run(parent, 'pause-all')).ok).toBe(true)
 
       // The tree walk names the finished child, and the press leaves it alone:
       // it has nothing to hold and no session-level flush to run, so a record
@@ -139,11 +137,11 @@ describe('one press over every running session tree', () => {
       // Pressed while idle: it parks immediately, and a later whole-app press
       // must not restart its park (a new episode would re-derive an outcome the
       // first press already reached).
-      expect((await home.run(idle, 'pause')).kind).toBe('success')
+      expect((await home.run(idle, 'pause')).ok).toBe(true)
       await untilAsync(async () => (await home.status(idle)).safe === 1, 'the first press to park')
       const parked = await readParkRegistry(storageOf(caseRoot))
 
-      expect((await home.run(idle, 'pause-all')).kind).toBe('success')
+      expect((await home.run(idle, 'pause-all')).ok).toBe(true)
 
       expect(await readParkRegistry(storageOf(caseRoot))).toEqual(parked)
       expect((await home.status(idle)).safe).toBe(1)
@@ -162,7 +160,7 @@ describe('one press over every running session tree', () => {
       // session is not running yet, but it owes a turn the moment it is.
       delivered.inbox.append('next-turn', ask('do this tomorrow'))
 
-      expect((await home.run(resting, 'pause-all')).kind).toBe('success')
+      expect((await home.run(resting, 'pause-all')).ok).toBe(true)
 
       const ids = (await readParkRegistry(storageOf(caseRoot))).map(entry => String(entry.sessionId)).sort()
       expect(ids).toEqual(['delivered-unclaimed'])

@@ -14,8 +14,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { decodeTriageList, encodeTriageList, TRIAGE_PREFIX } from '../../src/shared.ts'
-import type { TriageList } from '../../src/shared.ts'
 import { ensureHostEntry } from '../resume/build.ts'
 import { readParkRegistry } from '../registry/read.ts'
 import { parkAndLeave, recordParkWithoutLog, recordsUntil, reviveTriageHome, storageOf } from './home.ts'
@@ -88,7 +86,7 @@ describe('the decision list', () => {
     try {
       expect((await home.triage()).rows.map(row => row.sessionId)).toEqual([sessionId])
       const answered = await home.decide(sessionId, 'continue')
-      expect(answered.kind, answered.text).toBe('success')
+      expect(answered.ok, answered.message).toBe(true)
       expect(home.ctx.agents.get(SessionId(sessionId))).toBeDefined()
       await recordsUntil(caseRoot, [])
     } finally {
@@ -110,8 +108,8 @@ describe('the decision list', () => {
       // And the morning verb resumes it without the list ever seeing it. The
       // wake is the clean path's: the loop builds one empty message in, and the
       // route drops it, so nothing new reaches the payload.
-      const answered = await home.run('/pause-resume-all')
-      expect(answered.kind, answered.text).toBe('success')
+      const answered = await home.run('pause-resume-all')
+      expect(answered.ok, answered.message).toBe(true)
       const resumed = home.ctx.agents.get(SessionId('overnight-clean'))
       expect(resumed, 'the clean session was not resumed').toBeDefined()
       expect(home.seen[0]?.messages.filter(message => message.role === 'user' && message.content.length === 0))
@@ -144,34 +142,8 @@ describe('the decision list', () => {
       expect(row.lastEvent).toBeUndefined()
       expect(row.wakeable).toBe(false)
       expect(row.phase).toBe('draining')
-      // And the published vocabulary carries the refusal rather than a verdict:
-      // a decoded row keeps saying `unreadable` and none of the facts it does
-      // not have.
-      const round = decodeTriageList(encodeTriageList(list))
-      expect(round?.rows[0]).toMatchObject({ sessionId: 'vault-session', reading: 'unreadable', traces: [], wakeable: false })
-      expect(round?.rows[0]?.lastEvent).toBeUndefined()
     } finally {
       await home.ctx.fiber.dispose()
     }
-
-    // The same refusal on the wire, spelled out: a row the host could not read
-    // never decodes as a read row, and a text this vocabulary does not own never
-    // decodes at all.
-    const hostile: TriageList = {
-      rows: [{
-        sessionId: 'vault-session',
-        phase: 'draining',
-        updatedAt: 1,
-        reading: 'unreadable',
-        traces: [],
-        owed: false,
-        wakeable: false,
-      }],
-    }
-    const text = encodeTriageList(hostile)
-    expect(text.startsWith(TRIAGE_PREFIX)).toBe(true)
-    expect(decodeTriageList(text)?.rows[0]?.reading).toBe('unreadable')
-    expect(decodeTriageList('pause: paused')).toBeUndefined()
-    expect(decodeTriageList('pause all: safe; registered: 1')).toBeUndefined()
   })
 })

@@ -17,8 +17,8 @@
  * Both controls are host-authoritative. On a browser Host they read the
  * same-origin JSON status route, which keeps background reads out of the
  * Session log; a carrier without that route falls back to the command channel.
- * User actions still run through the host's session commands (`./control.ts`
- * and `./global.ts` own both transports). Each control stays inert wherever no
+ * User actions and status both use the generated native Remote namespace;
+ * no slash command is involved. Each control stays inert wherever no
  * round-trip is available rather than rendering a state it cannot support. The
  * header control also reads the whole-app answer the whole-app control
  * publishes, so a park that holds nothing does not cost a host round-trip per
@@ -43,7 +43,7 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { PauseControl } from './control.js'
 import type { PauseState } from './control.js'
 import { PauseGlobalControl } from './global.js'
-import { openRemoteSource, remoteCommands } from './remote.js'
+import { remoteTransport } from './remote.js'
 import pauseRemote from 'dsh-pause-session/remote'
 import type {} from 'dsh-pause-session/remote'
 import { GoalIcon, PauseIcon, ResumeIcon } from './icons.js'
@@ -64,7 +64,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 const NS = 'pause'
 
 /** Required services: the slot registry, the locale registry, and the host round-trip. */
-export const inject = ['slots', 'locale', 'remote', 'remote.commands']
+export const inject = ['slots', 'locale', 'remote']
 
 /** Browser state and operations injected into the Session-header contribution. */
 export interface PauseInjected {
@@ -152,58 +152,8 @@ export function PauseButton(props: PauseButtonProps): ReactNode {
  * @param ctx - client context carrying slots, locale, and the Remote face.
  */
 
-/** Test-double fallback: the old command path, kept only off real Cordis. */
-function mountLegacy(ctx: ClientContext): void {
-  const lifetime = new AbortController()
-  ctx.effect(() => () => { lifetime.abort(new Error('pause: client unloaded')) }, 'pause: lifetime')
-  const globalControl = new PauseGlobalControl(ctx.remote.commands, lifetime.signal)
-  const control = new PauseControl(
-    ctx.remote.commands,
-    lifetime.signal,
-    undefined,
-    undefined,
-    () => globalControl.store.getSnapshot().global,
-  )
-  ctx.effect(() => globalControl.store.subscribe(() => { control.reconsider() }), 'pause: legacy aggregate')
-  ctx.effect(() => ctx.remote.$on('commands/change', () => {
-    control.refreshAll()
-    globalControl.refreshAll()
-  }), 'pause: legacy command changes')
-  ctx.effect(() => {
-    if (typeof document === 'undefined') return () => {}
-    const onVisibility = (): void => {
-      control.watchVisibility()
-      globalControl.watchVisibility()
-    }
-    document.addEventListener('visibilitychange', onVisibility)
-    return () => { document.removeEventListener('visibilitychange', onVisibility) }
-  }, 'pause: legacy visibility')
-  ctx.slots.inject('conversation.session.header.actions', () =>
-    ctx.slots.register({
-      name: 'conversation.session.header.actions', id: NS, order: 40, locale: NS,
-      inject: (): PauseInjected => ({
-        hooks: { pause: control.store },
-        refresh: (sessionId) => { void control.refresh(sessionId) },
-        toggle: (sessionId) => { void control.toggle(sessionId) },
-        toggleGoal: (sessionId) => { void control.toggleGoal(sessionId) },
-      }),
-    }, PauseButton))
-  ctx.slots.inject('conversation.session.header.utilities', () =>
-    ctx.slots.register({
-      name: 'conversation.session.header.utilities', id: 'pause-all', order: 60, locale: NS,
-      inject: (): PausePillInjected => ({
-        hooks: { pauseGlobal: globalControl.store },
-        refresh: (sessionId) => { void globalControl.refresh(sessionId) },
-        toggle: (sessionId) => { void globalControl.toggle(sessionId) },
-        setPanel: (open) => { globalControl.setPanel(open) },
-        decide: (sessionId, action) => { void globalControl.decide(sessionId, action) },
-      }),
-    }, PausePill))
-}
-
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'pause: dictionaries')
-  if (typeof ctx.inject !== 'function') { mountLegacy(ctx); return }
   const lifetime = new AbortController()
   ctx.effect(() => () => { lifetime.abort(new Error('pause: client unloaded')) }, 'pause: lifetime')
 
@@ -219,16 +169,14 @@ export function apply(ctx: ClientContext): void {
 
   ctx.inject(['remote.pauseSession'], (remoteCtx) => {
     const remote = remoteCtx.remote.pauseSession
-    const source = openRemoteSource(remote, lifetime.signal)
-    const commands = remoteCommands(remote, source)
-    const globalControl = new PauseGlobalControl(commands as never, lifetime.signal, undefined, undefined, source)
+    const transport = remoteTransport(remote, lifetime.signal)
+    const globalControl = new PauseGlobalControl(transport, lifetime.signal)
     const control = new PauseControl(
-      commands as never,
+      transport,
       lifetime.signal,
       undefined,
       undefined,
       () => globalControl.store.getSnapshot().global,
-      source,
     )
     // A header answered from the whole-app "nothing is registered" is read for
     // real the moment that stops holding.
@@ -239,7 +187,7 @@ export function apply(ctx: ClientContext): void {
     // The native stream is the change feed: every fresh snapshot wakes the
     // controls' own coalescing burst, which reads the cached snapshot.
     remoteCtx.effect(
-      () => source.onChange(() => {
+      () => transport.source.onChange(() => {
         control.refreshAll()
         globalControl.refreshAll()
       }),

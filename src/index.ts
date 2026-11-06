@@ -32,7 +32,7 @@ export const name = 'dsh-pause-session'
  * needs, the projection registry the park predicate reads turn state from, and
  * the profile's storage, which holds the pause registry.
  */
-export const inject = ['llm', 'commands', 'agents', 'sessions', 'sessionProjections', 'storageDomain']
+export const inject = ['llm', 'agents', 'sessions', 'sessionProjections', 'storageDomain']
 
 /**
  * Provider routes whose request conversion drops an empty user message, so the
@@ -61,8 +61,6 @@ const ConfigShape = z.object({
    * unreadable rather than guessed at; see `./coldlog.ts`.
    */
   maxListedLogEvents: z.number().int().min(1).max(TRIAGE_LOG_MAX_EVENTS).default(TRIAGE_WINDOW_EVENTS),
-  /** Test-only command compatibility; production registers no slash commands. */
-  exposeCommands: z.boolean().default(process.env.VITEST === 'true'),
 })
 
 /** Validated plugin configuration. */
@@ -99,7 +97,6 @@ export async function apply(ctx: Context, config: Config = Config.parse({})): Pr
   const control = installSessionControl(ctx, gate, watch, registry, {
     silentWakeRoutes: config.silentWakeRoutes,
     maxListedLogEvents: config.maxListedLogEvents,
-    exposeCommands: config.exposeCommands,
   })
   new PauseRemote(ctx, remoteApiOf(control))
   await control.adopt()

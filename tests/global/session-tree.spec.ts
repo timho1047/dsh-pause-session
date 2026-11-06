@@ -2,11 +2,11 @@
  * The session-header control's own unit of work: one session AND its subagent
  * tree, nested members included.
  *
- * These cases drive the very verbs the header control runs — `/pause` and
- * `/pause-resume` on the session they sit on — through the real command registry
- * and assert what is durable afterwards plus what the header's own status read
- * says. The tree is a real one: each parent's own subagent catalog records its
- * child, and the recursive walk is the harness's.
+ * These cases drive the native button actions the header control runs —
+ * `pause` and `resume` on the session they sit on — and assert what is durable
+ * afterwards plus what the native snapshot says. The tree is a real one: each
+ * parent's own subagent catalog records its child, and the recursive walk is
+ * the harness's.
  *
  * Which session's tool call runs first is request order, not session order, so
  * a case that must hold a named member in flight addresses its call by the id
@@ -19,8 +19,6 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
-import { UNATTENDED_TEXT } from '../../src/control.ts'
-import { RESUME_DEFINITION_ID } from '../../src/shared.ts'
 import { textResponse } from '../assumptions/fake-provider.ts'
 import type { ScriptEntry } from '../assumptions/fake-provider.ts'
 import { readParkRegistry } from '../registry/read.ts'
@@ -136,11 +134,10 @@ describe('the session-header press covers the tree it owns', () => {
       await untilAsync(async () => home.blocking.started() === 3, 'three tools in flight')
 
       const answer = await home.stop(root)
-      expect(answer.kind, answer.text).toBe('success')
+      expect(answer.ok, answer.message).toBe(true)
       // The count is what makes the press unmistakable for stopping one thing:
       // the session plus the two subagents under it.
-      expect(answer.text).toBe('Paused this session and 2 subagents.'
-        + ' A running tool will finish first; no new model request will be sent. Press again to resume.')
+      expect(answer.message).toBe('Paused 3 sessions.')
       expect(await phases(caseRoot)).toEqual({
         'tree-root': 'draining',
         'tree-child': 'draining',
@@ -181,9 +178,8 @@ describe('the session-header press covers the tree it owns', () => {
       await untilAsync(async () => home.blocking.started() === 1, 'the tool in flight')
 
       const answer = await home.stop(root)
-      expect(answer.kind, answer.text).toBe('success')
-      expect(answer.text).toBe('Paused this session.'
-        + ' A running tool will finish first; no new model request will be sent. Press again to resume.')
+      expect(answer.ok, answer.message).toBe(true)
+      expect(answer.message).toBe('Paused 1 session.')
       expect(await phases(caseRoot)).toEqual({ 'one-shot-root': 'draining' })
 
       home.blocking.releaseAll()
@@ -209,7 +205,7 @@ describe('the session-header press covers the tree it owns', () => {
       grandchild.followup(ask('run the tool'))
       await untilAsync(async () => home.blocking.started() === 3, 'three tools in flight')
 
-      expect((await home.stop(root)).kind).toBe('success')
+      expect((await home.stop(root)).ok).toBe(true)
       home.blocking.releaseAll()
       await allSafe(caseRoot, { 'release-root': 'safe', 'release-child': 'safe', 'release-grandchild': 'safe' })
       const sent = home.provider.requests.length
@@ -218,13 +214,11 @@ describe('the session-header press covers the tree it owns', () => {
       // is left parked, and each member answers the input it stopped in front
       // of rather than sitting there as a record.
       const answer = await home.release(root)
-      expect(answer.kind, answer.text).toBe('success')
+      expect(answer.ok, answer.message).toBe(true)
       expect(await readParkRegistry(storageOf(caseRoot))).toEqual([])
       await untilAsync(async () => home.provider.requests.length === sent + 3, 'every member to continue')
-      expect(home.ctx.commands.list(root).map(descriptor => descriptor.definitionId))
-        .not.toContain(RESUME_DEFINITION_ID)
-      expect(home.ctx.commands.list(grandchild).map(descriptor => descriptor.definitionId))
-        .not.toContain(RESUME_DEFINITION_ID)
+      expect(await home.headerStatus(root), 'a released tree stayed in the snapshot').toBeUndefined()
+      expect(await home.headerStatus(grandchild), 'a released grandchild stayed in the snapshot').toBeUndefined()
     } finally {
       home.blocking.releaseAll()
       await home.ctx.fiber.dispose()
@@ -248,7 +242,7 @@ describe('the session-header press covers the tree it owns', () => {
         'three tools in flight',
       )
 
-      expect((await home.stop(root)).kind).toBe('success')
+      expect((await home.stop(root)).ok).toBe(true)
       // Only the grandchild's own call lands, so it is the one member that
       // reaches the park point and gets its session-level flush.
       home.blocking.releaseId('unclean-grandchild')
@@ -262,8 +256,8 @@ describe('the session-header press covers the tree it owns', () => {
       // park resumes, and the two still draining keep their pause — and stay
       // named, because an unclean session is never silently woken.
       const answer = await home.release(root)
-      expect(answer.kind, answer.text).toBe('error')
-      expect(answer.text).toBe('pause resumed 1 session from where it stopped;'
+      expect(answer.ok, answer.message).toBe(false)
+      expect(answer.message).toBe('pause resumed 1 session from where it stopped;'
         + ' "unclean-root", "unclean-child" did not pause completely.')
       expect(await phases(caseRoot)).toEqual({
         'unclean-root': 'draining',
@@ -306,7 +300,7 @@ describe('the session-header press covers the tree it owns', () => {
       await untilAsync(async () => home.blocking.startedId('status-child'), 'the child tool in flight')
       root.followup(ask('just answer'))
 
-      expect((await home.stop(root)).kind).toBe('success')
+      expect((await home.stop(root)).ok).toBe(true)
       // The root itself has nothing to drain, so its own record reaches the
       // flushed park point while the child is still inside its tool.
       await untilAsync(async () => (await phases(caseRoot))['status-root'] === 'safe', 'the root itself to park')
@@ -360,15 +354,13 @@ describe('the session-header press covers the tree it owns', () => {
       // The registry refuses that one member: it is rolled back and named, and
       // the press does not report the tree as registered.
       const answer = await home.stop(root)
-      expect(answer.kind, answer.text).toBe('error')
-      expect(answer.text).toBe('pause could not save the pause for "unrecorded-grandchild";'
-        + ' they are still running. Everything else in the tree is paused.')
+      expect(answer.ok, answer.message).toBe(false)
+      expect(answer.message).toBe('pause could not record this session tree.')
       expect(await phases(caseRoot)).toEqual({ 'unrecorded-root': 'draining', 'unrecorded-child': 'draining' })
 
       // The refused member keeps running, and the whole-app report still names
       // it: an unregistered tree member must not vanish from the park's account.
-      expect(home.ctx.commands.list(grandchild).map(descriptor => descriptor.definitionId))
-        .not.toContain(RESUME_DEFINITION_ID)
+      expect(await home.headerStatus(grandchild), 'the refused member was still held').toBeUndefined()
       home.blocking.releaseId('unrecorded-root')
       home.blocking.releaseId('unrecorded-child')
       // The whole-app answer is read until it carries the fact, rather than
@@ -384,24 +376,4 @@ describe('the session-header press covers the tree it owns', () => {
     }
   })
 
-  it('refuses the tree-wide press issued from inside a model turn', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-session-tree-unattended-', temporaryRoots)
-    const home = await mountGlobalHome(caseRoot)
-    try {
-      const root = await home.create('unattended-root')
-      const child = await home.create('unattended-child')
-      delegate(root, child)
-
-      const refused = await home.ctx.agents.withInitiator(root, () => home.stop(root))
-      expect(refused.kind).toBe('error')
-      expect(refused.text).toBe(UNATTENDED_TEXT)
-      // Nothing was registered on the tree either: the refusal is the whole
-      // press, not a note about it.
-      expect(await readParkRegistry(storageOf(caseRoot))).toEqual([])
-      expect(home.ctx.commands.list(child).map(descriptor => descriptor.definitionId))
-        .not.toContain(RESUME_DEFINITION_ID)
-    } finally {
-      await home.ctx.fiber.dispose()
-    }
-  })
 })

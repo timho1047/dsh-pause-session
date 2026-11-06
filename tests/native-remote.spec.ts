@@ -1,9 +1,9 @@
-/** The native Remote transport: stream snapshots and button actions. */
+/** The native Remote transport: stream snapshots, button actions, and the browser bridge. */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { PauseRemote } from '../src/remote.ts'
 import type { PauseRemoteApi, PauseSnapshotWire } from '../src/remote.ts'
-import { openRemoteSource, remoteCommands } from '../src/client/remote.ts'
+import { remoteTransport } from '../src/client/remote.ts'
 
 const snapshot: PauseSnapshotWire = {
   global: {
@@ -29,6 +29,19 @@ function apiDouble(): { api: PauseRemoteApi; fire(): void; set(next: PauseSnapsh
     },
     fire: () => { for (const listener of listeners) listener() },
     set: (next) => { current = next },
+  }
+}
+
+/** The generated Client face as the runtime hands it over: outcomes wrapped in an envelope. */
+function namespaceOf(remote: PauseRemote) {
+  return {
+    observe: (signal?: AbortSignal) => remote.observe(signal),
+    act: async (request: Parameters<PauseRemote['act']>[0], signal?: AbortSignal) =>
+      ({ ok: true, value: await remote.act(request, signal) }),
+    triage: async (request: Parameters<PauseRemote['triage']>[0], signal?: AbortSignal) =>
+      ({ ok: true, value: await remote.triage(request, signal) }),
+    decide: async (request: Parameters<PauseRemote['decide']>[0], signal?: AbortSignal) =>
+      ({ ok: true, value: await remote.decide(request, signal) }),
   }
 }
 
@@ -58,14 +71,21 @@ describe('native Remote transport', () => {
     expect(actions).toEqual([{ action: 'pause', sessionId: 's1' }])
   })
 
-  it('maps the command-shaped adapter onto the native stream and actions', async () => {
+  it('builds the direct browser transport over the generated namespace', async () => {
     const { api, actions } = apiDouble()
     const remote = new PauseRemote(new Context(), api)
-    const source = openRemoteSource(remote, new AbortController().signal)
-    const commands = remoteCommands(remote, source)
-    await expect(commands.list('s1' as never)).resolves.toEqual({ ok: true, value: [] })
-    const answer = await commands.execute('s1' as never, '/pause', [], new AbortController().signal)
-    expect(answer.ok).toBe(true)
-    expect(actions).toEqual([{ action: 'pause', sessionId: 's1' }])
+    const lifetime = new AbortController()
+    const transport = remoteTransport(namespaceOf(remote), lifetime.signal)
+
+    await expect(transport.source.read(lifetime.signal)).resolves.toMatchObject({ sessions: {} })
+    await expect(transport.act({ action: 'pause', sessionId: 's1' }, lifetime.signal))
+      .resolves.toEqual({ ok: true, message: 'pause' })
+    await expect(transport.triage('s1', lifetime.signal)).resolves.toEqual([])
+    await expect(transport.decide('s1', 's2', 'continue', lifetime.signal))
+      .resolves.toEqual({ ok: true, message: 'continue' })
+    expect(actions).toEqual([
+      { action: 'pause', sessionId: 's1' },
+      { caller: 's1', target: 's2', decision: 'continue' },
+    ])
   })
 })

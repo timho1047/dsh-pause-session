@@ -33,14 +33,13 @@ checkout.
 status snapshots and its `act` / `triage` / `decide` methods carry every button
 action. The Client mounts the generated contribution (`dsh-pause-session/remote`)
 and consumes the namespace through a child injection; the same Gateway path is
-used on Web and Desktop. No slash command is registered in production.
+used on Web and Desktop. No slash command is registered anywhere.
 
 `scripts/generate-typert.mjs` builds a temporary Typert workspace containing
 this Remote service and the Harness protocol source, then commits the generated
 `lib/typert.*` artifacts beside the other build output. The release workflow
-never needs a Harness checkout. The command surface in `src/control.ts` is
-enabled only under `VITEST` for the legacy test doubles; production registers
-nothing.
+never needs a Harness checkout. The tests drive the same native namespace via
+`tests/native-driver.ts`; no command-shaped test compatibility surface remains.
 
 ## Build and test
 

@@ -1,45 +1,18 @@
 /**
  * Browser-side reading and driving of the host's whole-app park state.
  *
- * On a browser Host the aggregate arrives from the same-origin JSON status
- * route, which keeps background reads out of every Session log. A carrier
- * without that route falls back to the session-addressed command channel:
- * `pause-state-all` carries the whole-app status as of the read, and the
- * forwarded `commands/change` event says when to read again.
- *
- * The fallback still needs one session to talk through. It picks a user
- * session the host can serve (never a subagent's own session), preferring the
- * one on screen; once the host's answer names the park's own session, later
- * reads are addressed there. That is the fallback's cost, not the normal Web
- * path: the JSON route is process-wide and writes nothing into any Session.
- *
- * Every phase a session reaches announces itself through the registry — a
- * transition re-registers that session's status verb — so a change is what buys
- * the next read, and the flush that settles a park is announced like every other
- * step (`./burst.ts`). A read that finds work still in flight is therefore the
- * answer to the transition that produced it rather than a reason to keep asking;
- * what the burst still owes is the delivery of a change, and the rows of a panel
- * whose own read did not answer. A settled answer is left on screen unread: the
- * panel stays readable and the pill keeps saying what it says, but the browser
- * stops spending host round-trips on a state that has stopped
- * moving. What owes a read is the host's forwarded registry change, the user's
- * own press or decision, and the first read at mount; once an answer is on
- * screen, the shell handing this control another session to ask through is none
- * of those. A press, a decision and an opened panel each read the host as they
- * run, and the changes they set off are that action's own echo: those are
- * absorbed for a short window (`./burst.ts`), so a forwarded change owes a read
- * exactly when something moved that this browser did not do — with one look owed
- * at the close of that window when the reading the action left is still moving,
- * which is how a park that reaches its final phase inside the echo window is
- * still read.
+ * The aggregate arrives from the native `pauseSession` stream. The stream is
+ * process-wide and writes nothing into any Session; actions travel through the
+ * same Remote namespace. The burst reads the cached snapshot only after the
+ * host announces a change, so a settled park stops spending requests while its
+ * last answer stays on screen.
  * @module dsh-pause-session/client/global
  */
-import type { ClientRemote } from '@deepseek-ai/dsh-api-remotes/client';
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store';
 import type { SessionId } from '@deepseek-ai/dsh-session/types';
 import type { GlobalStatus, TriageAction, TriageRow } from '../shared.js';
 import type { BurstPolicy } from './burst.js';
-import type { PauseStatusSource } from './status.js';
+import type { PauseTransport } from './remote.js';
 /** What the whole-app control knows: the host's answer, or that it could not ask. */
 export type GlobalReading = {
     readonly kind: 'reported';
@@ -63,8 +36,6 @@ export interface GlobalPauseState {
     /** The host's decision list; absent until the panel asks for it. */
     triage: TriageReading | undefined;
 }
-/** The command one listed verb runs, named from the one vocabulary the host registers. */
-export declare const TRIAGE_DECISION_COMMAND: Readonly<Record<TriageAction, string>>;
 /**
  * The session a whole-app command is addressed to.
  *
@@ -109,9 +80,8 @@ export declare function registeredAddress(status: GlobalStatus): SessionId | und
 export declare function parkedAddress(status: GlobalStatus): SessionId | undefined;
 /** Owns the published whole-app reading; nothing else writes that state. */
 export declare class PauseGlobalControl {
-    private readonly commands;
+    private readonly transport;
     private readonly lifetime;
-    private readonly source?;
     /** State source the whole-app contribution binds its selector hook to. */
     readonly store: SnapshotStore<GlobalPauseState>;
     /** The session the shell asked this control through; reads start here. */
@@ -155,7 +125,7 @@ export declare class PauseGlobalControl {
      * transition before its first read; also the wait after a press.
      * @param policy - the burst waits and visibility source; defaults to the real page.
      */
-    constructor(commands: ClientRemote['commands'], lifetime: AbortSignal, windowMs?: number, policy?: Omit<BurstPolicy, 'windowMs' | 'waitsMs'>, source?: PauseStatusSource | undefined);
+    constructor(transport: PauseTransport, lifetime: AbortSignal, windowMs?: number, policy?: Omit<BurstPolicy, 'windowMs' | 'waitsMs'>);
     /**
      * The shell handed this control a session: the one the pill mounted on, or
      * the one the user has just moved to. Only a control with no answer yet reads
@@ -209,17 +179,6 @@ export declare class PauseGlobalControl {
      */
     private readAggregate;
     /**
-     * Publish one aggregate answer, unless a newer read was requested while this
-     * one was in flight: that answer would show a state the host has moved past.
-     * A served address is remembered, and one that did not answer is forgotten —
-     * that is what makes the read fall back to the next address rather than ask
-     * it again.
-     * @param sessionId - the session this read goes through.
-     * @returns whether this read came back without an answer; a superseded read is
-     * not one, because the newer read already owns the outcome.
-     */
-    private readAt;
-    /**
      * Open or close the decision list. Opening asks the host for the rows; there
      * is no state to show without that answer. Opening is also a client action
      * that reads, so the changes it sets off are absorbed rather than read back,
@@ -265,10 +224,8 @@ export declare class PauseGlobalControl {
      * @returns after the control re-reads the host.
      */
     toggle(sessionId: SessionId): Promise<void>;
-    /** Ask the host for the decision list, in the browser's vocabulary. */
+    /** Ask the native namespace for the decision list. */
     private readTriageRows;
-    /** Ask the host what the whole-app park state is, in the browser's vocabulary. */
-    private read;
     private publish;
     /**
      * Decide what the burst owes after a read: another look while a change this

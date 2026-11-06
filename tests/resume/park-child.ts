@@ -48,7 +48,6 @@
 
 import { writeSync } from 'node:fs'
 import { Context } from '@deepseek-ai/cordis'
-import CommandRuntime from '@deepseek-ai/dsh-commands'
 import GoalService from '@deepseek-ai/dsh-goal'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { createUserMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
@@ -57,6 +56,7 @@ import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deep
 import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { defineContentToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 import { apply, inject, name } from 'dsh-pause-session'
+import { statusOf, pause as nativePause } from '../native-driver.ts'
 import { FakeProvider, textResponse } from '../assumptions/fake-provider.ts'
 import { mountParkStorage } from '../registry/storage.ts'
 import { GOAL_OBJECTIVE, PENDING_INPUT } from './case.ts'
@@ -96,7 +96,6 @@ function pairCallResponse(ids: readonly string[], toolName: string): StreamChunk
 const ctx = new Context()
 await mountAgentLoopTestDependencies(ctx)
 await ctx.plugin(JsonlSessionPersistence, { root: sessionRoot, compression: 'none' })
-await ctx.plugin(CommandRuntime)
 await mountParkStorage(ctx, registryRoot)
 // Mounted before the agent exists: the goal projection has to be registered
 // while the session that will carry the goal is still being created.
@@ -176,20 +175,17 @@ await ctx.plugin({ name, inject, apply })
 
 const signal = new AbortController().signal
 
-/** Press the pause verb the way the browser half does. */
+/** Press the pause action the way the browser half does. */
 async function pause(): Promise<void> {
-  const pressed = await ctx.commands.execute(agent, '/pause', [], signal)
-  if (pressed?.result.kind !== 'success') {
-    throw new Error(`child: pause did not succeed: ${JSON.stringify(pressed?.result)}`)
+  const pressed = await nativePause(ctx, agent, signal)
+  if (!pressed.ok) {
+    throw new Error(`child: pause did not succeed: ${JSON.stringify(pressed)}`)
   }
 }
 
 /** The park state the browser reads, as of this read. */
 async function phase(): Promise<string | undefined> {
-  const listed = ctx.commands.list(agent)
-  if (!listed.some(descriptor => descriptor.definitionId === 'dsh-pause-session/resume')) return undefined
-  const status = await ctx.commands.execute(agent, '/pause-state', [], signal)
-  return status?.result.kind === 'success' ? status.result.text : undefined
+  return (await statusOf(ctx, agent, signal))?.phase
 }
 
 async function until(predicate: () => boolean, describe: string): Promise<void> {
@@ -202,7 +198,7 @@ async function until(predicate: () => boolean, describe: string): Promise<void> 
 
 async function untilPhase(wanted: string): Promise<void> {
   for (let attempt = 0; attempt < 4000; attempt++) {
-    if ((await phase())?.includes(wanted) === true) return
+    if (await phase() === wanted) return
     await new Promise(resolve => setTimeout(resolve, 10))
   }
   throw new Error(`child: the session never reported "${wanted}"`)
@@ -214,13 +210,13 @@ if (mode === 'clean') {
   await pause()
   agent.followup(createUserMessage({ content: [{ type: 'text', text: PENDING_INPUT }], source: { kind: 'user' } }))
   await until(() => seen.length === 1, 'the request standing at the gate')
-  await untilPhase('paused')
+  await untilPhase('safe')
 } else if (mode === 'goal') {
   ctx.goals.create(agent, { objective: GOAL_OBJECTIVE })
   agent.followup(createUserMessage({ content: [{ type: 'text', text: 'start the work' }], source: { kind: 'user' } }))
   await agent.whenIdle()
   await pause()
-  await untilPhase('paused')
+  await untilPhase('safe')
 } else if (mode === 'tool-result') {
   agent.followup(createUserMessage({ content: [{ type: 'text', text: 'run the tool' }], source: { kind: 'user' } }))
   await until(() => toolStarted, 'the tool in flight')
@@ -229,13 +225,13 @@ if (mode === 'clean') {
   // the gate catches: the park point with the tool's results already in hand.
   releaseTool()
   await until(() => seen.length === 2, 'the request answering the tool results')
-  await untilPhase('paused')
+  await untilPhase('safe')
 } else if (mode === 'draining' || mode === 'goal-draining') {
   if (mode === 'goal-draining') ctx.goals.create(agent, { objective: GOAL_OBJECTIVE })
   agent.followup(createUserMessage({ content: [{ type: 'text', text: 'run the tool' }], source: { kind: 'user' } }))
   await until(() => toolStarted, 'the tool in flight')
   await pause()
-  await untilPhase('pausing')
+  await untilPhase('draining')
 } else if (mode === 'pair') {
   agent.followup(createUserMessage({ content: [{ type: 'text', text: 'run both tools' }], source: { kind: 'user' } }))
   await until(() => fastDone && slowStarted, 'the first result recorded and the second call in flight')
@@ -247,13 +243,13 @@ if (mode === 'clean') {
   // park can never reach its point, and killing here leaves exactly the pair
   // the morning list has to tell apart.
   await pause()
-  await untilPhase('pausing')
+  await untilPhase('draining')
 } else if (mode === 'parking') {
   await pause()
   await until(() => flushEntered, 'the park checkpoint to be dispatched')
 } else {
   await pause()
-  await untilPhase('save failed')
+  await untilPhase('flush-failed')
 }
 
 // The park flush covered the session as it stood at the park point; this child

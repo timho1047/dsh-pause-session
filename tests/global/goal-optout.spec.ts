@@ -20,7 +20,6 @@
 import { afterAll, describe, expect, it } from 'vitest'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { decodeParkStatus, GOAL_COMMAND, STATUS_COMMAND } from '../../src/shared.ts'
 import { readParkRegistry } from '../registry/read.ts'
 import { GOAL_OBJECTIVE } from '../resume/case.ts'
 import {
@@ -75,18 +74,17 @@ async function parkCleanGoal(caseRoot: string, sessionId: string, optOut: boolea
     agent.followup(ask('start the work'))
     await agent.whenIdle()
 
-    expect((await evening.run(agent, 'pause')).kind).toBe('success')
+    expect((await evening.run(agent, 'pause')).ok).toBe(true)
     await untilAsync(async () => (await evening.status(agent)).verdict === 'safe', 'the clean park to settle')
     expect((await readParkRegistry(storageOf(caseRoot))).map(entry => [String(entry.sessionId), entry.phase]))
       .toEqual([[sessionId, 'safe']])
 
     if (optOut) {
-      // The switch is this session's own verb, and the pause marker is what
-      // registered it: no listed row takes part.
-      const switched = await evening.run(agent, GOAL_COMMAND)
-      expect(switched.kind, switched.text).toBe('success')
-      const read = await evening.run(agent, STATUS_COMMAND)
-      const status = read.text === undefined ? undefined : decodeParkStatus(read.text)
+      // The switch is this session's own action, addressed at the session it
+      // changes: no listed row takes part.
+      const switched = await evening.run(agent, 'pause-goal')
+      expect(switched.ok, switched.message).toBe(true)
+      const status = await evening.headerStatus(agent)
       expect(status?.rearmGoal).toBe(false)
       await rearmUntil(storageOf(caseRoot), sessionId, false)
     }
@@ -107,7 +105,7 @@ describe('the goal opt-out of a cleanly parked session', () => {
     try {
       const desk = await morning.create('morning-desk')
       const answer = await morning.run(desk, 'pause-resume-all')
-      expect(answer.kind, JSON.stringify(answer)).toBe('success')
+      expect(answer.ok, JSON.stringify(answer)).toBe(true)
       const agent = morning.ctx.agents.get(SessionId('evening-goal-off'))
       expect(agent, 'the cleanly parked session was not resumed').toBeDefined()
 
@@ -133,7 +131,7 @@ describe('the goal opt-out of a cleanly parked session', () => {
     try {
       const desk = await morning.create('morning-desk')
       const answer = await morning.run(desk, 'pause-resume-all')
-      expect(answer.kind, JSON.stringify(answer)).toBe('success')
+      expect(answer.ok, JSON.stringify(answer)).toBe(true)
       const agent = morning.ctx.agents.get(SessionId('evening-goal-on'))
       expect(agent, 'the cleanly parked session was not resumed').toBeDefined()
       await until(() => morning.ctx.goals.get(agent!)?.activation === 'armed', 'the goal to come back')

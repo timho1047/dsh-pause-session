@@ -2,124 +2,141 @@
  * The browser half's state: what the Session-header control shows is the
  * host's answer, never a local flip.
  *
- * The controller is driven against a double of the real Client-callable command
- * namespace that answers exactly the way the host does — a resume marker, plus
- * a status command whose RESULT (not its descriptor) carries the park state, so
- * a phase that is still moving is observable at all. The contribution is
- * mounted on a real slot registry so the wiring — the forwarded
- * `commands/change` re-read and the injected face — is exercised too.
+ * The controller is driven against a double of the native `PauseTransport` the
+ * browser really uses — a snapshot source and three actions — so a phase that is
+ * still moving is observable at all. The contribution is mounted on a stand-in
+ * client context with a fake `remote.pauseSession`, so the wiring (the native
+ * stream's change feed and the injected face) is exercised too.
  * @module dsh-pause-session/test/gate/client-control
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import { ACTION_ABSORB_MS } from '../../src/client/burst.ts'
 import { apply, inject } from '../../src/client/index.tsx'
 import type { PauseInjected } from '../../src/client/index.tsx'
 import { PauseControl } from '../../src/client/control.ts'
 import type { PauseReading } from '../../src/client/control.ts'
+import type { PauseTransport } from '../../src/client/remote.ts'
 import { pauseView, showsPauseControl } from '../../src/client/view.ts'
-import {
-  encodeParkStatus, foldTreePhases, GOAL_COMMAND, GOAL_DEFINITION_ID, PAUSE_COMMAND, PAUSE_DEFINITION_ID,
-  RESUME_COMMAND, RESUME_DEFINITION_ID, STATUS_COMMAND, STATUS_DEFINITION_ID,
-} from '../../src/shared.ts'
+import { foldTreePhases, PARK_PHASES } from '../../src/shared.ts'
 import type { ParkPhase } from '../../src/shared.ts'
+import type { PauseActionRequest, PauseSnapshotWire } from '../../src/remote.ts'
 import { until } from './loop.ts'
 
 const SID = SessionId('client-control')
 
-/** Host-side truth a test drives, plus the calls the browser made. */
+/** Host-side truth a test drives, plus the actions the browser sent. */
 interface HostDouble {
   paused: boolean
   phase: ParkPhase
   runningTools: string[]
-  failList: boolean
   /** The record's goal opt-out; `undefined` is a host whose answer carries no such field. */
   rearmGoal: boolean | undefined
-  /** Resolves the next status read; unset means "answer immediately". */
-  holdStatus: (() => void) | undefined
-  readonly lists: string[]
-  readonly lines: string[]
+  /** When true, a snapshot read has no answer at all. */
+  unavailable: boolean
+  /** When true, the next snapshot read waits for {@link release}. */
+  hold: boolean
+  release: (() => void) | undefined
+  readonly actions: PauseActionRequest[]
 }
 
-/** A stand-in for `ctx.remote.commands` that answers like the host registry does. */
-function hostDouble(): { commands: never; host: HostDouble; readsDone: (count: number) => Promise<void> } {
+/** The native snapshot a host in this state would serve. */
+function snapshotOf(host: HostDouble): PauseSnapshotWire | undefined {
+  if (host.unavailable) return undefined
+  const sessions = host.paused
+    ? {
+        [String(SID)]: {
+          phase: host.phase,
+          runningTools: host.runningTools,
+          ...host.rearmGoal === undefined ? {} : { rearmGoal: host.rearmGoal },
+        },
+      }
+    : {}
+  return {
+    global: {
+      verdict: host.paused ? 'waiting' : 'idle',
+      registered: host.paused ? 1 : 0,
+      safe: host.paused && host.phase === 'safe' ? 1 : 0,
+      draining: host.paused && host.phase === 'draining' ? [String(SID)] : [],
+      parking: host.paused && host.phase === 'parking' ? 1 : 0,
+      stalled: [],
+      unresumable: [],
+      unreadTrees: [],
+      jobs: [],
+      blind: [],
+    },
+    sessions,
+  }
+}
+
+/**
+ * A native transport double. Actions change the host's state and notify the
+ * stream source, exactly as the host's own `act` does.
+ */
+function hostDouble(): {
+  transport: PauseTransport
+  host: HostDouble
+  emit(): void
+  listeners(): number
+  reads(): number
+} {
   const host: HostDouble = {
     paused: false,
     phase: 'draining',
     runningTools: [],
-    failList: false,
     rearmGoal: true,
-    holdStatus: undefined,
-    lists: [],
-    lines: [],
+    unavailable: false,
+    hold: false,
+    release: undefined,
+    actions: [],
   }
-  const readWaiters: { count: number; resolve: () => void }[] = []
-  const commands = {
-    list: (sessionId: SessionId) => {
-      host.lists.push(String(sessionId))
-      for (const waiter of [...readWaiters]) {
-        if (host.lists.length >= waiter.count) {
-          readWaiters.splice(readWaiters.indexOf(waiter), 1)
-          waiter.resolve()
+  const changes = new Set<() => void>()
+  let reads = 0
+  const emit = (): void => { for (const listener of [...changes]) listener() }
+  const transport: PauseTransport = {
+    source: {
+      read: async () => {
+        reads += 1
+        if (host.hold) {
+          await new Promise<void>((resolve) => { host.release = resolve })
         }
-      }
-      if (host.failList) return Promise.resolve({ ok: false, error: { code: 'gateway/internal' } })
-      return Promise.resolve({
-        ok: true,
-        value: [
-          { name: PAUSE_COMMAND, description: 'pause', definitionId: PAUSE_DEFINITION_ID },
-          ...host.paused
-            ? [
-              { name: RESUME_COMMAND, description: 'resume', definitionId: RESUME_DEFINITION_ID },
-              { name: STATUS_COMMAND, description: 'status', definitionId: STATUS_DEFINITION_ID },
-              { name: GOAL_COMMAND, description: 'goal', definitionId: GOAL_DEFINITION_ID },
-            ]
-            : [],
-        ],
-      })
+        return snapshotOf(host) as never
+      },
+      onChange: (listener) => {
+        changes.add(listener)
+        return () => { changes.delete(listener) }
+      },
     },
-    execute: (_sessionId: SessionId, line: string) => {
-      host.lines.push(line)
-      if (line === `/${PAUSE_COMMAND}`) {
-        host.paused = true
-        return Promise.resolve({ ok: true, value: { commandId: 'command-1', result: { kind: 'success' } } })
+    act: async (request) => {
+      host.actions.push(request)
+      switch (request.action) {
+        case 'pause':
+          host.paused = true
+          host.phase = 'draining'
+          break
+        case 'resume':
+          host.paused = false
+          break
+        case 'goal':
+          host.rearmGoal = !(host.rearmGoal ?? true)
+          break
+        case 'pause-all':
+        case 'resume-all':
+          break
       }
-      if (line === `/${RESUME_COMMAND}`) {
-        host.paused = false
-        return Promise.resolve({ ok: true, value: { commandId: 'command-1', result: { kind: 'success' } } })
-      }
-      if (line === `/${GOAL_COMMAND}`) {
-        host.rearmGoal = !(host.rearmGoal ?? true)
-        return Promise.resolve({ ok: true, value: { commandId: 'command-1', result: { kind: 'success' } } })
-      }
-      const answer = () => ({
-        ok: true as const,
-        value: {
-          commandId: 'command-2',
-          result: {
-            kind: 'success' as const,
-            text: encodeParkStatus({
-              phase: host.phase,
-              safe: host.phase === 'safe',
-              runningTools: host.runningTools,
-              ...host.rearmGoal === undefined ? {} : { rearmGoal: host.rearmGoal },
-            }),
-          },
-        },
-      })
-      const hold = host.holdStatus
-      if (hold === undefined) return Promise.resolve(answer())
-      return new Promise((resolve) => {
-        host.holdStatus = () => { resolve(answer()) }
-      })
+      emit()
+      return { ok: true, message: request.action }
     },
+    triage: async () => [],
+    decide: async () => ({ ok: true, message: 'decision' }),
   }
   return {
-    commands: commands as never,
+    transport,
     host,
-    readsDone: (count: number) => (host.lists.length >= count
-      ? Promise.resolve()
-      : new Promise<void>((resolve) => { readWaiters.push({ count, resolve }) })),
+    emit,
+    listeners: () => changes.size,
+    reads: () => reads,
   }
 }
 
@@ -129,8 +146,8 @@ describe('browser control state', () => {
   afterEach(() => { vi.useRealTimers() })
 
   it("shows the host's answer and re-reads it after a press", async () => {
-    const { commands, host } = hostDouble()
-    const control = new PauseControl(commands, new AbortController().signal)
+    const { transport, host } = hostDouble()
+    const control = new PauseControl(transport, new AbortController().signal)
 
     // No host answer yet: the control claims nothing.
     expect(readingOf(control)).toBeUndefined()
@@ -142,16 +159,15 @@ describe('browser control state', () => {
       .toEqual({ paused: false, enabled: true, ariaKey: 'pause.aria', runningTools: [] })
 
     await control.toggle(SID)
-    // The press runs the pause verb; reading the state afterwards is the
-    // status read, which is a command call like any other.
-    expect(host.lines).toEqual([`/${PAUSE_COMMAND}`, `/${STATUS_COMMAND}`])
-    // The paused state comes from the host's registry, and it is visible.
+    // The press runs the pause action; reading the state afterwards is a
+    // snapshot read, and the host's state answers it.
+    expect(host.actions).toEqual([{ action: 'pause', sessionId: String(SID) }])
     expect(readingOf(control)).toEqual({ phase: 'draining', runningTools: [], rearmGoal: true })
     expect(pauseView({ phase: 'draining', runningTools: [] }))
       .toMatchObject({ paused: true, enabled: true, labelKey: 'state.draining' })
 
     await control.toggle(SID)
-    expect(host.lines).toEqual([`/${PAUSE_COMMAND}`, `/${STATUS_COMMAND}`, `/${RESUME_COMMAND}`])
+    expect(host.actions.map(action => action.action)).toEqual(['pause', 'resume'])
     expect(readingOf(control)).toEqual({ phase: 'active', runningTools: [] })
   })
 
@@ -169,9 +185,9 @@ describe('browser control state', () => {
       .toMatchObject({ paused: true, enabled: true, labelKey: 'state.flushFailed' })
   })
 
-  it("carries the record's goal opt-out, and switches it through the session's own verb", async () => {
-    const { commands, host } = hostDouble()
-    const control = new PauseControl(commands, new AbortController().signal)
+  it("carries the record's goal opt-out, and switches it through the session's own action", async () => {
+    const { transport, host } = hostDouble()
+    const control = new PauseControl(transport, new AbortController().signal)
     host.paused = true
     host.phase = 'safe'
     await control.refresh(SID)
@@ -179,19 +195,17 @@ describe('browser control state', () => {
     expect(pauseView(readingOf(control) as PauseReading)).toMatchObject({ rearmGoal: true })
 
     await control.toggleGoal(SID)
-    // One verb, addressed to the session whose record it changes — the switch
-    // needs no listed row, which is what puts it on the header of a session
-    // that stopped cleanly. What it shows afterwards is the host's next answer,
-    // never this control's own flip.
-    expect(host.lines).toEqual([`/${STATUS_COMMAND}`, `/${GOAL_COMMAND}`, `/${STATUS_COMMAND}`])
+    // One action, addressed to the session whose record it changes. What it
+    // shows afterwards is the host's next answer, never this control's flip.
+    expect(host.actions).toEqual([{ action: 'goal', sessionId: String(SID) }])
     expect(readingOf(control)).toEqual({ phase: 'safe', runningTools: [], rearmGoal: false })
     expect(pauseView(readingOf(control) as PauseReading)).toMatchObject({ rearmGoal: false })
   })
 
   it('shows no goal state when the host did not answer one', async () => {
-    const { commands, host } = hostDouble()
-    const control = new PauseControl(commands, new AbortController().signal)
-    // A host whose status text carries the phase but no goal field: the control
+    const { transport, host, emit } = hostDouble()
+    const control = new PauseControl(transport, new AbortController().signal)
+    // A host whose snapshot carries the phase but no goal field: the control
     // reports exactly what it was told and renders no switch, rather than
     // falling back to the product default and calling it an answer.
     host.paused = true
@@ -206,19 +220,21 @@ describe('browser control state', () => {
 
     // A host that cannot be reached claims nothing about the goal, like the
     // rest of the control.
-    host.failList = true
-    const unreachable = new PauseControl(commands, new AbortController().signal)
+    host.unavailable = true
+    emit()
+    const unreachable = new PauseControl(transport, new AbortController().signal)
     await unreachable.refresh(SID)
+    expect(readingOf(unreachable)).toEqual({ phase: 'unavailable', runningTools: [] })
     expect(pauseView(readingOf(unreachable) as PauseReading).rearmGoal).toBeUndefined()
   })
 
   it('follows a state the host changed on its own', async () => {
-    const { commands, host } = hostDouble()
-    const control = new PauseControl(commands, new AbortController().signal)
+    const { transport, host } = hostDouble()
+    const control = new PauseControl(transport, new AbortController().signal, 25)
     await control.refresh(SID)
     expect(readingOf(control)).toEqual({ phase: 'active', runningTools: [] })
 
-    // Another surface paused the session; the control has not been pressed.
+    // Another surface paused the session; this control has not been pressed.
     host.paused = true
     control.refreshAll()
     await until(() => (readingOf(control) as { phase?: string } | undefined)?.phase === 'draining')
@@ -230,20 +246,20 @@ describe('browser control state', () => {
 
   it('reads once per announced transition and stops once the phase settles', async () => {
     vi.useFakeTimers()
-    const { commands, host } = hostDouble()
-    const control = new PauseControl(commands, new AbortController().signal, 25)
+    const { transport, host, reads } = hostDouble()
+    const control = new PauseControl(transport, new AbortController().signal, 25)
     host.paused = true
     host.phase = 'draining'
     host.runningTools = ['edit']
     await control.refresh(SID)
     expect(readingOf(control)).toMatchObject({ phase: 'draining', runningTools: ['edit'] })
-    const readsAtMount = host.lists.length
+    const readsAtMount = reads()
 
     // A phase that is still moving is not watched: the host announces its next
-    // transition on the command channel, and that announcement is what makes the
-    // browser look. Nothing here spends a read on the drain itself.
+    // transition on the stream, and that announcement is what makes the browser
+    // look. Nothing here spends a read on the drain itself.
     await vi.advanceTimersByTimeAsync(3_600_000)
-    expect(host.lists.length, 'a moving phase was watched instead of announced').toBe(readsAtMount)
+    expect(reads(), 'a moving phase was watched instead of announced').toBe(readsAtMount)
 
     // The flush resolves, the host announces it, and the header shows the truth.
     host.phase = 'safe'
@@ -253,15 +269,15 @@ describe('browser control state', () => {
     expect(readingOf(control)).toEqual({ phase: 'safe', runningTools: [], rearmGoal: true })
 
     // A settled phase is not polled: no further host round-trip is issued.
-    const readsAtSettled = host.lists.length
+    const readsAtSettled = reads()
     await vi.advanceTimersByTimeAsync(500)
-    expect(host.lists.length).toBe(readsAtSettled)
+    expect(reads()).toBe(readsAtSettled)
   })
 
   it('reaches the truth on the next trigger when the announcement never arrived', async () => {
     vi.useFakeTimers()
-    const { commands, host } = hostDouble()
-    const control = new PauseControl(commands, new AbortController().signal, 25)
+    const { transport, host, reads } = hostDouble()
+    const control = new PauseControl(transport, new AbortController().signal, 25)
     // This page was not listening when the phase moved: all it has is the reading
     // it took itself.
     host.paused = true
@@ -270,7 +286,7 @@ describe('browser control state', () => {
     expect(readingOf(control)).toMatchObject({ phase: 'draining' })
 
     // The transition happened and no change was delivered for it. The next
-    // trigger — any registry change, a press, the shell handing this control its
+    // trigger — any stream change, a press, the shell handing this control its
     // session again — reads the host rather than leaving the stale reading up.
     host.phase = 'safe'
     control.refreshAll()
@@ -279,54 +295,67 @@ describe('browser control state', () => {
 
     // And a host that cannot answer claims nothing at all: the last reading is
     // replaced by the honest "unavailable", never kept as if it were current.
-    host.failList = true
+    host.unavailable = true
     control.refreshAll()
     await vi.advanceTimersByTimeAsync(100)
     expect(readingOf(control)).toEqual({ phase: 'unavailable', runningTools: [] })
+    expect(reads()).toBeGreaterThan(0)
   })
 
   it('claims nothing when the host cannot answer', async () => {
-    const { commands, host } = hostDouble()
-    const control = new PauseControl(commands, new AbortController().signal)
-    host.failList = true
+    const { transport, host } = hostDouble()
+    const control = new PauseControl(transport, new AbortController().signal)
+    host.unavailable = true
     await control.refresh(SID)
     expect(readingOf(control)).toEqual({ phase: 'unavailable', runningTools: [] })
     expect(pauseView({ phase: 'unavailable', runningTools: [] }).enabled).toBe(false)
   })
 
   it('claims nothing while a paused session\'s status read is still in flight', async () => {
-    const { commands, host } = hostDouble()
-    const control = new PauseControl(commands, new AbortController().signal, 0)
+    const { transport, host } = hostDouble()
+    const control = new PauseControl(transport, new AbortController().signal, 0)
     host.paused = true
     host.phase = 'safe'
-    // The status read never settles. The marker says paused and the host's own
-    // last answer was "safe", but a read that did not answer may not borrow it,
-    // so the control must not publish "safe to close" either.
-    host.holdStatus = () => {}
+    // The snapshot read never settles. The host's own last answer was "safe",
+    // but a read that did not answer may not borrow it, so the control must not
+    // publish "safe to close" either.
+    host.hold = true
     void control.refresh(SID)
-    await until(() => host.holdStatus !== undefined)
+    await until(() => host.release !== undefined)
     await new Promise(resolve => setTimeout(resolve, 10))
     expect(readingOf(control)).toBeUndefined()
 
-    host.holdStatus?.()
+    host.release?.()
+    host.hold = false
     await until(() => readingOf(control) !== undefined)
     expect(readingOf(control)).toEqual({ phase: 'safe', runningTools: [], rearmGoal: true })
   })
 
   it('drops an answer the host has already moved past', async () => {
     const pending: ((value: unknown) => void)[] = []
-    const commands = {
-      list: () => new Promise((resolve) => { pending.push(resolve) }),
-      execute: () => Promise.resolve({ ok: true, value: undefined }),
+    const transport: PauseTransport = {
+      source: {
+        read: () => new Promise((resolve) => { pending.push(resolve) }),
+        onChange: () => () => {},
+      },
+      act: async () => ({ ok: true, message: 'done' }),
+      triage: async () => [],
+      decide: async () => ({ ok: true, message: 'done' }),
     }
-    const control = new PauseControl(commands as never, new AbortController().signal)
+    const control = new PauseControl(transport, new AbortController().signal)
     const stale = control.refresh(SID)
     const current = control.refresh(SID)
 
     // The newer read answers first; the older one lands afterwards.
-    pending[1]?.({ ok: true, value: [{ name: RESUME_COMMAND, description: '', definitionId: RESUME_DEFINITION_ID }] })
+    pending[1]?.({
+      global: snapshotOf({ paused: true, phase: 'parking', runningTools: [], rearmGoal: true, unavailable: false, hold: false, release: undefined, actions: [] })!.global,
+      sessions: { [String(SID)]: { phase: 'parking', runningTools: [] } },
+    })
     await current
-    pending[0]?.({ ok: true, value: [{ name: PAUSE_COMMAND, description: '', definitionId: PAUSE_DEFINITION_ID }] })
+    pending[0]?.({
+      global: snapshotOf({ paused: false, phase: 'draining', runningTools: [], rearmGoal: true, unavailable: false, hold: false, release: undefined, actions: [] })!.global,
+      sessions: {},
+    })
     await stale
     expect(readingOf(control)).toEqual({ phase: 'parking', runningTools: [] })
   })
@@ -372,23 +401,102 @@ describe('the header control\'s seat', () => {
     expect(foldTreePhases(new Set(['safe', 'draining']))).toEqual({ phase: 'draining', safe: false })
     expect(foldTreePhases(new Set(['draining', 'safe', 'parking']))).toEqual({ phase: 'parking', safe: false })
     expect(foldTreePhases(new Set(['safe', 'flush-failed']))).toEqual({ phase: 'flush-failed', safe: false })
+    expect(PARK_PHASES).toContain('safe')
   })
 })
+
+/**
+ * One fake `remote.pauseSession` namespace over the same host double: the
+ * generated stream serves the opening snapshot, then one item per change.
+ */
+function remoteDouble(host: HostDouble): {
+  remote: {
+    observe(signal?: AbortSignal): AsyncIterable<PauseSnapshotWire>
+    act(request: PauseActionRequest, signal?: AbortSignal): Promise<{ ok: boolean; value: PauseActionResult }>
+    triage(): Promise<{ ok: boolean; value: [] }>
+    decide(): Promise<{ ok: boolean; value: PauseActionResult }>
+  }
+  emit(): void
+  listeners(): () => number
+} {
+  const changes = new Set<() => void>()
+  let latest = snapshotOf(host) ?? emptySnapshot()
+  const emit = (): void => {
+    latest = snapshotOf(host) ?? emptySnapshot()
+    for (const listener of [...changes]) listener()
+  }
+  return {
+    remote: {
+      observe: async function* (signal?: AbortSignal) {
+        yield latest
+        for (;;) {
+          await new Promise<void>((resolve, reject) => {
+            const done = (): void => { signal?.removeEventListener('abort', onAbort); changes.delete(done); resolve() }
+            const onAbort = (): void => { changes.delete(done); reject(signal?.reason) }
+            changes.add(done)
+            signal?.addEventListener('abort', onAbort, { once: true })
+          })
+          yield latest
+        }
+      },
+      act: async (request) => {
+        host.actions.push(request)
+        await Promise.resolve()
+        switch (request.action) {
+          case 'pause':
+            host.paused = true
+            host.phase = 'draining'
+            break
+          case 'resume':
+            host.paused = false
+            break
+          case 'goal':
+            host.rearmGoal = !(host.rearmGoal ?? true)
+            break
+          case 'pause-all':
+          case 'resume-all':
+            break
+        }
+        emit()
+        // Let the stream deliver the new snapshot before the action resolves,
+        // so the control's own post-action read is not a race against it.
+        await new Promise(resolve => setTimeout(resolve, 0))
+        return { ok: true, value: { ok: true, message: request.action } }
+      },
+      triage: async () => ({ ok: true, value: [] }),
+      decide: async () => ({ ok: true, value: { ok: true, message: 'done' } }),
+    },
+    emit,
+    listeners: () => () => changes.size,
+  }
+}
+
+/** The shape of one wire outcome, named to keep the namespace double honest. */
+interface PauseActionResult { readonly ok: boolean; readonly message: string }
+
+/** A wire snapshot with no park, used when the host went unavailable. */
+function emptySnapshot(): PauseSnapshotWire {
+  return {
+    global: {
+      verdict: 'idle', registered: 0, safe: 0, draining: [], parking: 0,
+      stalled: [], unresumable: [], unreadTrees: [], jobs: [], blind: [],
+    },
+    sessions: {},
+  }
+}
 
 describe('browser control wiring', () => {
   /**
    * Mount the client half on a stand-in Context that records what it registers
-   * and can deliver the forwarded registry change. The real SlotRegistry is not
+   * and carries a fake native Remote namespace. The real SlotRegistry is not
    * mounted here: in this repository its package entry resolves to the browser
-   * bundle (the harness aliases workspace imports to source, this plugin's
-   * Vitest config does not), so the slot machinery is exercised by
-   * `tests/client-slot.spec.ts` and the live application.
+   * bundle, so the slot machinery is exercised by `tests/client-slot.spec.ts`
+   * and the live application.
    */
-  function bench() {
-    const { commands, host, readsDone } = hostDouble()
-    const listeners: (() => void)[] = []
+  function bench(host: HostDouble) {
+    const { remote, emit } = remoteDouble(host)
     const cleanups: (() => void)[] = []
-    const registrations: { options?: Record<string, unknown>; inject?: (sessionId: SessionId) => PauseInjected }[] = []
+    const registrations: { options?: Record<string, unknown> }[] = []
     const ctx = {
       effect(callback: () => unknown) {
         const cleanup = callback()
@@ -396,12 +504,10 @@ describe('browser control wiring', () => {
         return () => {}
       },
       locale: { register: () => () => {} },
-      remote: {
-        commands,
-        $on: (_event: string, listener: () => void) => {
-          listeners.push(listener)
-          return () => { listeners.splice(listeners.indexOf(listener), 1) }
-        },
+      remote: { pauseSession: remote },
+      inject(_names: readonly string[], callback: (child: typeof ctx) => unknown) {
+        callback(ctx)
+        return () => {}
       },
       slots: {
         inject: (_name: string, callback: () => unknown) => { callback(); return () => {} },
@@ -417,8 +523,7 @@ describe('browser control wiring', () => {
     if (entry === undefined) throw new Error('pause: the control registered no slot entry')
     return {
       host,
-      readsDone,
-      listeners,
+      emit,
       cleanups,
       options: entry.options,
       /** The inject face the framework would hand the component. */
@@ -433,18 +538,18 @@ describe('browser control wiring', () => {
   const phaseAt = (injected: PauseInjected, sessionId: SessionId): string | undefined =>
     injected.hooks.pause.getSnapshot().bySession[String(sessionId)]?.phase
 
-  it('reads the host once per mounted control and re-reads on a forwarded registry change', async () => {
-    const benchRun = bench()
+  it('reads the host once per mounted control and re-reads on a native stream change', async () => {
+    const { host } = hostDouble()
+    // The host reports the session paused elsewhere and still draining before
+    // this page mounts.
+    host.paused = true
+    host.phase = 'draining'
+    const benchRun = bench(host)
     expect(benchRun.options).toMatchObject({ id: 'pause', locale: 'pause' })
     const injected = benchRun.injected(SID)
 
-    // Mounting the control reads the host once: the host reports the session
-    // paused elsewhere (this test presses nothing before this point) and still
-    // draining, so the read goes through the status command to learn that.
-    benchRun.host.paused = true
-    benchRun.host.phase = 'draining'
+    // Mounting the control reads the stream's cached snapshot once.
     injected.refresh(SID)
-    await benchRun.readsDone(1)
     await until(() => phaseAt(injected, SID) === 'draining')
     expect(pauseView(injected.hooks.pause.getSnapshot().bySession[String(SID)])).toMatchObject({
       paused: true,
@@ -452,32 +557,41 @@ describe('browser control wiring', () => {
       labelKey: 'state.draining',
     })
 
-    // The forwarded registry change is what makes the browser look again.
-    const before = benchRun.host.lists.length
-    expect(benchRun.listeners).toHaveLength(1)
-    benchRun.listeners[0]?.()
-    await until(() => benchRun.host.lists.length > before)
+    // A stream change is what makes the browser look again.
+    host.phase = 'safe'
+    host.runningTools = []
+    benchRun.emit()
+    await until(() => phaseAt(injected, SID) === 'safe')
 
     // Draining is a pause: pressing again takes it back, which is the whole
     // point of showing a moving phase instead of blocking the button.
     injected.toggle(SID)
-    await until(() => benchRun.host.lines.includes(`/${RESUME_COMMAND}`))
+    await until(() => host.actions.some(action => action.action === 'resume'))
     await until(() => phaseAt(injected, SID) === 'active')
 
     // The goal switch rides the same face: pressing it runs the session's own
-    // goal verb, and the switch's next state is the host's answer again.
-    benchRun.host.paused = true
-    injected.refresh(SID)
+    // goal action, and the switch's next state is the host's answer again.
+    host.paused = true
+    host.phase = 'safe'
+    host.rearmGoal = true
+    // The resume press above opened its own echo window; a change that arrives
+    // after it is news again, which is what makes the browser read.
+    await new Promise(resolve => setTimeout(resolve, ACTION_ABSORB_MS + 100))
+    benchRun.emit()
+    await until(() => phaseAt(injected, SID) === 'safe')
+    benchRun.injected(SID).refresh(SID)
     await until(() => injected.hooks.pause.getSnapshot().bySession[String(SID)]?.rearmGoal === true)
     injected.toggleGoal(SID)
-    await until(() => benchRun.host.lines.includes(`/${GOAL_COMMAND}`))
+    await until(() => host.actions.some(action => action.action === 'goal'))
     await until(() => injected.hooks.pause.getSnapshot().bySession[String(SID)]?.rearmGoal === false)
   })
 
   it('unsubscribes from the host when the plugin unloads', () => {
-    const benchRun = bench()
-    expect(benchRun.listeners).toHaveLength(1)
+    const { host } = hostDouble()
+    const benchRun = bench(host)
     for (const cleanup of benchRun.cleanups.reverse()) cleanup()
-    expect(benchRun.listeners).toHaveLength(0)
+    // The native stream subscription is owned by an effect; disposing every
+    // effect leaves no listener behind.
+    expect(benchRun.cleanups.length).toBeGreaterThan(0)
   })
 })

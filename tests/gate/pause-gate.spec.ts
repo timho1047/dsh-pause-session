@@ -6,7 +6,7 @@
  * (resume, request abort, plugin unload) delegates at most once.
  *
  * Every spec drives the plugin through the same host entry point the browser
- * half uses — `ctx.commands.execute` on the real registry.
+ * half uses — the mounted `ctx.pauseSession` Remote actions.
  * @module dsh-pause-session/test/gate/pause-gate
  */
 
@@ -15,7 +15,6 @@ import { createUserMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { defineContentToolFixture } from '@deepseek-ai/dsh-tool-testkit'
-import { PAUSE_COMMAND, RESUME_COMMAND } from '../../src/shared.ts'
 import { textResponse } from '../assumptions/fake-provider.ts'
 import { control, mountGatedLoop, turnEnd, until } from './loop.ts'
 
@@ -63,14 +62,14 @@ describe('pause gate: a paused session issues no model request', () => {
       await agent.whenIdle()
       expect(provider.requests).toHaveLength(1)
 
-      await control(ctx, agent, PAUSE_COMMAND)
+      await control(ctx, agent, 'pause')
       agent.followup(ask('second'))
       await loop.requestSeen(2)
       // The loop is parked inside a real turn with the request already built.
       expect(agent.status).toBe('running')
       expect(provider.requests).toHaveLength(1)
 
-      await control(ctx, agent, RESUME_COMMAND)
+      await control(ctx, agent, 'pause-resume')
       await agent.whenIdle()
       expect(provider.requests).toHaveLength(2)
       // Criterion: the request sent after the pause IS the one built before it.
@@ -92,7 +91,7 @@ describe('pause gate: a paused session issues no model request', () => {
     const loop = await mountGatedLoop('gate-timers', [textResponse('held answer')], { idleTimeoutMs: 100 })
     const { ctx, provider, agent } = loop
     try {
-      await control(ctx, agent, PAUSE_COMMAND)
+      await control(ctx, agent, 'pause')
       vi.useFakeTimers()
       let timersWhileHeld: number
       try {
@@ -109,7 +108,7 @@ describe('pause gate: a paused session issues no model request', () => {
       expect(timersWhileHeld).toBe(0)
       expect(provider.requests).toHaveLength(0)
 
-      await control(ctx, agent, RESUME_COMMAND)
+      await control(ctx, agent, 'pause-resume')
       await agent.whenIdle()
       expect(provider.requests).toHaveLength(1)
       expect(turnEnd(agent)).toEqual({ turn: 1, reason: { kind: 'completed' } })
@@ -145,7 +144,7 @@ describe('pause gate: a paused session issues no model request', () => {
       agent.followup(ask('run the tool'))
       await until(() => started)
       // Paused mid-tool: the pause lands at the NEXT model boundary only.
-      await control(ctx, agent, PAUSE_COMMAND)
+      await control(ctx, agent, 'pause')
       releaseTool()
       await until(() => completed)
       expect(abortedWhenDone).toBe(false)
@@ -157,7 +156,7 @@ describe('pause gate: a paused session issues no model request', () => {
       await loop.requestSeen(2)
       expect(provider.requests).toHaveLength(1)
 
-      await control(ctx, agent, RESUME_COMMAND)
+      await control(ctx, agent, 'pause-resume')
       await agent.whenIdle()
       expect(provider.requests).toHaveLength(2)
       expect(provider.requests[1]).toBe(loop.seen[1])
@@ -176,7 +175,7 @@ describe('pause gate: a paused session issues no model request', () => {
     ])
     const { ctx, provider, agent } = loop
     try {
-      await control(ctx, agent, PAUSE_COMMAND)
+      await control(ctx, agent, 'pause')
       agent.followup(ask('hold the loop request only'))
       await loop.requestSeen(1)
       expect(provider.requests).toHaveLength(0)
@@ -187,7 +186,7 @@ describe('pause gate: a paused session issues no model request', () => {
       expect(title.some(chunk => chunk.type === 'finish')).toBe(true)
       expect(provider.requests.map(request => request.purpose)).toEqual(['compaction', 'session-title'])
 
-      await control(ctx, agent, RESUME_COMMAND)
+      await control(ctx, agent, 'pause-resume')
       await agent.whenIdle()
       expect(provider.requests).toHaveLength(3)
       // The loop's request — held, and recorded first — is the last to arrive.
@@ -201,7 +200,7 @@ describe('pause gate: a paused session issues no model request', () => {
     const loop = await mountGatedLoop('gate-abort', [textResponse('never sent')])
     const { ctx, provider, agent } = loop
     try {
-      await control(ctx, agent, PAUSE_COMMAND)
+      await control(ctx, agent, 'pause')
       agent.followup(ask('hold me'))
       await loop.requestSeen(1)
       expect(provider.requests).toHaveLength(0)
@@ -213,7 +212,7 @@ describe('pause gate: a paused session issues no model request', () => {
       expect(agent.status).toBe('idle')
 
       // The stranded pause now opens: the request is long gone.
-      await control(ctx, agent, RESUME_COMMAND)
+      await control(ctx, agent, 'pause-resume')
       await new Promise(resolve => setTimeout(resolve, 20))
       expect(provider.requests).toHaveLength(0)
       expect(loop.seen).toHaveLength(1)
@@ -226,7 +225,7 @@ describe('pause gate: a paused session issues no model request', () => {
     const loop = await mountGatedLoop('gate-unload', [textResponse('never sent')])
     const { ctx, provider, agent, plugin } = loop
     try {
-      await control(ctx, agent, PAUSE_COMMAND)
+      await control(ctx, agent, 'pause')
       agent.followup(ask('hold me'))
       await loop.requestSeen(1)
 

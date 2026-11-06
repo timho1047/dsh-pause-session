@@ -1,81 +1,12 @@
 /**
- * The identities both halves of dsh-pause-session name, the status encodings they
- * share, and the one spelling a host log line gives a caught value.
+ * The identities both halves of dsh-pause-session name, the phase vocabulary
+ * they share, and the one spelling a host log line gives a caught value.
  *
  * The browser bundle may value-import only the shell's baseline module table,
- * so this module imports nothing: the client half reads command names and the
- * decode functions from it directly, and the host half derives the branded
- * identities from the same strings.
- *
- * The browser reads the live state through the plugin's same-origin JSON
- * status route when the Web carrier mounts it; the command registry remains
- * the action channel and the fallback for carriers without that route. A
- * command descriptor's free-form field is its `description`, and a command
- * result's is its `text`, so the fallback park state travels as a prefix plus
- * `;`-separated fields on one of those. The text stays human-readable: the same
- * words are what the slash-command menu shows.
- *
- * Every value inside a field is escaped, so a decoded name is the exact name
- * that was encoded. Session ids, tool names, and call ids are the host's own
- * data and may contain the `;`, `,`, `/`, or newline a field is separated by; a
- * folded spelling would decode as a different name — a different row, looked up
- * again.
+ * so this module imports nothing. The native Remote payloads are the live
+ * vocabulary; there is no command encoding or slash-command surface here.
  * @module dsh-pause-session/shared
  */
-/** Command that pauses the receiving session before its next model request. */
-export declare const PAUSE_COMMAND = "pause";
-/** Command that resumes the receiving session; registered only while that session is paused. */
-export declare const RESUME_COMMAND = "pause-resume";
-/** Command that resumes every parked session the registry remembers. */
-export declare const RESUME_ALL_COMMAND = "pause-resume-all";
-/** Command that registers and parks every running session tree in one action. */
-export declare const PAUSE_ALL_COMMAND = "pause-all";
-/** Command that reports the whole-app park state; registered globally, always. */
-export declare const STATE_ALL_COMMAND = "pause-state-all";
-/** Command that reports the receiving session's park state; registered only while it is paused. */
-export declare const STATUS_COMMAND = "pause-state";
-/** Command that turns the receiving session's own goal re-arm on or off; registered only while it is paused. */
-export declare const GOAL_COMMAND = "pause-goal";
-/** Command that reports every session that did not stop cleanly. */
-export declare const TRIAGE_COMMAND = "pause-triage";
-/** Command that resumes one session from the decision list exactly as the clean path would. */
-export declare const TRIAGE_CONTINUE_COMMAND = "pause-triage-continue";
-/** Command that resumes one session from the decision list with the unknown-outcome note. */
-export declare const TRIAGE_NOTE_COMMAND = "pause-triage-note";
-/** Command that opens one session from the decision list without spending a request. */
-export declare const TRIAGE_REVIEW_COMMAND = "pause-triage-review";
-/** Command that leaves one session from the decision list exactly as it is. */
-export declare const TRIAGE_LEAVE_COMMAND = "pause-triage-leave";
-/** Command that turns one listed session's goal re-arm on or off. */
-export declare const TRIAGE_GOAL_COMMAND = "pause-triage-goal";
-/** Stable definition id of the pause command, matched by identity rather than by copy. */
-export declare const PAUSE_DEFINITION_ID = "dsh-pause-session/pause";
-/** Stable definition id of the resume command: the host's own "this session is paused" fact. */
-export declare const RESUME_DEFINITION_ID = "dsh-pause-session/resume";
-/** Stable definition id of the global resume command, matched by identity rather than by copy. */
-export declare const RESUME_ALL_DEFINITION_ID = "dsh-pause-session/resume-all";
-/** Stable definition id of the whole-app pause command. */
-export declare const PAUSE_ALL_DEFINITION_ID = "dsh-pause-session/pause-all";
-/** Stable definition id of the whole-app status read. */
-export declare const STATE_ALL_DEFINITION_ID = "dsh-pause-session/state-all";
-/** Stable definition id of the status read, matched by identity rather than by copy. */
-export declare const STATUS_DEFINITION_ID = "dsh-pause-session/status";
-/** Stable definition id of the paused session's own goal re-arm toggle. */
-export declare const GOAL_DEFINITION_ID = "dsh-pause-session/goal";
-/** Stable definition id of the decision-list read. */
-export declare const TRIAGE_DEFINITION_ID = "dsh-pause-session/triage";
-/** Stable definition id of the decision-list "continue" verb. */
-export declare const TRIAGE_CONTINUE_DEFINITION_ID = "dsh-pause-session/triage-continue";
-/** Stable definition id of the decision-list "continue with the unknown-outcome note" verb. */
-export declare const TRIAGE_NOTE_DEFINITION_ID = "dsh-pause-session/triage-note";
-/** Stable definition id of the decision-list "open without activating" verb. */
-export declare const TRIAGE_REVIEW_DEFINITION_ID = "dsh-pause-session/triage-review";
-/** Stable definition id of the decision-list "leave it alone today" verb. */
-export declare const TRIAGE_LEAVE_DEFINITION_ID = "dsh-pause-session/triage-leave";
-/** Stable definition id of the decision-list goal re-arm toggle. */
-export declare const TRIAGE_GOAL_DEFINITION_ID = "dsh-pause-session/triage-goal";
-/** First token of every encoded status, so a descriptor is never parsed by accident. */
-export declare const STATUS_PREFIX = "pause: ";
 /**
  * One log line's text for a caught value.
  * @param error - the caught value.
@@ -137,26 +68,6 @@ export interface ParkStatus {
      */
     readonly rearmGoal?: boolean;
 }
-/**
- * Encode one status for a command descriptor.
- * @param status - the state to publish.
- * @returns the descriptor text, e.g. `pause: draining; tools: edit, bash; goal: on`.
- */
-export declare function encodeParkStatus(status: ParkStatus): string;
-/**
- * Decode a status previously written by {@link encodeParkStatus}.
- * @param text - a command descriptor's description.
- * @returns the status, or `undefined` when this text carries none — a foreign
- * command, or a reading taken before the host published anything.
- */
-export declare function decodeParkStatus(text: string): ParkStatus | undefined;
-/**
- * First token of every encoded whole-app status. A different prefix from the
- * per-session status on purpose: one decoder must never read the other's text.
- */
-export declare const GLOBAL_STATUS_PREFIX = "pause all: ";
-/** The one path the Browser reads the host's live pause snapshot from. */
-export declare const STATUS_PATH = "/dsh-pause-session/status";
 /** One JSON snapshot: the whole-app verdict plus every live paused session. */
 export interface PauseSnapshot {
     readonly global: GlobalStatus;
@@ -228,25 +139,6 @@ export interface GlobalStatus {
     /** Whole surfaces the report could not read, so their emptiness is not a fact. */
     readonly blind: readonly GlobalBlindSpot[];
 }
-/**
- * Encode one whole-app status for a command result.
- * @param status - the state to publish.
- * @returns the result text, e.g.
- * `pause all: waiting; registered: 3; safe: 1; parked-at: overnight; draining: overnight; parking: 1; stalled: -; unresumable: -; unread-trees: -; jobs: bash-1; blind: -`.
- */
-export declare function encodeGlobalStatus(status: GlobalStatus): string;
-/**
- * Decode a whole-app status previously written by {@link encodeGlobalStatus}.
- * @param text - a command result's text.
- * @returns the status, or `undefined` when this text carries none.
- */
-export declare function decodeGlobalStatus(text: string): GlobalStatus | undefined;
-/**
- * First token of every encoded decision list. Separate from the per-session and
- * whole-app status prefixes on purpose, for the same reason those two are
- * separate: one decoder must never read another's text.
- */
-export declare const TRIAGE_PREFIX = "pause triage: ";
 /** How one decision-list row was read out of the session's own stored log. */
 export type TriageReading = 'read' | 'unreadable';
 /**
@@ -317,15 +209,3 @@ export interface TriageList {
 export declare const TRIAGE_ACTIONS: readonly ["continue", "note", "review", "leave", "goal"];
 /** One decision the list offers. */
 export type TriageAction = (typeof TRIAGE_ACTIONS)[number];
-/**
- * Encode one decision list for a command result.
- * @param list - the rows to publish.
- * @returns the result text, e.g. `pause triage: 1; row: overnight; phase: draining; stopped: tool/call/turn 1 step 1; tools: gated; wake: yes`.
- */
-export declare function encodeTriageList(list: TriageList): string;
-/**
- * Decode a decision list previously written by {@link encodeTriageList}.
- * @param text - a command result's text.
- * @returns the list, or `undefined` when this text carries none.
- */
-export declare function decodeTriageList(text: string): TriageList | undefined;

@@ -17,8 +17,8 @@
  * Both controls are host-authoritative. On a browser Host they read the
  * same-origin JSON status route, which keeps background reads out of the
  * Session log; a carrier without that route falls back to the command channel.
- * User actions still run through the host's session commands (`./control.ts`
- * and `./global.ts` own both transports). Each control stays inert wherever no
+ * User actions and status both use the generated native Remote namespace;
+ * no slash command is involved. Each control stays inert wherever no
  * round-trip is available rather than rendering a state it cannot support. The
  * header control also reads the whole-app answer the whole-app control
  * publishes, so a park that holds nothing does not cost a host round-trip per
@@ -69,4 +69,10 @@ export type PauseButtonProps = PropsRuntime<'conversation.session.header.actions
  * @returns the header action, or nothing on a subagent session.
  */
 export declare function PauseButton(props: PauseButtonProps): ReactNode;
+/**
+ * Client plugin body: register the locale dictionaries, own both controllers,
+ * follow the host's registry changes, and contribute the per-session control
+ * and the whole-app control into the session header.
+ * @param ctx - client context carrying slots, locale, and the Remote face.
+ */
 export declare function apply(ctx: ClientContext): void;

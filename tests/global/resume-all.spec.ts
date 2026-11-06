@@ -51,7 +51,7 @@ describe('resume all after a park', () => {
       solo.followup(ask('solo work'))
       await untilAsync(async () => before.blocking.started() === 3, 'three tools in flight')
 
-      expect((await before.run(solo, 'pause-all')).kind).toBe('success')
+      expect((await before.run(solo, 'pause-all')).ok).toBe(true)
       before.blocking.releaseAll()
       await untilAsync(async () => (await before.status(solo)).verdict === 'safe', 'the whole park to settle')
       expect((await readParkRegistry(storageOf(caseRoot))).map(entry => [String(entry.sessionId), entry.phase]).sort())
@@ -83,8 +83,8 @@ describe('resume all after a park', () => {
       })
 
       const answer = await home.run(desk, 'pause-resume-all')
-      expect(answer.kind, JSON.stringify(answer)).toBe('success')
-      expect(answer.text).toBe('pause resumed 3 sessions from where they stopped.')
+      expect(answer.ok, JSON.stringify(answer)).toBe(true)
+      expect(answer.message).toBe('pause resumed 3 sessions from where they stopped.')
 
       // One press released all three: every session is live afterwards.
       await until(() => home.ctx.agents.get(PARENT) !== undefined, 'the parent to come back')

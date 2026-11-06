@@ -1,55 +1,41 @@
 /**
  * Browser-side reading and driving of the host's whole-app park state.
  *
- * On a browser Host the aggregate arrives from the same-origin JSON status
- * route, which keeps background reads out of every Session log. A carrier
- * without that route falls back to the session-addressed command channel:
- * `pause-state-all` carries the whole-app status as of the read, and the
- * forwarded `commands/change` event says when to read again.
- *
- * The fallback still needs one session to talk through. It picks a user
- * session the host can serve (never a subagent's own session), preferring the
- * one on screen; once the host's answer names the park's own session, later
- * reads are addressed there. That is the fallback's cost, not the normal Web
- * path: the JSON route is process-wide and writes nothing into any Session.
- *
- * Every phase a session reaches announces itself through the registry — a
- * transition re-registers that session's status verb — so a change is what buys
- * the next read, and the flush that settles a park is announced like every other
- * step (`./burst.ts`). A read that finds work still in flight is therefore the
- * answer to the transition that produced it rather than a reason to keep asking;
- * what the burst still owes is the delivery of a change, and the rows of a panel
- * whose own read did not answer. A settled answer is left on screen unread: the
- * panel stays readable and the pill keeps saying what it says, but the browser
- * stops spending host round-trips on a state that has stopped
- * moving. What owes a read is the host's forwarded registry change, the user's
- * own press or decision, and the first read at mount; once an answer is on
- * screen, the shell handing this control another session to ask through is none
- * of those. A press, a decision and an opened panel each read the host as they
- * run, and the changes they set off are that action's own echo: those are
- * absorbed for a short window (`./burst.ts`), so a forwarded change owes a read
- * exactly when something moved that this browser did not do — with one look owed
- * at the close of that window when the reading the action left is still moving,
- * which is how a park that reaches its final phase inside the echo window is
- * still read.
+ * The aggregate arrives from the native `pauseSession` stream. The stream is
+ * process-wide and writes nothing into any Session; actions travel through the
+ * same Remote namespace. The burst reads the cached snapshot only after the
+ * host announces a change, so a settled park stops spending requests while its
+ * last answer stays on screen.
  * @module dsh-pause-session/client/global
  */
 
-import type { ClientRemote } from '@deepseek-ai/dsh-api-remotes/client'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
-import {
-  decodeGlobalStatus, decodeTriageList, RESUME_ALL_COMMAND, STATE_ALL_COMMAND, PAUSE_ALL_COMMAND,
-  TRIAGE_COMMAND, TRIAGE_CONTINUE_COMMAND, TRIAGE_GOAL_COMMAND, TRIAGE_LEAVE_COMMAND, TRIAGE_NOTE_COMMAND,
-  TRIAGE_REVIEW_COMMAND,
-} from '../shared.js'
 import type { GlobalStatus, TriageAction, TriageRow } from '../shared.js'
+import type { TriageRowWire } from '../remote.js'
 import { burstWaits, DEFAULT_BURST_POLICY, ReadBurst } from './burst.js'
 import type { BurstPolicy } from './burst.js'
 import { globalPauseView } from './view.js'
-import type { PauseStatusSource } from './status.js'
+import type { PauseTransport } from './remote.js'
 
+
+/** Map one Remote row to the list's structured row. */
+function wireTriageRow(row: TriageRowWire): TriageRow {
+  return {
+    sessionId: row.sessionId,
+    phase: row.phase,
+    updatedAt: row.updatedAt,
+    reading: row.reading,
+    ...row.lastEvent === undefined ? {} : { lastEvent: row.lastEvent },
+    ...row.turn === undefined ? {} : { turn: row.turn },
+    ...row.step === undefined ? {} : { step: row.step },
+    traces: row.traces.map(trace => ({ tool: trace.tool, callId: trace.callId ?? '' })),
+    owed: row.owed,
+    wakeable: row.wakeable,
+    rearmGoal: row.rearmGoal,
+  }
+}
 /** What the whole-app control knows: the host's answer, or that it could not ask. */
 export type GlobalReading =
   | { readonly kind: 'reported'; readonly status: GlobalStatus }
@@ -72,14 +58,6 @@ export interface GlobalPauseState {
 
 const INITIAL: GlobalPauseState = { global: undefined, panelOpen: false, triage: undefined }
 
-/** The command one listed verb runs, named from the one vocabulary the host registers. */
-export const TRIAGE_DECISION_COMMAND: Readonly<Record<TriageAction, string>> = {
-  continue: TRIAGE_CONTINUE_COMMAND,
-  note: TRIAGE_NOTE_COMMAND,
-  review: TRIAGE_REVIEW_COMMAND,
-  leave: TRIAGE_LEAVE_COMMAND,
-  goal: TRIAGE_GOAL_COMMAND,
-}
 
 /**
  * The session a whole-app command is addressed to.
@@ -209,11 +187,10 @@ export class PauseGlobalControl {
    * @param policy - the burst waits and visibility source; defaults to the real page.
    */
   constructor(
-    private readonly commands: ClientRemote['commands'],
+    private readonly transport: PauseTransport,
     private readonly lifetime: AbortSignal,
     windowMs = 400,
     policy: Omit<BurstPolicy, 'windowMs' | 'waitsMs'> = DEFAULT_BURST_POLICY,
-    private readonly source?: PauseStatusSource,
   ) {
     this.burst = new ReadBurst(
       () => { void this.readAll() },
@@ -316,49 +293,8 @@ export class PauseGlobalControl {
    * anything at all, and a single retry is the whole price of keeping it honest.
    */
   private async readAggregate(): Promise<void> {
-    if (this.source !== undefined) {
-      const snapshot = await this.source.read(this.lifetime)
-      if (snapshot !== undefined) {
-        this.publish({ kind: 'reported', status: snapshot.global })
-        return
-      }
-    }
-    const address = this.target()
-    if (address === undefined) return
-    if (!await this.readAt(address)) return
-    const fallback = this.target(address)
-    if (fallback === undefined) return
-    await this.readAt(fallback)
-  }
-
-  /**
-   * Publish one aggregate answer, unless a newer read was requested while this
-   * one was in flight: that answer would show a state the host has moved past.
-   * A served address is remembered, and one that did not answer is forgotten —
-   * that is what makes the read fall back to the next address rather than ask
-   * it again.
-   * @param sessionId - the session this read goes through.
-   * @returns whether this read came back without an answer; a superseded read is
-   * not one, because the newer read already owns the outcome.
-   */
-  private async readAt(sessionId: SessionId): Promise<boolean> {
-    const sequence = ++this.latest
-    const reading = await this.read(sessionId)
-    if (this.latest !== sequence) return false
-    if (reading.kind === 'reported') {
-      this.served = sessionId
-      const registered = registeredSessions(reading.status)[0]
-      if (registered !== undefined) this.lastRegistered = registered as SessionId
-    } else {
-      // An address this host could not reach is not one to ask again: forgetting
-      // the served address and the remembered park address is what sends the
-      // retry to the next candidate. The park's own name is not forgotten — it
-      // is the host's fact, and the next read may well reach it.
-      if (this.served === sessionId) this.served = undefined
-      if (this.lastRegistered === sessionId) this.lastRegistered = undefined
-    }
-    this.publish(reading)
-    return reading.kind === 'unavailable'
+    const snapshot = await this.transport.source.read(this.lifetime)
+    if (snapshot !== undefined) this.publish({ kind: 'reported', status: snapshot.global })
   }
 
   /**
@@ -431,7 +367,7 @@ export class PauseGlobalControl {
     // echo; the state shown afterwards is the host's answers below.
     this.burst.absorb()
     await this.refreshTriage()
-    await this.commands.execute(address, `/${TRIAGE_DECISION_COMMAND[action]} ${sessionId}`, [], this.lifetime)
+    await this.transport.decide(String(address), sessionId, action, this.lifetime)
     await this.refreshTriage()
     // A decision can release a session, which the whole-app verdict reports.
     await this.reread(address)
@@ -453,12 +389,9 @@ export class PauseGlobalControl {
     if (current === undefined || current.kind !== 'reported') return
     const action = globalPauseView(current).action
     if (action === 'none') return
-    const line = action === 'pause-all' ? `/${PAUSE_ALL_COMMAND}` : `/${RESUME_ALL_COMMAND}`
-    // The press is a client action: the host announces the markers it registers
-    // or unregisters as it runs, and the read below is the answer to all of it.
     this.burst.absorb()
-    const executed = await this.commands.execute(sessionId, line, [], this.lifetime)
-    if (!executed.ok) {
+    const answer = await this.transport.act({ action, sessionId: String(sessionId) }, this.lifetime)
+    if (!answer.ok) {
       this.publish({ kind: 'unavailable' })
       this.follow()
       return
@@ -466,25 +399,10 @@ export class PauseGlobalControl {
     await this.reread(sessionId)
   }
 
-  /** Ask the host for the decision list, in the browser's vocabulary. */
+  /** Ask the native namespace for the decision list. */
   private async readTriageRows(sessionId: SessionId): Promise<TriageReading> {
-    const answered = await this.commands.execute(sessionId, `/${TRIAGE_COMMAND}`, [], this.lifetime)
-    if (!answered.ok || answered.value === undefined) return { kind: 'unavailable' }
-    const text = answered.value.result.kind === 'success' ? answered.value.result.text : undefined
-    const list = text === undefined ? undefined : decodeTriageList(text)
-    // An answer this control cannot read is not a state it may report.
-    return list === undefined ? { kind: 'unavailable' } : { kind: 'reported', rows: list.rows }
-  }
-
-  /** Ask the host what the whole-app park state is, in the browser's vocabulary. */
-  private async read(sessionId: SessionId): Promise<GlobalReading> {
-    const answered = await this.commands.execute(sessionId, `/${STATE_ALL_COMMAND}`, [], this.lifetime)
-    if (!answered.ok || answered.value === undefined) return { kind: 'unavailable' }
-    const text = answered.value.result.kind === 'success' ? answered.value.result.text : undefined
-    const status = text === undefined ? undefined : decodeGlobalStatus(text)
-    // An answer this control cannot read is not a state it may report.
-    if (status === undefined) return { kind: 'unavailable' }
-    return { kind: 'reported', status }
+    const rows = await this.transport.triage(String(sessionId), this.lifetime)
+    return { kind: 'reported', rows: rows.map(wireTriageRow) }
   }
 
   private publish(reading: GlobalReading): void {

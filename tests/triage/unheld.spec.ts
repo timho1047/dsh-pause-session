@@ -48,9 +48,9 @@ describe('a record whose session became readable after the mount', () => {
       await home.harness.create(SessionId('late-clean'), { provider: 'deepseek-official', model: 'model' })
       expect(home.ctx.agents.get(SessionId('late-clean'))).toBeDefined()
 
-      const answered = await home.run('/pause-resume-all')
-      expect(answered.kind, answered.text).toBe('success')
-      expect(answered.text).toBe('pause resumed 1 session from where it stopped.')
+      const answered = await home.run('pause-resume-all')
+      expect(answered.ok, answered.message).toBe(true)
+      expect(answered.message).toBe('pause resumed 1 session from where it stopped.')
       // The record is gone: the park is over for a session that is already
       // back, and a record left behind would be named for a park that is not
       // holding anything.
@@ -71,16 +71,16 @@ describe('a record whose session became readable after the mount', () => {
 
       // Liveness is not a park outcome: the clean path refuses exactly as it
       // would for a session that is not live at all.
-      const refused = await home.run('/pause-resume-all')
-      expect(refused.kind, refused.text).toBe('success')
-      expect(refused.text).toBe('pause resumed no session; 1 did not pause completely and need your decision.')
+      const refused = await home.run('pause-resume-all')
+      expect(refused.ok, refused.message).toBe(true)
+      expect(refused.message).toBe('pause resumed no session; 1 did not pause completely and need your decision.')
       await recordsUntil(caseRoot, [['late-unclean', 'draining']])
 
       // The row is the user's to decide, and deciding it is what clears the
       // record — the same release order as any other listed session.
       expect((await home.triage()).rows.map(row => row.sessionId)).toEqual(['late-unclean'])
       const decided = await home.decide('late-unclean', 'continue')
-      expect(decided.kind, decided.text).toBe('success')
+      expect(decided.ok, decided.message).toBe(true)
       await recordsUntil(caseRoot, [])
       expect(home.provider.requests).toHaveLength(0)
       expect(await home.status()).toMatchObject({ registered: 0, verdict: 'idle' })

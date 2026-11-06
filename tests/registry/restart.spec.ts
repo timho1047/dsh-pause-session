@@ -20,7 +20,6 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import CommandRuntime from '@deepseek-ai/dsh-commands'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -29,8 +28,8 @@ import type { AgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { apply, inject, name } from '../../src/index.ts'
-import { RESUME_DEFINITION_ID } from '../../src/shared.ts'
 import { FakeProvider, textResponse } from '../assumptions/fake-provider.ts'
+import { resume, statusOf } from '../native-driver.ts'
 import { until, turnEnd } from '../gate/loop.ts'
 import { readParkRegistry } from './read.ts'
 import { mountParkStorage } from './storage.ts'
@@ -116,7 +115,6 @@ async function revive(caseRoot: string): Promise<RevivedProcess> {
   const ctx = new Context()
   await mountAgentLoopTestDependencies(ctx)
   await ctx.plugin(JsonlSessionPersistence, { root: join(caseRoot, 'sessions'), compression: 'none' })
-  await ctx.plugin(CommandRuntime)
   await mountParkStorage(ctx, storageOf(caseRoot))
   const harness = await mountAgentLoopTestHarness(ctx)
   const provider = new FakeProvider([textResponse('an answer for a free session')])
@@ -210,8 +208,8 @@ describe('the park registry across a real process restart', () => {
       expect(woken.inbox.nextTurn.length + woken.inbox.nextStep.length).toBe(WAKE_UPS.length)
       // The host publishes its own "paused" fact for a session that woke up
       // long after the mount read the registry.
-      expect(loop.ctx.commands.list(woken).map(descriptor => descriptor.definitionId))
-        .toContain(RESUME_DEFINITION_ID)
+      expect(await statusOf(loop.ctx, woken), 'the woken session was not in the snapshot')
+        .toBeDefined()
 
       // A session created after the restart is not on the list: it sends and
       // receives normally.
@@ -223,7 +221,7 @@ describe('the park registry across a real process restart', () => {
 
       // Held, not dropped: releasing the pause sends the very request that was
       // standing at the gate, and the release is durable.
-      await loop.ctx.commands.execute(woken, '/pause-resume', [], new AbortController().signal)
+      await resume(loop.ctx, woken)
       await until(() => loop.provider.requests.length === 2)
       expect(loop.provider.requests).toContain(loop.seen[0])
       expect(await readParkRegistry(storageOf(caseRoot))).toEqual([])

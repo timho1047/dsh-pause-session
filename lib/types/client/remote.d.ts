@@ -1,14 +1,11 @@
 /**
  * Client-side bridge from the generated `pauseSession` Remote namespace to the
- * existing control state machines.
+ * control state machines.
  *
- * The controls were written against a command-shaped transport. The native
- * namespace is now the only transport: this adapter maps its unary actions and
- * stream snapshots into that shape, so no host slash command is involved.
+ * The native namespace is the only transport: the stream supplies snapshots and
+ * the action methods drive every button. No slash command is involved.
  * @module dsh-pause-session/client/remote
  */
-import type { CommandDescriptor, CommandExecution } from '@deepseek-ai/dsh-commands/types';
-import type { SessionId } from '@deepseek-ai/dsh-session/types';
 import type { PauseActionResultWire, PauseDecisionRequest, PauseSnapshotWire, TriageRowWire } from '../remote.js';
 import type { GlobalStatus, ParkStatus } from '../shared.js';
 import type { PauseStatusSource } from './status.js';
@@ -53,16 +50,21 @@ export interface RemoteStatusSource extends PauseStatusSource {
  * @returns the cached source and its change subscription.
  */
 export declare function openRemoteSource(remote: RemotePauseNamespace, lifetime: AbortSignal): RemoteStatusSource;
-/** The command-shaped transport the existing controls consume. */
-export interface RemoteCommandTransport {
-    list(sessionId: SessionId): Promise<{
-        readonly ok: boolean;
-        readonly value?: readonly CommandDescriptor[];
-    }>;
-    execute(sessionId: SessionId, line: string, attachments: readonly unknown[], signal: AbortSignal): Promise<{
-        readonly ok: boolean;
-        readonly value?: CommandExecution;
-    }>;
+/** Direct browser transport over the generated namespace. */
+export interface PauseTransport {
+    readonly source: RemoteStatusSource;
+    act(request: {
+        readonly action: 'pause' | 'resume' | 'pause-all' | 'resume-all' | 'goal';
+        readonly sessionId: string;
+        readonly target?: string;
+    }, signal?: AbortSignal): Promise<PauseActionResultWire>;
+    triage(caller: string, signal?: AbortSignal): Promise<readonly TriageRowWire[]>;
+    decide(caller: string, target: string, decision: 'continue' | 'note' | 'review' | 'leave' | 'goal', signal?: AbortSignal): Promise<PauseActionResultWire>;
 }
-/** Build the internal command-shaped adapter over the Remote namespace. */
-export declare function remoteCommands(remote: RemotePauseNamespace, source: RemoteStatusSource): RemoteCommandTransport;
+/**
+ * Build the direct transport over one mounted Remote namespace.
+ * @param remote - the generated `pauseSession` namespace.
+ * @param lifetime - client lifetime.
+ * @returns the source and action methods the controls use.
+ */
+export declare function remoteTransport(remote: RemotePauseNamespace, lifetime: AbortSignal): PauseTransport;

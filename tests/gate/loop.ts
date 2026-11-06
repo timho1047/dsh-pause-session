@@ -15,10 +15,11 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-import CommandRuntime from '@deepseek-ai/dsh-commands'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { apply, inject, name } from '../../src/index.ts'
+import { ensureOk, press } from '../native-driver.ts'
+import type { PauseVerb } from '../native-driver.ts'
 import type { ScriptEntry } from '../assumptions/fake-provider.ts'
 import { mountFakeLoop } from '../assumptions/loop-harness.ts'
 import type { FakeLoop } from '../assumptions/loop-harness.ts'
@@ -40,7 +41,7 @@ export interface GatedLoop extends FakeLoop {
   readonly held?: HeldWrites
 }
 
-/** Mount the loop, the command registry, the storage the plugin needs, and the plugin under test. */
+/** Mount the loop, the storage the plugin needs, and the plugin under test. */
 export async function mountGatedLoop(
   id: string,
   script: ScriptEntry[],
@@ -60,7 +61,6 @@ export async function mountGatedLoop(
     waiters.get(seen.length)?.()
     return next()
   })
-  await loop.ctx.plugin(CommandRuntime)
   const plugin = await loop.ctx.plugin({ name, inject, apply })
   return {
     ...loop,
@@ -75,13 +75,9 @@ export async function mountGatedLoop(
   }
 }
 
-/** Run one control command the way the browser half does. */
-export async function control(ctx: Context, agent: Agent, command: string): Promise<void> {
-  const execution = await ctx.commands.execute(agent, `/${command}`, [], new AbortController().signal)
-  if (execution === undefined) throw new Error(`pause: /${command} did not resolve for "${agent.id}"`)
-  if (execution.result.kind !== 'success') {
-    throw new Error(`pause: /${command} failed for "${agent.id}": ${execution.result.text}`)
-  }
+/** Press one native action the way the browser half does. */
+export async function control(ctx: Context, agent: Agent, verb: PauseVerb): Promise<void> {
+  ensureOk(await press(ctx, agent, verb, new AbortController().signal), verb)
 }
 
 /** Poll until `predicate` holds, letting microtasks drain between checks. */

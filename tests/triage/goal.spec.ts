@@ -46,7 +46,7 @@ describe('the listed goal opt-out', () => {
       // The user turns it off on that row. The list is what shows the row, and
       // the caller's own read is what makes it actionable.
       const flipped = await home.decide('goal-unclean-off', 'goal')
-      expect(flipped.kind, flipped.text).toBe('success')
+      expect(flipped.ok, flipped.message).toBe(true)
       expect(await readParkRegistry(storageOf(caseRoot)))
         .toEqual([expect.objectContaining({ sessionId: SessionId('goal-unclean-off'), rearmGoal: false })])
       // The host answers by reading, not by assuming: the row now says off.
@@ -55,7 +55,7 @@ describe('the listed goal opt-out', () => {
       // The next resume of that session is the decision on its row, and the
       // opt-out is what it obeys.
       const continued = await home.decide('goal-unclean-off', 'continue')
-      expect(continued.kind, continued.text).toBe('success')
+      expect(continued.ok, continued.message).toBe(true)
       const agent = home.ctx.agents.get(SessionId('goal-unclean-off'))
       expect(agent, 'the decision did not resume the session').toBeDefined()
       // The session resumes — only its goal stays closed, and therefore spends
@@ -79,7 +79,7 @@ describe('the listed goal opt-out', () => {
       // default is unchanged — a goal session comes back running its rounds.
       expect((await home.triage()).rows.map(row => row.rearmGoal)).toEqual([true])
       const continued = await home.decide('goal-unclean-on', 'continue')
-      expect(continued.kind, continued.text).toBe('success')
+      expect(continued.ok, continued.message).toBe(true)
       const agent = home.ctx.agents.get(SessionId('goal-unclean-on'))
       expect(agent).toBeDefined()
       await until(() => home.ctx.goals.get(agent!)?.activation === 'armed', 'the goal to come back')

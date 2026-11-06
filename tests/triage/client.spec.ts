@@ -1,14 +1,13 @@
 /**
- * The decision list in the browser: the panel rides the same command channel
- * the rest of the control does, and shows nothing it was not told. The
- * whole-app control lives in the conversation header's utilities row, and the
- * panel is opened and read from that seat like any other.
+ * The decision list in the browser: the panel rides the same native transport
+ * the rest of the control does, and shows nothing it was not told. The whole-app
+ * control lives in the conversation header's utilities row, and the panel is
+ * opened and read from that seat like any other.
  *
- * The controller is driven against a double of the real Client-callable command
- * namespace that answers the way the host does — the list verb's RESULT carries
- * the rows as of the read, and each decision is its own session-addressed
- * command. The panel's own entry point is a pure function of the whole-app view,
- * so "is there anything to decide" is asserted without a browser renderer.
+ * The controller is driven against a double of the native `PauseTransport`: the
+ * whole-app snapshot is the source, and `triage`/`decide` are direct methods.
+ * The panel's own entry point is a pure function of the whole-app view, so "is
+ * there anything to decide" is asserted without a browser renderer.
  * @module dsh-pause-session/test/triage/client
  */
 
@@ -16,13 +15,12 @@ import { describe, expect, it } from 'vitest'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { apply } from '../../src/client/index.tsx'
 import type { PausePillInjected } from '../../src/client/pill.tsx'
-import { PauseGlobalControl, TRIAGE_DECISION_COMMAND } from '../../src/client/global.ts'
+import { PauseGlobalControl } from '../../src/client/global.ts'
 import type { GlobalPauseState, TriageReading } from '../../src/client/global.ts'
+import type { PauseTransport } from '../../src/client/remote.ts'
 import { globalPauseView, triageView, TRIAGE_GOAL_VIEW } from '../../src/client/view.ts'
-import {
-  decodeTriageList, encodeGlobalStatus, encodeTriageList, STATE_ALL_COMMAND, TRIAGE_COMMAND, TRIAGE_GOAL_COMMAND,
-} from '../../src/shared.ts'
-import type { GlobalStatus, TriageList, TriageRow } from '../../src/shared.ts'
+import type { GlobalStatus, TriageRow } from '../../src/shared.ts'
+import type { PauseActionResultWire, PauseDecisionRequest, TriageRowWire } from '../../src/remote.ts'
 import { until } from '../gate/loop.ts'
 
 const ADDRESS = SessionId('client-address')
@@ -62,37 +60,47 @@ function status(overrides: Partial<GlobalStatus> = {}): GlobalStatus {
   }
 }
 
-/** Host-side truth a test drives, plus the lines the browser executed. */
+/** Host-side truth a test drives, plus the native calls the browser made. */
 interface HostDouble {
   rows: TriageRow[]
   status: GlobalStatus
-  readonly lines: string[]
+  readonly actions: unknown[]
+  readonly triages: string[]
+  readonly decisions: PauseDecisionRequest[]
 }
 
-/** A stand-in for `ctx.remote.commands` that answers like the host registry does. */
-function hostDouble(): { commands: never; host: HostDouble } {
-  const host: HostDouble = { rows: [row()], status: status(), lines: [] }
-  const commands = {
-    list: () => Promise.resolve({ ok: true, value: [] }),
-    execute: (_sessionId: SessionId, line: string) => {
-      host.lines.push(line)
-      if (line === `/${TRIAGE_COMMAND}`) {
-        const list: TriageList = { rows: host.rows }
-        return Promise.resolve({ ok: true, value: { commandId: 'c', result: { kind: 'success', text: encodeTriageList(list) } } })
+/** A native transport double whose pictures and rows come from the host state. */
+function hostDouble(): { transport: PauseTransport; host: HostDouble; emit(): void } {
+  const host: HostDouble = { rows: [row()], status: status(), actions: [], triages: [], decisions: [] }
+  const changes = new Set<() => void>()
+  const emit = (): void => { for (const listener of [...changes]) listener() }
+  const transport: PauseTransport = {
+    source: {
+      read: async () => ({ global: host.status, sessions: {} } as never),
+      onChange: (listener) => {
+        changes.add(listener)
+        return () => { changes.delete(listener) }
+      },
+    },
+    act: async (request): Promise<PauseActionResultWire> => {
+      host.actions.push(request)
+      return { ok: true, message: request.action }
+    },
+    triage: async (caller) => {
+      host.triages.push(caller)
+      return host.rows as readonly TriageRowWire[]
+    },
+    decide: async (caller, target, decision): Promise<PauseActionResultWire> => {
+      host.decisions.push({ caller, target, decision })
+      // A decision releases the session it continued, exactly as the host does.
+      if (decision !== 'leave' && decision !== 'goal') {
+        host.rows = host.rows.filter(entry => entry.sessionId !== target)
       }
-      if (line.startsWith('/pause-triage-')) {
-        // A decision releases the session it continued, exactly as the host does.
-        const target = line.slice(line.indexOf(' ') + 1)
-        host.rows = host.rows.filter(entry => line.includes('-leave') || entry.sessionId !== target)
-        return Promise.resolve({ ok: true, value: { commandId: 'c', result: { kind: 'success', text: 'ok' } } })
-      }
-      return Promise.resolve({
-        ok: true,
-        value: { commandId: 'c', result: { kind: 'success', text: encodeGlobalStatus(host.status) } },
-      })
+      emit()
+      return { ok: true, message: 'ok' }
     },
   }
-  return { commands: commands as never, host }
+  return { transport, host, emit }
 }
 
 const triageOf = (control: PauseGlobalControl): TriageReading | undefined =>
@@ -100,24 +108,23 @@ const triageOf = (control: PauseGlobalControl): TriageReading | undefined =>
 
 describe('the decision list in the browser', () => {
   it('asks the host for the rows when the panel opens, and not before', async () => {
-    const { commands, host } = hostDouble()
-    const control = new PauseGlobalControl(commands, new AbortController().signal)
+    const { transport, host } = hostDouble()
+    const control = new PauseGlobalControl(transport, new AbortController().signal)
 
-    // Closed: the panel has no rows and has spent no call on them.
+    // Closed: the panel has no rows and has spent no read on them.
     expect(triageOf(control)).toBeUndefined()
     expect(triageView(undefined).visible).toBe(false)
-    expect(host.lines).toEqual([])
+    expect(host.triages).toEqual([])
 
     await control.refresh(ADDRESS)
-    expect(host.lines).toEqual(['/pause-state-all'])
 
-    // Opening it is what asks; the explicit read after that is the second call.
+    // Opening it is what asks; the explicit read after that is the second read.
     control.setPanel(true)
     await control.refreshTriage()
-    expect(host.lines).toEqual(['/pause-state-all', `/${TRIAGE_COMMAND}`, `/${TRIAGE_COMMAND}`])
-    // `updatedAt` is the host's own park timestamp and does not ride the
-    // published list; every fact the row shows does.
-    expect(triageOf(control)).toMatchObject({ kind: 'reported', rows: [{ ...row(), updatedAt: 0 }] })
+    expect(host.triages).toEqual([String(ADDRESS), String(ADDRESS)])
+    // The native row carries the host's own park timestamp, so every fact the
+    // row shows arrives from the same read.
+    expect(triageOf(control)).toMatchObject({ kind: 'reported', rows: [row()] })
   })
 
   it('turns the host rows into the facts a row shows', () => {
@@ -145,13 +152,14 @@ describe('the decision list in the browser', () => {
     expect(view.rows[2]).toMatchObject({ readable: true, wakeable: false, unknownTools: [] })
   })
 
-  it('runs one listed verb per action, addressed through the session the user is on', async () => {
-    const { commands, host } = hostDouble()
-    const control = new PauseGlobalControl(commands, new AbortController().signal)
+  it('runs one listed decision per action, addressed through the session the user is on', async () => {
+    const { transport, host } = hostDouble()
+    const control = new PauseGlobalControl(transport, new AbortController().signal)
     await control.refresh(ADDRESS)
     control.setPanel(true)
     await control.refreshTriage()
-    host.lines.length = 0
+    host.triages.length = 0
+    host.decisions.length = 0
 
     for (const action of ['continue', 'note', 'review', 'leave', 'goal'] as const) {
       host.rows = [row({ sessionId: `session-${action}` })]
@@ -159,18 +167,19 @@ describe('the decision list in the browser', () => {
       // The read comes first: the host acts only on a row it has shown the
       // session the decision is addressed to, and that read is what shows it.
       // It comes again afterwards because the host's answer is what the panel
-      // shows next — a verb can take a row off the list, or flip what it says.
-      expect(host.lines).toEqual([
-        `/${TRIAGE_COMMAND}`,
-        `/${TRIAGE_DECISION_COMMAND[action]} session-${action}`,
-        `/${TRIAGE_COMMAND}`,
-        `/${STATE_ALL_COMMAND}`,
-      ])
-      host.lines.length = 0
+      // shows next — a decision can take a row off the list, or flip what it says.
+      expect(host.triages).toEqual([String(ADDRESS), String(ADDRESS)])
+      expect(host.decisions).toEqual([{
+        caller: String(ADDRESS),
+        target: `session-${action}`,
+        decision: action,
+      }])
+      host.triages.length = 0
+      host.decisions.length = 0
     }
   })
 
-  it('carries the goal re-arm state the host reported, and its switch verb', () => {
+  it('carries the goal re-arm state the host reported, and its switch view', () => {
     const view = triageView({
       kind: 'reported',
       rows: [row({ rearmGoal: false }), row({ sessionId: 'armed-session' })],
@@ -182,7 +191,6 @@ describe('the decision list in the browser', () => {
       labelKey: 'triage.goal',
       ariaKey: 'triage.goal.aria',
     })
-    expect(TRIAGE_DECISION_COMMAND.goal).toBe(TRIAGE_GOAL_COMMAND)
   })
 
   it('shows the panel entry point only when the host says something did not stop cleanly', () => {
@@ -193,47 +201,6 @@ describe('the decision list in the browser', () => {
     // A host that cannot answer gets no entry point, like the rest of the pill.
     expect(globalPauseView({ kind: 'unavailable' }).unclean).toBe(0)
   })
-
-  it('refuses to read a list out of the other vocabularies', () => {
-    const list = encodeTriageList({ rows: [row()] })
-    expect(decodeTriageList(list)?.rows[0]).toMatchObject({ sessionId: 'overnight-tools', phase: 'draining' })
-    expect(decodeTriageList(encodeGlobalStatus(status()))).toBeUndefined()
-    expect(decodeTriageList('pause: draining')).toBeUndefined()
-  })
-
-  it('round-trips a row whole, separators and all', () => {
-    // Every field the host's own data can put a separator in: the session id in
-    // the row field, the tool and call id in a trace, and the event name in the
-    // stop position. A folded spelling would name a different session, which is
-    // a row looked up again under the wrong name.
-    const spelled = row({
-      sessionId: 'overnight;tools,one',
-      lastEvent: 'turn/end',
-      traces: [{ tool: 'a/b;c,d', callId: 'call-1/x' }],
-    })
-    const text = encodeTriageList({ rows: [spelled] })
-    const decoded = decodeTriageList(text)
-    expect(decoded?.rows).toHaveLength(1)
-    expect(decoded?.rows[0]).toMatchObject({
-      sessionId: 'overnight;tools,one',
-      phase: 'draining',
-      reading: 'read',
-      lastEvent: 'turn/end',
-      turn: 1,
-      step: 1,
-      traces: [{ tool: 'a/b;c,d', callId: 'call-1/x' }],
-      owed: true,
-      wakeable: true,
-    })
-    // A row that names no stop position says so, rather than decoding the
-    // empty marker as an event.
-    const bare = decodeTriageList(encodeTriageList({ rows: [row({ lastEvent: undefined, turn: undefined, step: undefined })] }))
-    expect(bare?.rows[0]?.lastEvent).toBeUndefined()
-    expect(bare?.rows[0]?.turn).toBeUndefined()
-    // A session id that is exactly the empty marker is still that session.
-    const marker = decodeTriageList(encodeTriageList({ rows: [row({ sessionId: '-' })] }))
-    expect(marker?.rows[0]?.sessionId).toBe('-')
-  })
 })
 
 describe('the decision list from its header seat', () => {
@@ -243,16 +210,49 @@ describe('the decision list from its header seat', () => {
    * SlotRegistry is not mounted here (see `tests/client-slot.spec.ts`); what is
    * exercised is the seat the panel is opened and read from.
    */
-  function bench() {
-    const { commands, host } = hostDouble()
+  function bench(host: HostDouble) {
+    const changes = new Set<() => void>()
+    let latest = { global: host.status, sessions: {} }
+    const emit = (): void => {
+      latest = { global: host.status, sessions: {} }
+      for (const listener of [...changes]) listener()
+    }
+    const remote = {
+      observe: async function* (signal?: AbortSignal) {
+        yield latest
+        for (;;) {
+          await new Promise<void>((resolve, reject) => {
+            const done = (): void => { changes.delete(done); resolve() }
+            const onAbort = (): void => { changes.delete(done); reject(signal?.reason) }
+            changes.add(done)
+            signal?.addEventListener('abort', onAbort, { once: true })
+          })
+          yield latest
+        }
+      },
+      act: async () => ({ ok: true, value: { ok: true, message: 'done' } }),
+      triage: async (request: { caller: string }) => {
+        host.triages.push(request.caller)
+        return { ok: true, value: host.rows }
+      },
+      decide: async (request: PauseDecisionRequest) => {
+        host.decisions.push(request)
+        emit()
+        return { ok: true, value: { ok: true, message: 'ok' } }
+      },
+    }
     const registrations: { options: Record<string, unknown> }[] = []
     const ctx = {
       effect(callback: () => unknown) {
-        callback()
-        return () => {}
+        const cleanup = callback()
+        return () => { if (typeof cleanup === 'function') (cleanup as () => void)() }
       },
       locale: { register: () => () => {} },
-      remote: { commands, $on: () => () => {} },
+      remote: { pauseSession: remote },
+      inject(_names: readonly string[], callback: (child: typeof ctx) => unknown) {
+        callback(ctx)
+        return () => {}
+      },
       slots: {
         inject: (_name: string, callback: () => unknown) => { callback(); return () => {} },
         register: (options: Record<string, unknown>) => {
@@ -267,11 +267,12 @@ describe('the decision list from its header seat', () => {
     if (entry === undefined) throw new Error('pause: the whole-app control registered no slot entry')
     const face = (entry.options as { inject?: () => PausePillInjected }).inject
     if (face === undefined) throw new Error('pause: the whole-app control registered no inject face')
-    return { host, injected: face() }
+    return { host, injected: face(), emit }
   }
 
   it('opens and reads the panel from the header, spending nothing on rows while it is closed', async () => {
-    const benchRun = bench()
+    const host: HostDouble = { rows: [row()], status: status(), actions: [], triages: [], decisions: [] }
+    const benchRun = bench(host)
     const state = (): GlobalPauseState => benchRun.injected.hooks.pauseGlobal.getSnapshot()
 
     benchRun.injected.refresh(ADDRESS)
@@ -280,21 +281,24 @@ describe('the decision list from its header seat', () => {
     // its entry point counts the same set the whole-app verdict calls unclean.
     expect(globalPauseView(state().global)).toMatchObject({ visible: true, unclean: 1 })
     expect(state().triage).toBeUndefined()
-    expect(benchRun.host.lines).toEqual([`/${STATE_ALL_COMMAND}`])
+    expect(host.triages).toEqual([])
 
     benchRun.injected.setPanel(true)
     await until(() => state().triage !== undefined)
     expect(state().panelOpen).toBe(true)
-    expect(benchRun.host.lines).toContain(`/${TRIAGE_COMMAND}`)
+    expect(host.triages).toContain(String(ADDRESS))
     expect(triageView(state().triage).rows).toMatchObject([
       { sessionId: 'overnight-tools', phaseKey: 'triage.phase.draining', unknownTools: ['gated'] },
     ])
 
-    // A decision taken from the header still runs the session-addressed verb;
-    // the press is fire-and-forget, so the command is what is waited on.
+    // A decision taken from the header still goes through the native action,
+    // addressed through the session the user is on.
     benchRun.injected.decide('overnight-tools', 'continue')
-    const decision = `/${TRIAGE_DECISION_COMMAND.continue} overnight-tools`
-    await until(() => benchRun.host.lines.includes(decision))
-    expect(benchRun.host.lines.slice(0, 2)).toEqual([`/${STATE_ALL_COMMAND}`, `/${TRIAGE_COMMAND}`])
+    await until(() => host.decisions.some(decision => decision.target === 'overnight-tools'))
+    expect(host.decisions.at(-1)).toMatchObject({
+      caller: String(ADDRESS),
+      target: 'overnight-tools',
+      decision: 'continue',
+    })
   })
 })
