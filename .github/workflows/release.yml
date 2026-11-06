@@ -16,8 +16,9 @@ name: release
 #
 # npm Trusted Publisher must be configured for this package on npmjs.com
 # (owner: timho1047, repo: dsh-pause-session, workflow: release.yml).
-# A new package must be seeded once with a manual `npm publish --access public`;
-# this workflow skips the publish step when that exact version already exists.
+# A new configuration must be used within 48 hours; create it immediately
+# before the release tag if it has no successful publish yet.
+# This workflow skips the publish step when that exact version already exists.
 on:
   push:
     tags: ["v*"]
@@ -31,6 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RELEASE_DIR: ${{ github.workspace }}/.release
+      NPM_CONFIG_REGISTRY: https://registry.npmjs.org
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -39,7 +41,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: https://registry.npmjs.org
 
       - name: Validate tag, manifest, and committed bundles
         run: |

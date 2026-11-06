@@ -31,7 +31,10 @@ The same relationship can be added in the package's settings on npmjs.com:
 - Permission: Publish
 
 After that, tag pushes publish through GitHub Actions OIDC and do not need a
-long-lived `NPM_TOKEN`. Check the result with:
+long-lived `NPM_TOKEN`. A newly created Trusted Publisher configuration must
+complete its first publish within 48 hours; otherwise npm reports the exchange
+as `404` and the configuration must be deleted and created again. Create or
+recreate it immediately before the release tag. Check the result with:
 
 ```sh
 npm trust list dsh-pause-session
