@@ -100,6 +100,13 @@ export interface GlobalPause {
    */
   readStatus(signal?: AbortSignal): Promise<CommandResult>
   /**
+   * The same aggregate as {@link readStatus}, as structured data for the
+   * browser status route.
+   * @param signal - cancellation for the tree reads this read performs.
+   * @returns the aggregate as of this read.
+   */
+  readState(signal?: AbortSignal): Promise<GlobalStatus>
+  /**
    * Report one session a press could not register, so the aggregate names it.
    * The whole-app action records that fact for its own targets; a press of a
    * session's tree reports the members the registry refused through here.
@@ -364,6 +371,7 @@ export function mountGlobalPause(
         : { kind: 'error', text: answer }
     },
     readStatus: async (signal) => ({ kind: 'success', text: encodeGlobalStatus(await status(signal)) }),
+    readState: async (signal) => await status(signal),
     markUnrecorded,
   }
 }

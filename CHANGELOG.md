@@ -5,6 +5,15 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- On a browser host, status refreshes use an authenticated same-origin JSON
+  route instead of slash commands. Background reads no longer append
+  `command/run`/`command/done` records to a Session's log; actions and
+  non-browser carriers keep the command channel.
+
 ## [0.1.0] - 2026-11-02
 
 ### Added

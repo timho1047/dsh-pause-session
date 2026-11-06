@@ -10,11 +10,12 @@
  * above the whole frame. The decision list hangs from the control into the
  * conversation area below.
  *
- * The pill reads the host through the command channel only (`./global.ts`):
- * with no answer, or with no session to ask through, it renders nothing rather
- * than a state it would have to invent. The decision list is deliberately NOT
- * part of that first read — it costs two more command calls, and a user who
- * never opens it pays nothing; the panel asks for its own rows when it opens.
+ * The pill reads the host through the JSON status route on Web, with the
+ * command channel as its fallback (`./global.ts`). With no answer, or with no
+ * session to address an action through, it renders nothing rather than a state
+ * it would have to invent. The decision list is deliberately NOT part of that
+ * first read — it costs more host round-trips, and a user who never opens it
+ * pays nothing; the panel asks for its own rows when it opens.
  * @module dsh-pause-session/client/pill
  */
 
@@ -121,9 +122,8 @@ export function PausePill(props: PausePillProps): ReactNode {
   const reading = props.usePauseGlobal(state => state.global)
   const triage = props.usePauseGlobal(state => state.triage)
   const open = props.usePauseGlobal(state => state.panelOpen)
-  // The command channel is session-addressed: one user session is the address
-  // every whole-app press goes through, and the one the control's very first
-  // read goes through.
+  // Actions still address one user session through the command channel; the
+  // status route is process-wide and needs no address.
   const address = useSessions(addressingSession)
   const view = globalPauseView(reading)
   const list = triageView(triage)

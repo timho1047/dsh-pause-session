@@ -1,17 +1,14 @@
 /**
  * Browser-side reading and driving of the host's park state for one session.
  *
- * The host publishes no push channel of its own — a third-party plugin cannot
- * add a Client Remote namespace or a forwarded event — so this control reads
- * the host's command registry, which is the only live surface it can publish
- * through: `commands.list(sessionId)` is a Client-callable read, and the
- * forwarded `commands/change` event says when to read it again. The resume
- * definition's presence in that list IS the host's "this session is paused"
- * fact, and the companion status definition answers with the park state as of
- * the read; this module never derives either from its own press. That one
- * answer carries the record's goal opt-out as well, so the switch beside the
- * pause button can show it without a second host round-trip — and without it,
- * the control renders no switch at all.
+ * The browser reads the host's same-origin JSON status route when the Web
+ * carrier mounts it. That route is the normal path and keeps background status
+ * reads out of the Session log. On a carrier without the route, the control
+ * falls back to the host's command registry: `commands.list(sessionId)` marks
+ * whether this session is paused, and the status command's answer carries the
+ * phase. Either path is host-authoritative; this module never derives a state
+ * from its own press. The answer also carries the record's goal opt-out, so the
+ * switch beside the pause button can show it without a second host round-trip.
  *
  * Every phase the host reaches announces itself on that channel: a transition
  * re-registers the status verb, so a transition is what buys the next read and a
@@ -48,6 +45,7 @@ import {
 import { burstWaits, DEFAULT_BURST_POLICY, ReadBurst } from './burst.js'
 import type { BurstPolicy } from './burst.js'
 import type { GlobalReading } from './global.js'
+import type { PauseStatusSource } from './status.js'
 
 /**
  * The whole-app answer as the session headers read it, or `undefined` before
@@ -137,6 +135,7 @@ export class PauseControl {
     windowMs = 400,
     policy: Omit<BurstPolicy, 'windowMs' | 'waitsMs'> = DEFAULT_BURST_POLICY,
     private readonly aggregate: AggregateSource = () => undefined,
+    private readonly source?: PauseStatusSource,
   ) {
     this.burst = new ReadBurst(
       () => { void this.readAll() },
@@ -258,6 +257,20 @@ export class PauseControl {
 
   /** Ask the host what this session's park state is, in the browser's vocabulary. */
   private async read(sessionId: SessionId): Promise<PauseReading> {
+    // The JSON route is the no-log path; the command registry below is the
+    // fallback for carriers that do not mount a browser web server.
+    if (this.source !== undefined) {
+      const snapshot = await this.source.read(this.lifetime)
+      if (snapshot !== undefined) {
+        const status = snapshot.sessions[String(sessionId)]
+        if (status === undefined) return { phase: 'active', runningTools: [] }
+        return {
+          phase: status.phase,
+          runningTools: status.runningTools,
+          ...status.rearmGoal === undefined ? {} : { rearmGoal: status.rearmGoal },
+        }
+      }
+    }
     const listed = await this.commands.list(sessionId)
     if (!listed.ok) return { phase: 'unavailable', runningTools: [] }
     const paused = listed.value.some(descriptor => descriptor.definitionId === RESUME_DEFINITION_ID)
@@ -291,8 +304,8 @@ export class PauseControl {
   /**
    * Whether the park has already answered for this header: with nothing
    * registered, no session can be paused, so a header that says this session is
-   * running carries the whole fact and the read that would confirm it is a host
-   * round-trip plus two records in that session's log for nothing.
+   * running carries the whole fact; the status request that would confirm it is
+   * a round-trip for nothing.
    *
    * A header the host last showed on its way to a park is never answered this
    * way: that reading is newer than the aggregate the derivation rests on, and

@@ -76,6 +76,9 @@ session state is saved.
   again on the next mount.
 - The composer stays usable; the pause is released by the same control, not by
   sending a message.
+- On the Web host, both controls refresh through a same-origin status route;
+  background reads do not append command rows to a Session. Slash commands
+  remain for explicit actions and as the fallback on carriers without the route.
 
 ## What is not stopped
 

@@ -27,7 +27,7 @@ import type { CommandResult } from '@deepseek-ai/dsh-commands';
 import type { SessionId } from '@deepseek-ai/dsh-session';
 import type { ParkWatch } from './park.js';
 import type { ParkRegistry } from './registry.js';
-import type { ParkPhase } from './shared.js';
+import type { GlobalStatus, ParkPhase } from './shared.js';
 /** One session's live park state, as the per-session control sees it. */
 export interface LivePark {
     readonly phase: ParkPhase;
@@ -80,6 +80,13 @@ export interface GlobalPause {
      * @returns the aggregate as of this read.
      */
     readStatus(signal?: AbortSignal): Promise<CommandResult>;
+    /**
+     * The same aggregate as {@link readStatus}, as structured data for the
+     * browser status route.
+     * @param signal - cancellation for the tree reads this read performs.
+     * @returns the aggregate as of this read.
+     */
+    readState(signal?: AbortSignal): Promise<GlobalStatus>;
     /**
      * Report one session a press could not register, so the aggregate names it.
      * The whole-app action records that fact for its own targets; a press of a

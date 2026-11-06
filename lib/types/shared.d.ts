@@ -7,13 +7,13 @@
  * decode functions from it directly, and the host half derives the branded
  * identities from the same strings.
  *
- * A third-party plugin's only live channel to the browser is the command
- * registry — it can add neither a `ctx.remote` namespace nor a forwarded event,
- * both of which are compiled into the harness's own API assembly. A command
- * descriptor's only free-form field is its `description`, and a command
- * result's only free-form field is its `text`, so the park state travels as a
- * prefix plus `;`-separated fields on one of those. The text stays
- * human-readable: the same words are what the slash-command menu shows.
+ * The browser reads the live state through the plugin's same-origin JSON
+ * status route when the Web carrier mounts it; the command registry remains
+ * the action channel and the fallback for carriers without that route. A
+ * command descriptor's free-form field is its `description`, and a command
+ * result's is its `text`, so the fallback park state travels as a prefix plus
+ * `;`-separated fields on one of those. The text stays human-readable: the same
+ * words are what the slash-command menu shows.
  *
  * Every value inside a field is escaped, so a decoded name is the exact name
  * that was encoded. Session ids, tool names, and call ids are the host's own
@@ -155,6 +155,13 @@ export declare function decodeParkStatus(text: string): ParkStatus | undefined;
  * per-session status on purpose: one decoder must never read the other's text.
  */
 export declare const GLOBAL_STATUS_PREFIX = "pause all: ";
+/** The one path the Browser reads the host's live pause snapshot from. */
+export declare const STATUS_PATH = "/dsh-pause-session/status";
+/** One JSON snapshot: the whole-app verdict plus every live paused session. */
+export interface PauseSnapshot {
+    readonly global: GlobalStatus;
+    readonly sessions: Readonly<Record<string, ParkStatus>>;
+}
 /** The whole-app answer to "can I close the lid?". */
 export type GlobalVerdict = 'idle' | 'waiting' | 'safe';
 /** A surface the whole-app report could not read at all. */

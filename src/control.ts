@@ -82,7 +82,7 @@ import {
   TRIAGE_LEAVE_COMMAND, TRIAGE_LEAVE_DEFINITION_ID, TRIAGE_NOTE_COMMAND, TRIAGE_NOTE_DEFINITION_ID,
   TRIAGE_REVIEW_COMMAND, TRIAGE_REVIEW_DEFINITION_ID,
 } from './shared.js'
-import type { ParkPhase, ParkStatus } from './shared.js'
+import type { ParkPhase, ParkStatus, PauseSnapshot } from './shared.js'
 import { walkDescendants } from './tree.js'
 
 /**
@@ -234,12 +234,11 @@ interface ParkMark {
  * The commands one paused session publishes: the marker set a client reads the
  * pause from, plus the one way this process can say that its answer changed.
  *
- * A third-party plugin can add neither a Client Remote namespace nor a forwarded
- * event, so the command registry is its only live channel — and the only thing
- * that makes the registry speak is a registration or an unregistration, which is
- * what emits `commands/change`. {@link ParkMarkers.announce} therefore refreshes
- * the status verb's own registration; the three commands a client sees are the
- * same before and after, and the pair of events is that client's cue to read
+ * A registration or an unregistration is what makes the command registry
+ * speak, through `commands/change`. {@link ParkMarkers.announce} therefore
+ * refreshes the status verb's own registration; the three commands a client
+ * sees are the same before and after, and the pair of events is the client's
+ * cue to read the status route (or, on a carrier without it, the status verb)
  * once and learn the new phase.
  */
 interface ParkMarkers {
@@ -257,6 +256,13 @@ export interface SessionControl {
    * after mount.
    */
   adopt(): Promise<void>
+  /**
+   * Read the whole app and every live paused session as one JSON-safe snapshot.
+   * The browser status route serves this; it never enters a Session log.
+   * @param signal - cancellation for the tree reads this snapshot performs.
+   * @returns the whole-app verdict and the paused sessions this process holds.
+   */
+  readSnapshot(signal?: AbortSignal): Promise<PauseSnapshot>
 }
 
 /** How resuming all parked sessions answers the command that asked for it. */
@@ -758,6 +764,21 @@ export function installSessionControl(
     unheld: () => unheld,
   })
 
+  /**
+   * Read the whole app and every live paused session in one pass. The browser
+   * status route is the only caller: it replaces the command reads that used
+   * to write `command/run` and `command/done` into an address Session's log.
+   * @param signal - cancellation for the tree walks and the whole-app read.
+   * @returns the JSON-safe snapshot.
+   */
+  const readSnapshot = async (signal?: AbortSignal): Promise<PauseSnapshot> => {
+    const sessions: Record<string, ParkStatus> = {}
+    await Promise.all([...marks].map(async ([sessionId, mark]) => {
+      sessions[String(sessionId)] = await treeStatus(sessionId, mark, signal)
+    }))
+    return { global: await globalPause.readState(signal), sessions }
+  }
+
   // One effect owns the whole surface: unloading removes the pause verb, the
   // resume verbs, the subscriptions, and every marker this plugin registered.
   ctx.effect(function* () {
@@ -890,6 +911,7 @@ export function installSessionControl(
   }, 'pause: session control')
 
   return {
+    readSnapshot,
     adopt: async () => {
       for (const entry of registry.list()) {
         // Every registered session this host can read is held again, whether or

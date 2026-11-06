@@ -14,11 +14,12 @@
  * frame-wide overlay layer: it is read while looking at one conversation, and
  * a sidebar or drawer that covers that area covers the control with it.
  *
- * Both controls are host-authoritative: they read state from the host's command
- * registry and drive it through the host's session commands (`./control.ts` and
- * `./global.ts` document why the command registry is the only live channel a
- * third-party plugin can use). Each stays inert wherever that round-trip is
- * unavailable rather than rendering a control that cannot tell the truth. The
+ * Both controls are host-authoritative. On a browser Host they read the
+ * same-origin JSON status route, which keeps background reads out of the
+ * Session log; a carrier without that route falls back to the command channel.
+ * User actions still run through the host's session commands (`./control.ts`
+ * and `./global.ts` own both transports). Each control stays inert wherever no
+ * round-trip is available rather than rendering a state it cannot support. The
  * header control also reads the whole-app answer the whole-app control
  * publishes, so a park that holds nothing does not cost a host round-trip per
  * header.

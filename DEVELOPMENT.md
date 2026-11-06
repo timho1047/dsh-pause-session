@@ -27,6 +27,16 @@ the build. A fresh clone can run `pnpm pack` (the release path does not install
 dependencies), but cannot run the full verification suite without the harness
 checkout.
 
+## Browser status route
+
+On a browser host, `src/status-route.ts` registers an authenticated
+`GET /dsh-pause-session/status` route and `src/client/status.ts` reads it. This
+is the normal status path: a background refresh must not append
+`command/run`/`command/done` records to a Session's log. The route is read-only
+and passes through `connection.requestRejection`; it is absent on Desktop/IPC
+carriers, where both controls fall back to the command channel. Actions and the
+manual `/pause-*` verbs always remain commands.
+
 ## Build and test
 
 ```sh

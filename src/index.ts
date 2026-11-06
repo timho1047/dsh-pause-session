@@ -19,6 +19,7 @@ import { TRIAGE_LOG_MAX_EVENTS, TRIAGE_WINDOW_EVENTS } from './coldlog.js'
 import { installSessionControl } from './control.js'
 import { PauseGate } from './gate.js'
 import { mountParkWatch } from './park.js'
+import { mountStatusRoute } from './status-route.js'
 import { openParkRegistry } from './registry.js'
 
 /** Plugin name; the Loader row and the bundle patch both use it. */
@@ -95,5 +96,6 @@ export async function apply(ctx: Context, config: Config = Config.parse({})): Pr
     silentWakeRoutes: config.silentWakeRoutes,
     maxListedLogEvents: config.maxListedLogEvents,
   })
+  mountStatusRoute(ctx, signal => control.readSnapshot(signal))
   await control.adopt()
 }

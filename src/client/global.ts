@@ -1,30 +1,17 @@
 /**
  * Browser-side reading and driving of the host's whole-app park state.
  *
- * The same one live channel the per-session control uses — a session command
- * run through `ctx.remote.commands.execute`, plus the forwarded
- * `commands/change` event as the only notification — carries the aggregate
- * here. There is no push channel a third-party plugin can add, so the browser
- * asks: `pause-state-all` is registered globally and its RESULT carries the
- * whole-app status as of the read.
+ * On a browser Host the aggregate arrives from the same-origin JSON status
+ * route, which keeps background reads out of every Session log. A carrier
+ * without that route falls back to the session-addressed command channel:
+ * `pause-state-all` carries the whole-app status as of the read, and the
+ * forwarded `commands/change` event says when to read again.
  *
- * The command channel is session-addressed, so the control needs one session
- * to talk through. It picks a user session the host can serve (never a
- * subagent's own session), preferring the one on screen; with no session at
- * all there is nothing to ask, and the control claims nothing rather than
- * inventing an answer. Once the host's own answer names the session the park
- * belongs to, reads are addressed there instead: a read writes two records into
- * the address session's transcript, and they belong in the session being parked
- * rather than in whatever the user happens to be looking at. That name outlives
- * the phases — a session that drained and parked cleanly names nothing else — so
- * a clean park is addressed like a moving one. Failing that, the session the
- * last answer reported as registered is remembered, then the one a read was last
- * served through — an address change is the user looking somewhere else, not
- * news about the park, and a park that has emptied out is no reason to start
- * writing rows into every session the user opens next. An address that stops
- * answering (its agent is gone) is forgotten and the read falls back to the next
- * one, the session the shell asks with last, so a stale address costs an honest
- * answer rather than a control that can never speak again.
+ * The fallback still needs one session to talk through. It picks a user
+ * session the host can serve (never a subagent's own session), preferring the
+ * one on screen; once the host's answer names the park's own session, later
+ * reads are addressed there. That is the fallback's cost, not the normal Web
+ * path: the JSON route is process-wide and writes nothing into any Session.
  *
  * Every phase a session reaches announces itself through the registry — a
  * transition re-registers that session's status verb — so a change is what buys
@@ -34,7 +21,7 @@
  * what the burst still owes is the delivery of a change, and the rows of a panel
  * whose own read did not answer. A settled answer is left on screen unread: the
  * panel stays readable and the pill keeps saying what it says, but the browser
- * stops spending host round-trips and log records on a state that has stopped
+ * stops spending host round-trips on a state that has stopped
  * moving. What owes a read is the host's forwarded registry change, the user's
  * own press or decision, and the first read at mount; once an answer is on
  * screen, the shell handing this control another session to ask through is none
@@ -61,6 +48,7 @@ import type { GlobalStatus, TriageAction, TriageRow } from '../shared.js'
 import { burstWaits, DEFAULT_BURST_POLICY, ReadBurst } from './burst.js'
 import type { BurstPolicy } from './burst.js'
 import { globalPauseView } from './view.js'
+import type { PauseStatusSource } from './status.js'
 
 /** What the whole-app control knows: the host's answer, or that it could not ask. */
 export type GlobalReading =
@@ -193,10 +181,11 @@ export class PauseGlobalControl {
    */
   private lastRegistered: SessionId | undefined
   /**
-   * The session an aggregate read was last served through. Later reads keep
-   * going there: every read is two records in the address session's log, and
-   * the shell's address follows whatever the user is looking at, which is not
-   * where a row about the park belongs.
+   * The session the fallback command read was last served through. Later
+   * fallback reads keep going there: each one is two records in that address
+   * session's log, and the shell's address follows whatever the user is looking
+   * at, which is not where a row about the park belongs. The Web status route
+   * bypasses this address entirely.
    */
   private served: SessionId | undefined
   /** Highest decision-list read requested: an answer older than it is dropped. */
@@ -224,6 +213,7 @@ export class PauseGlobalControl {
     private readonly lifetime: AbortSignal,
     windowMs = 400,
     policy: Omit<BurstPolicy, 'windowMs' | 'waitsMs'> = DEFAULT_BURST_POLICY,
+    private readonly source?: PauseStatusSource,
   ) {
     this.burst = new ReadBurst(
       () => { void this.readAll() },
@@ -326,6 +316,13 @@ export class PauseGlobalControl {
    * anything at all, and a single retry is the whole price of keeping it honest.
    */
   private async readAggregate(): Promise<void> {
+    if (this.source !== undefined) {
+      const snapshot = await this.source.read(this.lifetime)
+      if (snapshot !== undefined) {
+        this.publish({ kind: 'reported', status: snapshot.global })
+        return
+      }
+    }
     const address = this.target()
     if (address === undefined) return
     if (!await this.readAt(address)) return

@@ -14,11 +14,12 @@
  * frame-wide overlay layer: it is read while looking at one conversation, and
  * a sidebar or drawer that covers that area covers the control with it.
  *
- * Both controls are host-authoritative: they read state from the host's command
- * registry and drive it through the host's session commands (`./control.ts` and
- * `./global.ts` document why the command registry is the only live channel a
- * third-party plugin can use). Each stays inert wherever that round-trip is
- * unavailable rather than rendering a control that cannot tell the truth. The
+ * Both controls are host-authoritative. On a browser Host they read the
+ * same-origin JSON status route, which keeps background reads out of the
+ * Session log; a carrier without that route falls back to the command channel.
+ * User actions still run through the host's session commands (`./control.ts`
+ * and `./global.ts` own both transports). Each control stays inert wherever no
+ * round-trip is available rather than rendering a state it cannot support. The
  * header control also reads the whole-app answer the whole-app control
  * publishes, so a park that holds nothing does not cost a host round-trip per
  * header.
@@ -42,6 +43,7 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { PauseControl } from './control.js'
 import type { PauseState } from './control.js'
 import { PauseGlobalControl } from './global.js'
+import { createStatusSource } from './status.js'
 import { GoalIcon, PauseIcon, ResumeIcon } from './icons.js'
 import { PausePill } from './pill.js'
 import type { PausePillInjected } from './pill.js'
@@ -151,13 +153,15 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'pause: dictionaries')
   const lifetime = new AbortController()
   ctx.effect(() => () => { lifetime.abort(new Error('pause: client unloaded')) }, 'pause: lifetime')
-  const globalControl = new PauseGlobalControl(ctx.remote.commands, lifetime.signal)
+  const source = createStatusSource(lifetime.signal)
+  const globalControl = new PauseGlobalControl(ctx.remote.commands, lifetime.signal, undefined, undefined, source)
   const control = new PauseControl(
     ctx.remote.commands,
     lifetime.signal,
     undefined,
     undefined,
     () => globalControl.store.getSnapshot().global,
+    source,
   )
   // A header answered from the whole-app "nothing is registered" is read for
   // real the moment that stops holding: the session it stood in for may be the
@@ -166,10 +170,11 @@ export function apply(ctx: ClientContext): void {
     () => globalControl.store.subscribe(() => { control.reconsider() }),
     'pause: the whole-app answer serves the session headers',
   )
-  // The host publishes no push channel of its own, so the forwarded command
-  // registry change is what makes these controls live: every one of them is a
-  // transition worth looking at — a park's registrations, a resume's
-  // unregistrations, and the re-registration that carries a phase change.
+  // The host announces every transition on the command channel — a park's
+  // registrations, a resume's unregistrations, and the re-registration that
+  // carries a phase change. Those announcements trigger the status reads; the
+  // reads themselves use the JSON route on Web and the command fallback
+  // elsewhere, so a status transition does not append two records to a Session.
   //
   // The host announces one event per registration step, so parking N sessions
   // arrives as several events per session. Both controls coalesce that

@@ -2,10 +2,10 @@
  * The re-read burst both browser controls share: a handful of reads after
  * something moved, and silence once it settles.
  *
- * What a control reads is published through the host's command channel, and
- * every read is two durable `command/run|done` records in the address session's
- * log plus an aggregate read on the host. Reading is therefore something the
- * host announces and the user asks for, never a heartbeat:
+ * On a browser Host a read is one same-origin status request, with no Session
+ * record. The command fallback for carriers without the route costs two durable
+ * `command/run|done` records in the address session's log. Reading is therefore
+ * something the host announces and the user asks for, never a heartbeat:
  *
  * - the host announces a transition by registering or unregistering the paused
  *   session's marker commands, and — for a phase change, which no registration
@@ -41,8 +41,8 @@
  * - a read that finds a phase still moving ends it just as fast. Every phase
  *   transition is announced at its source, the flush that resolves `parking`
  *   into `safe` included, and that announcement is the very event that starts
- *   the next burst — so watching a moving phase from here spends records on a
- *   transition that will speak for itself;
+ *   the next burst — so watching a moving phase from here spends requests (and,
+ *   on the fallback, log records) on a transition that will speak for itself;
  * - what the burst still owes after a read is delivery: the read one
  *   announcement bought, and one more when a change lands while a pass is in
  *   flight, which that pass cannot have answered. The bound is a bound, not a
@@ -52,8 +52,8 @@
  *   burst runs out is the host's own last answer, and the next trigger — a
  *   forwarded change, a press, or the shell handing a control its session again
  *   — reads the truth again. A reading nobody answered is never rendered as a
- *   confident state. A longer watch is a longer list of waits, at a linear price
- *   in the address session's log;
+ *   confident state. A longer watch is a longer list of waits, at a linear
+ *   request cost (and, on the command fallback, a linear log cost);
  * - while the page is hidden no read is armed at all, and the wait a burst
  *   still owed is armed again when the page comes back: hidden time is neither
  *   charged to the burst nor lost from it.
@@ -105,7 +105,7 @@ export declare const ACTION_ABSORB_MS = 2500;
  * The waits one burst uses when its first wait is `first`: four reads spread
  * over roughly ten times that. Long enough that a read a hidden page or an
  * in-flight pass deferred is still taken, short enough that a state which never
- * settles costs a handful of log records rather than a night of them.
+ * settles costs a handful of requests rather than a night of them.
  * @param first - milliseconds before the burst's first read, after its window; `<= 0` disables bursting.
  * @returns the waits, in order; empty when bursting is disabled.
  */

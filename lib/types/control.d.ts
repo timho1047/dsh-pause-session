@@ -59,6 +59,7 @@ import type { PauseGate } from './gate.js';
 import type { ParkWatch } from './park.js';
 import type { ParkRegistry } from './registry.js';
 import type { ResumeAttempt, ResumeOptions } from './resume.js';
+import type { PauseSnapshot } from './shared.js';
 /**
  * Result copy for a state-changing park verb issued from inside a model turn.
  * The invocation carries no origin of its own, so this refusal is the plugin's
@@ -87,6 +88,13 @@ export interface SessionControl {
      * after mount.
      */
     adopt(): Promise<void>;
+    /**
+     * Read the whole app and every live paused session as one JSON-safe snapshot.
+     * The browser status route serves this; it never enters a Session log.
+     * @param signal - cancellation for the tree reads this snapshot performs.
+     * @returns the whole-app verdict and the paused sessions this process holds.
+     */
+    readSnapshot(signal?: AbortSignal): Promise<PauseSnapshot>;
 }
 /** How resuming all parked sessions answers the command that asked for it. */
 export declare function summarizeResume(attempts: readonly ResumeAttempt[]): string;
