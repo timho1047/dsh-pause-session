@@ -14,6 +14,7 @@
  */
 import { z } from 'zod';
 import type { Context } from '@deepseek-ai/cordis';
+export { PauseRemote } from './remote.js';
 /** Plugin name; the Loader row and the bundle patch both use it. */
 export declare const name = "dsh-pause-session";
 /**
@@ -39,6 +40,7 @@ export declare const DEFAULT_SILENT_WAKE_ROUTES: readonly ["deepseek-official", 
 declare const ConfigShape: z.ZodObject<{
     silentWakeRoutes: z.ZodDefault<z.ZodArray<z.ZodString>>;
     maxListedLogEvents: z.ZodDefault<z.ZodNumber>;
+    exposeCommands: z.ZodDefault<z.ZodBoolean>;
 }, z.core.$strip>;
 /** Validated plugin configuration. */
 export type Config = z.infer<typeof ConfigShape>;
@@ -50,6 +52,7 @@ export type Config = z.infer<typeof ConfigShape>;
 export declare const Config: z.ZodPreprocess<z.ZodObject<{
     silentWakeRoutes: z.ZodDefault<z.ZodArray<z.ZodString>>;
     maxListedLogEvents: z.ZodDefault<z.ZodNumber>;
+    exposeCommands: z.ZodDefault<z.ZodBoolean>;
 }, z.core.$strip>>;
 /**
  * Mount the durable pause registry, the pause gate, the activity fold, their
@@ -61,4 +64,3 @@ export declare const Config: z.ZodPreprocess<z.ZodObject<{
  * @param config - validated route knowledge for the resume path's wake content.
  */
 export declare function apply(ctx: Context, config?: Config): Promise<void>;
-export {};

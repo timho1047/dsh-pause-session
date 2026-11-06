@@ -33,6 +33,9 @@ const PLATFORM_MODULES = [
   '@deepseek-ai/dsh-client-ui-primitives',
 ] as const
 
+/** Pure protocol helpers safe to bundle into a plugin client (no shared service identity). */
+const BUNDLED_PROTOCOL_MODULES = new Set(['@deepseek-ai/dsh-typert-protocol/remote-info'])
+
 const CSS_VIRTUAL_PREFIX = '\0dsh-css:'
 const GLOBAL_CSS_VIRTUAL_PREFIX = '\0dsh-global-css:'
 const INLINE_CSS_VIRTUAL_PREFIX = '\0dsh-inline-css:'
@@ -231,7 +234,7 @@ export function clientBundle(id: string, options: ClientBundleOptions = {}): Use
       name: 'dsh-client-bundle-purity',
       resolveId(source: string) {
         if (!source.startsWith('@deepseek-ai/')) return null
-        if (isRequested(source)) return null
+        if (isRequested(source) || BUNDLED_PROTOCOL_MODULES.has(source)) return null
         throw new Error(
           `client bundle purity: "${source}" is not in the baseline module table or ${id}'s declared external rows — `
           + 'declare it under dsh.client.external (and pass it here) or collaborate through cordis services; '

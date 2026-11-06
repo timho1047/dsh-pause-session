@@ -1,6 +1,6 @@
 {
   "name": "dsh-pause-session",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "DSH plugin: pause every running session (and its subagents) at a safe point before you leave, then resume them the next morning as if nothing was interrupted.",
   "type": "module",
   "main": "lib/index.js",
@@ -17,7 +17,19 @@
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json",
-    "./icon": "./icon.svg"
+    "./icon": "./icon.svg",
+    "./typert": {
+      "types": "./lib/typert.host.d.ts",
+      "default": "./lib/typert.host.js"
+    },
+    "./remote": {
+      "types": "./lib/typert.remote-client.d.ts",
+      "default": "./lib/typert.remote-client.js"
+    },
+    "./types": {
+      "types": "./lib/types/remote.d.ts",
+      "default": "./lib/types/remote.js"
+    }
   },
   "files": [
     "lib/index.js",
@@ -34,15 +46,21 @@
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
-    "docs/images/pause-controls.webp"
+    "docs/images/pause-controls.webp",
+    "lib/typert.host.js",
+    "lib/typert.host.d.ts",
+    "lib/typert.remote-client.js",
+    "lib/typert.remote-client.d.ts",
+    "lib/typert.remote-client.d.ts.map"
   ],
   "scripts": {
     "build:host": "tsc -p tsconfig.json",
     "build:client": "tsc -p tsconfig.client.json && tsdown",
-    "build": "npm run build:host && npm run build:client && node scripts/trim-build-whitespace.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
+    "build": "npm run generate:typert && npm run build:host && npm run build:client && node scripts/trim-build-whitespace.mjs",
+    "typecheck": "npm run generate:typert && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "test": "vitest run",
-    "verify": "npm run typecheck && npm run build && npm run test"
+    "verify": "npm run typecheck && npm run build && npm run test",
+    "generate:typert": "node scripts/generate-typert.mjs"
   },
   "dsh": {
     "bundle": {
@@ -74,7 +92,8 @@
     "@deepseek-ai/dsh-subagent": "*",
     "@deepseek-ai/dsh-session": "*",
     "@deepseek-ai/dsh-session-query": "*",
-    "@deepseek-ai/dsh-agent-preset-registry": "*"
+    "@deepseek-ai/dsh-agent-preset-registry": "*",
+    "@deepseek-ai/dsh-typert-protocol": "*"
   },
   "dependencies": {
     "zod": "4.4.3"
@@ -122,7 +141,9 @@
     "react": "^18.2.0",
     "tsdown": "0.22.2",
     "typescript": "^5.7.0",
-    "vitest": "^3.0.0"
+    "vitest": "^3.0.0",
+    "@deepseek-ai/dsh-typert-protocol": "link:../../deepseek-harness/packages/typert/protocol",
+    "@deepseek-ai/dsh-typert-generator": "link:../../deepseek-harness/packages/typert/generator"
   },
   "license": "MIT",
   "engines": {

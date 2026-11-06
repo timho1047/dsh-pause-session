@@ -54,12 +54,14 @@
  * @module dsh-pause-session/control
  */
 import type { Context } from '@deepseek-ai/cordis';
+import type { CommandResult } from '@deepseek-ai/dsh-commands';
 import { SessionId } from '@deepseek-ai/dsh-session';
 import type { PauseGate } from './gate.js';
 import type { ParkWatch } from './park.js';
 import type { ParkRegistry } from './registry.js';
-import type { ResumeAttempt, ResumeOptions } from './resume.js';
-import type { PauseSnapshot } from './shared.js';
+import type { ReleaseTreeOutcome, ResumeAttempt, ResumeOptions } from './resume.js';
+import type { TriageAction } from './shared.js';
+import type { PauseSnapshot, TriageList } from './shared.js';
 /**
  * Result copy for a state-changing park verb issued from inside a model turn.
  * The invocation carries no origin of its own, so this refusal is the plugin's
@@ -95,6 +97,22 @@ export interface SessionControl {
      * @returns the whole-app verdict and the paused sessions this process holds.
      */
     readSnapshot(signal?: AbortSignal): Promise<PauseSnapshot>;
+    /** Wake a listener after any visible status change. */
+    subscribe(listener: () => void): () => void;
+    /** Press one Session tree. */
+    pressTree(sessionId: SessionId, signal?: AbortSignal): Promise<PressTreeOutcome>;
+    /** Release one Session's registered tree. */
+    releaseTree(sessionId: SessionId, signal?: AbortSignal): Promise<ReleaseTreeOutcome>;
+    /** Press every running Session tree. */
+    pauseAll(signal?: AbortSignal): Promise<CommandResult>;
+    /** Resume every cleanly paused Session. */
+    resumeAll(signal?: AbortSignal): Promise<CommandResult>;
+    /** Flip one Session's goal re-arm opt-out. */
+    toggleGoal(sessionId: SessionId, signal?: AbortSignal): Promise<CommandResult>;
+    /** Read the morning list for one calling Session. */
+    readTriage(caller: SessionId, signal?: AbortSignal): Promise<TriageList>;
+    /** Take one listed decision for one calling Session. */
+    decideTriage(caller: SessionId, target: SessionId, action: TriageAction, signal?: AbortSignal): Promise<CommandResult>;
 }
 /** How resuming all parked sessions answers the command that asked for it. */
 export declare function summarizeResume(attempts: readonly ResumeAttempt[]): string;
@@ -106,6 +124,8 @@ export declare function summarizeResume(attempts: readonly ResumeAttempt[]): str
 export interface SessionControlOptions extends ResumeOptions {
     /** Events of each stored log the decision list may fold per row; see `./coldlog.ts`. */
     readonly maxListedLogEvents?: number;
+    /** Register the legacy slash-command surface (test compatibility only). */
+    readonly exposeCommands?: boolean;
 }
 /**
  * Contribute the session control: the pause verb, the per-session status read,

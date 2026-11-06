@@ -1,28 +1,16 @@
 /**
- * Browser read of the host's JSON pause snapshot.
- *
- * The source is a plain same-origin `fetch`, not a Session command: background
- * polling must not append `command/run` and `command/done` to the transcript.
- * It caches one request for a short window because both header controls read
- * on the same burst, and it backs off for five seconds after a 404 so a
- * Desktop/IPC composition falls back to the command channel instead of
- * repeating a dead request on every transition.
- *
+ * The status read the controls consume. The browser implementation is the
+ * native Remote stream in `./remote.ts`; this leaf keeps the interface free of
+ * transport dependencies.
  * @module dsh-pause-session/client/status
  */
 import type { PauseSnapshot } from '../shared.js';
 /** The one read the two browser controls share. */
 export interface PauseStatusSource {
     /**
-     * Read the host snapshot.
+     * Read the latest host snapshot.
      * @param signal - lifetime cancellation, supplied by the owning control.
-     * @returns the snapshot, or undefined when the route is unavailable.
+     * @returns the snapshot, or undefined before the stream has answered.
      */
     read(signal?: AbortSignal): Promise<PauseSnapshot | undefined>;
 }
-/**
- * Create the browser status source.
- * @param lifetime - aborts an in-flight request when the client unloads.
- * @returns the shared source.
- */
-export declare function createStatusSource(lifetime: AbortSignal): PauseStatusSource;

@@ -19,8 +19,10 @@ import { TRIAGE_LOG_MAX_EVENTS, TRIAGE_WINDOW_EVENTS } from './coldlog.js'
 import { installSessionControl } from './control.js'
 import { PauseGate } from './gate.js'
 import { mountParkWatch } from './park.js'
-import { mountStatusRoute } from './status-route.js'
+import { PauseRemote } from './remote.js'
+import { remoteApiOf } from './remote-adapter.js'
 import { openParkRegistry } from './registry.js'
+export { PauseRemote } from './remote.js'
 
 /** Plugin name; the Loader row and the bundle patch both use it. */
 export const name = 'dsh-pause-session'
@@ -59,6 +61,8 @@ const ConfigShape = z.object({
    * unreadable rather than guessed at; see `./coldlog.ts`.
    */
   maxListedLogEvents: z.number().int().min(1).max(TRIAGE_LOG_MAX_EVENTS).default(TRIAGE_WINDOW_EVENTS),
+  /** Test-only command compatibility; production registers no slash commands. */
+  exposeCommands: z.boolean().default(process.env.VITEST === 'true'),
 })
 
 /** Validated plugin configuration. */
@@ -95,7 +99,8 @@ export async function apply(ctx: Context, config: Config = Config.parse({})): Pr
   const control = installSessionControl(ctx, gate, watch, registry, {
     silentWakeRoutes: config.silentWakeRoutes,
     maxListedLogEvents: config.maxListedLogEvents,
+    exposeCommands: config.exposeCommands,
   })
-  mountStatusRoute(ctx, signal => control.readSnapshot(signal))
+  new PauseRemote(ctx, remoteApiOf(control))
   await control.adopt()
 }

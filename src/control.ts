@@ -68,7 +68,7 @@ import type { GlobalPause, LivePark, PressResult } from './global.js'
 import type { ParkWatch } from './park.js'
 import type { ParkRegistry } from './registry.js'
 import { installResumePath, NOT_PARKED_TEXT } from './resume.js'
-import type { ResumeAttempt, ResumeOptions, ResumePath } from './resume.js'
+import type { ReleaseTreeOutcome, ResumeAttempt, ResumeOptions, ResumePath } from './resume.js'
 import { mountTriageList } from './triage.js'
 import type { TriageListService } from './triage.js'
 import { TRIAGE_NOT_LISTED_TEXT } from './triage.js'
@@ -82,7 +82,7 @@ import {
   TRIAGE_LEAVE_COMMAND, TRIAGE_LEAVE_DEFINITION_ID, TRIAGE_NOTE_COMMAND, TRIAGE_NOTE_DEFINITION_ID,
   TRIAGE_REVIEW_COMMAND, TRIAGE_REVIEW_DEFINITION_ID,
 } from './shared.js'
-import type { ParkPhase, ParkStatus, PauseSnapshot } from './shared.js'
+import type { ParkPhase, ParkStatus, PauseSnapshot, TriageList } from './shared.js'
 import { walkDescendants } from './tree.js'
 
 /**
@@ -263,6 +263,27 @@ export interface SessionControl {
    * @returns the whole-app verdict and the paused sessions this process holds.
    */
   readSnapshot(signal?: AbortSignal): Promise<PauseSnapshot>
+  /** Wake a listener after any visible status change. */
+  subscribe(listener: () => void): () => void
+  /** Press one Session tree. */
+  pressTree(sessionId: SessionId, signal?: AbortSignal): Promise<PressTreeOutcome>
+  /** Release one Session's registered tree. */
+  releaseTree(sessionId: SessionId, signal?: AbortSignal): Promise<ReleaseTreeOutcome>
+  /** Press every running Session tree. */
+  pauseAll(signal?: AbortSignal): Promise<CommandResult>
+  /** Resume every cleanly paused Session. */
+  resumeAll(signal?: AbortSignal): Promise<CommandResult>
+  /** Flip one Session's goal re-arm opt-out. */
+  toggleGoal(sessionId: SessionId, signal?: AbortSignal): Promise<CommandResult>
+  /** Read the morning list for one calling Session. */
+  readTriage(caller: SessionId, signal?: AbortSignal): Promise<TriageList>
+  /** Take one listed decision for one calling Session. */
+  decideTriage(
+    caller: SessionId,
+    target: SessionId,
+    action: TriageAction,
+    signal?: AbortSignal,
+  ): Promise<CommandResult>
 }
 
 /** How resuming all parked sessions answers the command that asked for it. */
@@ -290,6 +311,8 @@ export function summarizeResume(attempts: readonly ResumeAttempt[]): string {
 export interface SessionControlOptions extends ResumeOptions {
   /** Events of each stored log the decision list may fold per row; see `./coldlog.ts`. */
   readonly maxListedLogEvents?: number
+  /** Register the legacy slash-command surface (test compatibility only). */
+  readonly exposeCommands?: boolean
 }
 
 /**
@@ -313,6 +336,9 @@ export function installSessionControl(
 ): SessionControl {
   /** Marks per paused session; presence here mirrors the gate's own membership. */
   const marks = new Map<SessionId, ParkMark>()
+  /** Host listeners the native Remote stream wakes after a visible change. */
+  const listeners = new Set<() => void>()
+  const notify = (): void => { for (const listener of [...listeners]) listener() }
   /** Published marker sets per paused session; disposing one removes its three commands. */
   const markers = new Map<SessionId, ParkMarkers>()
   /**
@@ -334,6 +360,7 @@ export function installSessionControl(
 
   const drop = (sessionId: SessionId): void => {
     marks.delete(sessionId)
+    notify()
     const marker = markers.get(sessionId)
     if (marker === undefined) return
     markers.delete(sessionId)
@@ -372,7 +399,10 @@ export function installSessionControl(
     }
     const changed = mark.phase !== phase
     mark.phase = phase
-    if (changed) markers.get(sessionId)?.announce()
+    if (changed) {
+      markers.get(sessionId)?.announce()
+      notify()
+    }
     return true
   }
 
@@ -438,6 +468,7 @@ export function installSessionControl(
    * nothing more.
    */
   const publish = (sessionId: SessionId): void => {
+    if (options.exposeCommands !== true) return
     const mark = marks.get(sessionId)
     if (mark === undefined || markers.has(sessionId)) return
     const agent = ctx.agents.get(sessionId)
@@ -498,6 +529,7 @@ export function installSessionControl(
       })
     })
     markers.set(sessionId, { fiber, announce: () => { announce?.() } })
+    notify()
   }
 
   /**
@@ -782,6 +814,7 @@ export function installSessionControl(
   // One effect owns the whole surface: unloading removes the pause verb, the
   // resume verbs, the subscriptions, and every marker this plugin registered.
   ctx.effect(function* () {
+    if (options.exposeCommands === true) {
     yield ctx.commands.register({
       definitionId: CommandDefinitionId(PAUSE_DEFINITION_ID),
       name: PAUSE_COMMAND,
@@ -882,6 +915,7 @@ export function installSessionControl(
       description: 'Turn a listed Session\'s goal re-arm on or off: <session id>',
       handler: decide('goal'),
     })
+    }
     yield gate.onChange(sessionId => { sync(sessionId) })
     // A request arriving at (or leaving) the gate is the moment a session can
     // become parked. The notification lands inside the request path, so the
@@ -912,6 +946,35 @@ export function installSessionControl(
 
   return {
     readSnapshot,
+    subscribe: (listener) => {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    },
+    pressTree: async (sessionId, signal) => await pressTree(sessionId, signal),
+    releaseTree: async (sessionId, signal) => await resumePath.releaseTree(sessionId, signal),
+    pauseAll: async (signal) => {
+      const answer = await globalPause.pressAll(signal)
+      notify()
+      return answer
+    },
+    resumeAll: async (signal) => {
+      const answer = { kind: 'success' as const, text: summarizeResume(await resumePath.resumeParked(signal)) }
+      notify()
+      return answer
+    },
+    toggleGoal: async (sessionId) => {
+      const record = registry.get(sessionId)
+      if (record === undefined) return { kind: 'error', text: NOT_PARKED_TEXT }
+      const answer = await resumePath.setRearmGoal(sessionId, !record.rearmGoal)
+      notify()
+      return answer
+    },
+    readTriage: async (caller, signal) => await triage.read(caller, signal),
+    decideTriage: async (caller, target, action, signal) => {
+      const answer = await triage.decide(caller, target, action, signal)
+      notify()
+      return answer
+    },
     adopt: async () => {
       for (const entry of registry.list()) {
         // Every registered session this host can read is held again, whether or
