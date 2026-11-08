@@ -31,6 +31,8 @@ import type { TriageAction } from '../shared.js'
 import { addressingSession } from './global.js'
 import type { GlobalPauseState } from './global.js'
 import { globalPauseView, showsPauseControl, triageActionsFor, triageView, TRIAGE_GOAL_VIEW } from './view.js'
+import { draggedOffset, loadPillOffset, savePillOffset } from './pill-position.js'
+import type { PillOffset } from './pill-position.js'
 import type { TriageRowView } from './view.js'
 import { CaveatIcon, ChevronIcon, PauseIcon, ResumeIcon } from './icons.js'
 import styles from './button.module.css'
@@ -109,33 +111,6 @@ function TriageSessionRow(props: {
   )
 }
 
-const POSITION_KEY = 'dsh.pause.pill.position'
-
-/** One saved pill offset from the header seat. */
-interface PillOffset { readonly x: number; readonly y: number }
-
-/** Read the persisted pill offset, ignoring a malformed or unavailable store. */
-function loadOffset(): PillOffset {
-  try {
-    const raw = localStorage.getItem(POSITION_KEY)
-    if (raw === null) return { x: 0, y: 0 }
-    const value = JSON.parse(raw) as Partial<PillOffset>
-    return { x: typeof value.x === 'number' ? value.x : 0, y: typeof value.y === 'number' ? value.y : 0 }
-  } catch {
-    return { x: 0, y: 0 }
-  }
-}
-
-/** Persist the pill offset; a zero offset removes the key. */
-function saveOffset(offset: PillOffset): void {
-  try {
-    if (offset.x === 0 && offset.y === 0) localStorage.removeItem(POSITION_KEY)
-    else localStorage.setItem(POSITION_KEY, JSON.stringify(offset))
-  } catch {
-    // A private/storage-disabled profile keeps the position for this page only.
-  }
-}
-
 /**
  * The whole-app control: what the host says about the whole park, the one
  * press that parks or releases all of it, and the decision list for whatever
@@ -150,7 +125,7 @@ export function PausePill(props: PausePillProps): ReactNode {
   const open = props.usePauseGlobal(state => state.panelOpen)
   const error = props.usePauseGlobal(state => state.error)
   const sessions = props.usePauseGlobal(state => state.sessions)
-  const [offset, setOffset] = useState<PillOffset>(() => loadOffset())
+  const [offset, setOffset] = useState<PillOffset>(() => loadPillOffset())
   const drag = useRef<{ startX: number; startY: number; base: PillOffset; moved: boolean; last?: PillOffset } | undefined>(undefined)
   const suppressClick = useRef(false)
   // Actions address one user session; the status stream is process-wide.
@@ -179,11 +154,18 @@ export function PausePill(props: PausePillProps): ReactNode {
     if (current === undefined) return
     const dx = event.clientX - current.startX
     const dy = event.clientY - current.startY
-    if (!current.moved && Math.hypot(dx, dy) < 4) return
-    current.moved = true
+    if (!current.moved) {
+      const next = draggedOffset(current.base, dx, dy)
+      if (next === undefined) return
+      current.moved = true
+      event.preventDefault()
+      current.last = next
+      setOffset(next)
+      return
+    }
     event.preventDefault()
-    current.last = { x: current.base.x + dx, y: current.base.y + dy }
-    setOffset(current.last)
+    current.last = draggedOffset(current.base, dx, dy, 0)
+    if (current.last !== undefined) setOffset(current.last)
   }
   const onPointerUp = (event: React.PointerEvent<HTMLSpanElement>): void => {
     const current = drag.current
@@ -192,11 +174,11 @@ export function PausePill(props: PausePillProps): ReactNode {
     event.currentTarget.releasePointerCapture(event.pointerId)
     if (!current.moved) return
     suppressClick.current = true
-    saveOffset(current.last ?? current.base)
+    savePillOffset(current.last ?? current.base)
   }
   const resetPosition = (): void => {
     setOffset({ x: 0, y: 0 })
-    saveOffset({ x: 0, y: 0 })
+    savePillOffset({ x: 0, y: 0 })
   }
   const tip = view.caveats
     .map(caveat => caveat.names.length === 0
