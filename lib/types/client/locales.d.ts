@@ -27,9 +27,6 @@ export declare const zh: {
     'all.unclean': string;
     'all.unclean.aria': string;
     'all.safe': string;
-    'all.reset': string;
-    'all.reset.aria': string;
-    'all.drag': string;
     'all.checking.aria': string;
     'all.caveat.jobs': string;
     'all.caveat.unresumable': string;

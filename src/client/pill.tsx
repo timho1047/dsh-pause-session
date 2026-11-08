@@ -18,7 +18,7 @@
  * @module dsh-pause-session/client/pill
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect } from 'react'
 import type { ReactNode } from 'react'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
@@ -31,8 +31,6 @@ import type { TriageAction } from '../shared.js'
 import { addressingSession } from './global.js'
 import type { GlobalPauseState } from './global.js'
 import { globalPauseView, showsPauseControl, triageActionsFor, triageView, TRIAGE_GOAL_VIEW } from './view.js'
-import { draggedOffset, loadPillOffset, savePillOffset } from './pill-position.js'
-import type { PillOffset } from './pill-position.js'
 import type { TriageRowView } from './view.js'
 import { CaveatIcon, ChevronIcon, PauseIcon, ResumeIcon } from './icons.js'
 import styles from './button.module.css'
@@ -125,9 +123,6 @@ export function PausePill(props: PausePillProps): ReactNode {
   const open = props.usePauseGlobal(state => state.panelOpen)
   const error = props.usePauseGlobal(state => state.error)
   const sessions = props.usePauseGlobal(state => state.sessions)
-  const [offset, setOffset] = useState<PillOffset>(() => loadPillOffset())
-  const drag = useRef<{ startX: number; startY: number; base: PillOffset; moved: boolean; last?: PillOffset } | undefined>(undefined)
-  const suppressClick = useRef(false)
   // Actions address one user session; the status stream is process-wide.
   const address = useSessions(addressingSession)
   const view = globalPauseView(reading, sessions)
@@ -144,67 +139,13 @@ export function PausePill(props: PausePillProps): ReactNode {
     if (visible && address !== undefined) refresh(address)
   }, [refresh, address, visible])
   if (!visible || !view.visible || address === undefined) return null
-  const onPointerDown = (event: React.PointerEvent<HTMLSpanElement>): void => {
-    if (event.button !== 0) return
-    // A new gesture is a new click: an old drag's suppression must not eat it.
-    suppressClick.current = false
-    drag.current = { startX: event.clientX, startY: event.clientY, base: offset, moved: false }
-  }
-  const onPointerMove = (event: React.PointerEvent<HTMLSpanElement>): void => {
-    const current = drag.current
-    if (current === undefined) return
-    const dx = event.clientX - current.startX
-    const dy = event.clientY - current.startY
-    if (!current.moved) {
-      const next = draggedOffset(current.base, dx, dy)
-      if (next === undefined) return
-      current.moved = true
-      // Capture only once this is a drag. Capturing on pointer-down retargets
-      // the following click to the wrapper, so a plain press stops reaching
-      // the button inside it.
-      event.currentTarget.setPointerCapture(event.pointerId)
-      event.preventDefault()
-      current.last = next
-      setOffset(next)
-      return
-    }
-    event.preventDefault()
-    current.last = draggedOffset(current.base, dx, dy, 0)
-    if (current.last !== undefined) setOffset(current.last)
-  }
-  const onPointerUp = (event: React.PointerEvent<HTMLSpanElement>): void => {
-    const current = drag.current
-    drag.current = undefined
-    if (current === undefined) return
-    if (!current.moved) return
-    suppressClick.current = true
-    savePillOffset(current.last ?? current.base)
-  }
-  const resetPosition = (): void => {
-    setOffset({ x: 0, y: 0 })
-    savePillOffset({ x: 0, y: 0 })
-  }
   const tip = view.caveats
     .map(caveat => caveat.names.length === 0
       ? t(caveat.key)
       : `${t(caveat.key)} (${caveat.names.join(', ')})`)
     .join('\n')
   return (
-    <span
-      className={styles.dspPill}
-      style={{ transform: `translate(${String(offset.x)}px, ${String(offset.y)}px)` }}
-      title={t('all.drag')}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
-      onClickCapture={(event) => {
-        if (!suppressClick.current) return
-        suppressClick.current = false
-        event.preventDefault()
-        event.stopPropagation()
-      }}
-    >
+    <span className={styles.dspPill}>
       {!open
         ? null
         : (
@@ -219,18 +160,6 @@ export function PausePill(props: PausePillProps): ReactNode {
               >
                 {t('triage.refresh.aria')}
               </button>
-              {offset.x === 0 && offset.y === 0
-                ? null
-                : (
-                  <button
-                    type="button"
-                    className={styles.dspPillAction}
-                    aria-label={t('all.reset.aria')}
-                    onClick={resetPosition}
-                  >
-                    {t('all.reset')}
-                  </button>
-                )}
             </div>
             {!list.visible
               ? <p className={styles.dspPillPanelNote}>{t('triage.reading')}</p>

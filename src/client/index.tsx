@@ -204,7 +204,8 @@ export function apply(ctx: ClientContext): void {
         {
           name: 'conversation.session.header.utilities',
           id: 'pause-all',
-          order: 60,
+          // Immediately left of open-in-app (`order: -10`).
+          order: -11,
           locale: NS,
           inject: (): PausePillInjected => ({
             hooks: { pauseGlobal: globalControl.store },
