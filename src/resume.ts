@@ -45,7 +45,14 @@ import { owesReply } from './history.js'
 import type { ParkRegistry } from './registry.js'
 import { describeError, UNRECORDED_TEXT } from './shared.js'
 import { walkDescendants } from './tree.js'
+import { releaseOrder } from './release-order.js'
 import type { PauseAnswer } from './shared.js'
+export * from './resume-text.js'
+import {
+  ACTIVATION_FAILED_TEXT, NOT_PARKED_TEXT, REARM_GOAL_OFF_TEXT, REARM_GOAL_ON_TEXT,
+  RESUMED_TEXT, REVIEW_TEXT, summarizeTreeRelease, UNCLEAN_TEXT, UNRESUMABLE_TEXT, WAKE_MARKER,
+} from './resume-text.js'
+import type { ReleaseTreeOutcome, ResumeAttempt, ResumeRefusal, WakeRequest } from './resume-text.js'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
@@ -57,79 +64,6 @@ declare module '@deepseek-ai/dsh-llm' {
      */
     'pause': { kind: 'pause' }
   }
-}
-
-/**
- * The one wake content a route that keeps an empty user message is given. It
- * names its producer, because it lands in the same user turn as the input the
- * model owes an answer to and must not read as part of it.
- */
-export const WAKE_MARKER = '[pause: resumed from a pause]'
-
-/**
- * How one resume asks the loop for the request it owes the session:
- *
- * - `silent`: the clean path's wake — an empty input on a route the
- *   composition declared silent, and the visible marker on any other route.
- * - `message`: the decision list's "continue, and say the tool outcome is
- *   unknown" — user-visible text on the wire by construction, and the only
- *   resume that is not invisible.
- * - `none`: no wake at all. This is what "leave it for me to read" costs: the
- *   session is not activated, nothing is asked of the model, and the park is
- *   exactly as it was.
- */
-export type WakeRequest =
-  | { readonly kind: 'silent' }
-  | { readonly kind: 'message'; readonly text: string }
-  | { readonly kind: 'none' }
-
-/** Result copy for a resumed session; the model never sees it. */
-export const RESUMED_TEXT = 'This session resumed from where it paused.'
-
-/**
- * Result copy for a registered session this path refuses: its durable state is
- * not the outcome of a completed park, so waking it would be a guess.
- */
-export const UNCLEAN_TEXT = 'pause did not resume this session: its pause did not finish cleanly,'
-  + ' so it needs your decision.'
-
-/** Result copy when nothing is parked under that session. */
-export const NOT_PARKED_TEXT = 'pause has no pause recorded for this session.'
-
-/** Result copy for a session that is parked but could not be loaded back. */
-export const ACTIVATION_FAILED_TEXT = 'pause could not reopen this session, so it stayed paused.'
-
-/** Result copy for a one-shot subagent route: its Session exists, but no resume may reactivate it. */
-export const UNRESUMABLE_TEXT = 'pause did not resume this session: it is a one-shot subagent route and cannot be resumed.'
-
-/**
- * Result copy for the review decision. It is the one answer that promises
- * nothing happened, because opening a session to read it is the user's own
- * action in their session list — and activating its agent here would start a
- * session they asked only to look at.
- */
-export const REVIEW_TEXT = 'pause did not activate this session: it is still parked, and nothing was sent to a model.'
-  + ' Open it from your session list when you want to read it.'
-
-/** Copy for one goal opt-out change. */
-export const REARM_GOAL_ON_TEXT = 'pause will re-open this session\'s goal when it resumes it.'
-export const REARM_GOAL_OFF_TEXT = 'pause will leave this session\'s goal closed when it resumes it.'
-
-/** Why one record did not produce a running session. */
-export type ResumeRefusal = 'not-parked' | 'not-clean' | 'activation-failed' | 'unrecorded' | 'not-activated' | 'unresumable'
-
-/** What one resume attempt did. */
-export interface ResumeOutcome {
-  readonly sessionId: SessionId
-  /** Whether the session is now running from the point it stopped. */
-  readonly resumed: boolean
-  /** Present exactly when `resumed` is false. */
-  readonly refusal?: ResumeRefusal
-}
-
-/** One resume attempt plus the answer the caller receives. */
-export interface ResumeAttempt extends ResumeOutcome {
-  readonly answer: PauseAnswer
 }
 
 /** How this path is wired into the session control that owns the pause state. */
@@ -217,55 +151,6 @@ export interface ResumePath {
    * @returns what happened to the tree, and the copy for whoever asked.
    */
   releaseTree(sessionId: SessionId, signal?: AbortSignal): Promise<ReleaseTreeOutcome>
-}
-
-/** What releasing one session's registered tree did. */
-export interface ReleaseTreeOutcome {
-  /** How many sessions this release covered: the session plus its registered descendants. */
-  readonly members: number
-  /** How many of them are running again. */
-  readonly resumed: number
-  /** How many could not be resumed, and why the release did not take them back. */
-  readonly refusals: readonly { readonly sessionId: SessionId; readonly refusal: ResumeRefusal }[]
-  /** The copy for whoever pressed the release. */
-  readonly answer: PauseAnswer
-}
-
-/**
- * How one tree-wide release answers the person who pressed it. One release, one
- * sentence about all of it: what came back, and — by name, because those rows
- * are what the morning list is for — what did not.
- * @param released - the sessions this release covered, in release order.
- * @returns the result text, e.g. `pause resumed 2 sessions from where they stopped; "child" did not pause completely`.
- */
-export function summarizeTreeRelease(released: readonly ResumeAttempt[]): string {
-  const resumed = released.filter(attempt => attempt.resumed).length
-  const head = resumed === 0
-    ? 'pause resumed nothing from this tree'
-    : resumed === 1
-      ? 'pause resumed 1 session from where it stopped'
-      : `pause resumed ${resumed} sessions from where they stopped`
-  const refused = released.filter(attempt => !attempt.resumed)
-  if (refused.length === 0) return `${head}.`
-  const named = refused
-    .filter(attempt => attempt.refusal === 'not-clean')
-    .map(attempt => `"${String(attempt.sessionId)}"`)
-  const rest = named.length === 0
-    ? `${String(refused.length)} could not be resumed`
-    : refused.length === named.length
-      ? `${named.join(', ')} did not pause completely`
-      : `${named.join(', ')} did not pause completely, and ${String(refused.length - named.length)} more could not be resumed`
-  return `${head}; ${rest}.`
-}
-
-/**
- * How a batch release is sequenced: the tree edge each child was found under,
- * and the depth levels a release walks, shallowest first.
- */
-interface ReleaseOrder {
-  /** Direct parent inside the recorded set, for the sessions that have one. */
-  readonly parents: ReadonlyMap<SessionId, SessionId>
-  readonly levels: readonly (readonly SessionId[])[]
 }
 
 /**
@@ -601,48 +486,6 @@ export function installResumePath(
    * @param signal - cancellation for each catalog read.
    * @returns the parent of each child, and one list per depth level, shallowest first.
    */
-  const releaseOrder = async (sessionIds: readonly SessionId[], signal?: AbortSignal): Promise<ReleaseOrder> => {
-    const owned = new Set(sessionIds)
-    const parentOf = new Map<SessionId, SessionId>()
-    const subagents = ctx.get('subagents')
-    if (subagents !== undefined) {
-      for (const sessionId of sessionIds) {
-        signal?.throwIfAborted()
-        try {
-          for (const child of await subagents.listChildren(sessionId, signal)) {
-            if (owned.has(child.id)) parentOf.set(child.id, sessionId)
-          }
-        } catch (error: unknown) {
-          if (signal?.aborted === true) throw error
-          ctx.logger.warn(`pause: could not read the children of "${sessionId}": ${describeError(error)}`)
-        }
-      }
-    }
-    const depthOf = (sessionId: SessionId): number => {
-      let steps = 0
-      const seen = new Set<SessionId>([sessionId])
-      for (let at = parentOf.get(sessionId); at !== undefined; at = parentOf.get(at)) {
-        // A damaged catalog could describe a cycle; a session in one is a root.
-        if (seen.has(at)) break
-        seen.add(at)
-        steps += 1
-      }
-      return steps
-    }
-    const levels = new Map<number, SessionId[]>()
-    for (const sessionId of sessionIds) {
-      const level = depthOf(sessionId)
-      const bucket = levels.get(level)
-      if (bucket === undefined) levels.set(level, [sessionId])
-      else bucket.push(sessionId)
-    }
-    return {
-      parents: parentOf,
-      levels: [...levels.keys()].sort((left, right) => left - right)
-        .map(level => levels.get(level) ?? []),
-    }
-  }
-
   return {
     resumeSession,
     decideUnclean,
@@ -676,7 +519,7 @@ export function installResumePath(
             : { sessionId: member, resumed: true, answer })
         }
       } else {
-        const release = await releaseOrder(registered, signal)
+        const release = await releaseOrder(ctx, registered, signal)
         for (const level of release.levels) {
           signal?.throwIfAborted()
           for (const member of level) {
@@ -716,7 +559,7 @@ export function installResumePath(
       }
     },
     resumeParked: async (signal) => {
-      const release = await releaseOrder(registry.list().map(entry => entry.sessionId), signal)
+      const release = await releaseOrder(ctx, registry.list().map(entry => entry.sessionId), signal)
       const attempts: ResumeAttempt[] = []
       for (const level of release.levels) {
         signal?.throwIfAborted()

@@ -24,6 +24,8 @@ and this project uses [Semantic Versioning](https://semver.org/).
 - The Remote namespace is owner-only.
 - The client bundle uses a build-time codec-builder shim instead of bundling the full Zod runtime.
 - One snapshot is shared by every connected Remote observer, and the snapshot projection shares its tree walks.
+- The park episode machine, snapshot projection, release ordering, and resume copy now live in separate modules; `control.ts` is composition only.
+- State-changing Remote actions are recorded with a structured host log entry and the caller principal.
 
 ### Fixed
 

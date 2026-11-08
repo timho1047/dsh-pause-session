@@ -36,6 +36,8 @@ import type { SessionId } from '@deepseek-ai/dsh-session';
 import type { PauseGate } from './gate.js';
 import type { ParkRegistry } from './registry.js';
 import type { PauseAnswer } from './shared.js';
+export * from './resume-text.js';
+import type { ReleaseTreeOutcome, ResumeAttempt, WakeRequest } from './resume-text.js';
 declare module '@deepseek-ai/dsh-llm' {
     interface MessageSourceMap {
         /**
@@ -48,69 +50,6 @@ declare module '@deepseek-ai/dsh-llm' {
             kind: 'pause';
         };
     }
-}
-/**
- * The one wake content a route that keeps an empty user message is given. It
- * names its producer, because it lands in the same user turn as the input the
- * model owes an answer to and must not read as part of it.
- */
-export declare const WAKE_MARKER = "[pause: resumed from a pause]";
-/**
- * How one resume asks the loop for the request it owes the session:
- *
- * - `silent`: the clean path's wake — an empty input on a route the
- *   composition declared silent, and the visible marker on any other route.
- * - `message`: the decision list's "continue, and say the tool outcome is
- *   unknown" — user-visible text on the wire by construction, and the only
- *   resume that is not invisible.
- * - `none`: no wake at all. This is what "leave it for me to read" costs: the
- *   session is not activated, nothing is asked of the model, and the park is
- *   exactly as it was.
- */
-export type WakeRequest = {
-    readonly kind: 'silent';
-} | {
-    readonly kind: 'message';
-    readonly text: string;
-} | {
-    readonly kind: 'none';
-};
-/** Result copy for a resumed session; the model never sees it. */
-export declare const RESUMED_TEXT = "This session resumed from where it paused.";
-/**
- * Result copy for a registered session this path refuses: its durable state is
- * not the outcome of a completed park, so waking it would be a guess.
- */
-export declare const UNCLEAN_TEXT: string;
-/** Result copy when nothing is parked under that session. */
-export declare const NOT_PARKED_TEXT = "pause has no pause recorded for this session.";
-/** Result copy for a session that is parked but could not be loaded back. */
-export declare const ACTIVATION_FAILED_TEXT = "pause could not reopen this session, so it stayed paused.";
-/** Result copy for a one-shot subagent route: its Session exists, but no resume may reactivate it. */
-export declare const UNRESUMABLE_TEXT = "pause did not resume this session: it is a one-shot subagent route and cannot be resumed.";
-/**
- * Result copy for the review decision. It is the one answer that promises
- * nothing happened, because opening a session to read it is the user's own
- * action in their session list — and activating its agent here would start a
- * session they asked only to look at.
- */
-export declare const REVIEW_TEXT: string;
-/** Copy for one goal opt-out change. */
-export declare const REARM_GOAL_ON_TEXT = "pause will re-open this session's goal when it resumes it.";
-export declare const REARM_GOAL_OFF_TEXT = "pause will leave this session's goal closed when it resumes it.";
-/** Why one record did not produce a running session. */
-export type ResumeRefusal = 'not-parked' | 'not-clean' | 'activation-failed' | 'unrecorded' | 'not-activated' | 'unresumable';
-/** What one resume attempt did. */
-export interface ResumeOutcome {
-    readonly sessionId: SessionId;
-    /** Whether the session is now running from the point it stopped. */
-    readonly resumed: boolean;
-    /** Present exactly when `resumed` is false. */
-    readonly refusal?: ResumeRefusal;
-}
-/** One resume attempt plus the answer the caller receives. */
-export interface ResumeAttempt extends ResumeOutcome {
-    readonly answer: PauseAnswer;
 }
 /** How this path is wired into the session control that owns the pause state. */
 export interface ResumeDeps {
@@ -185,28 +124,6 @@ export interface ResumePath {
      */
     releaseTree(sessionId: SessionId, signal?: AbortSignal): Promise<ReleaseTreeOutcome>;
 }
-/** What releasing one session's registered tree did. */
-export interface ReleaseTreeOutcome {
-    /** How many sessions this release covered: the session plus its registered descendants. */
-    readonly members: number;
-    /** How many of them are running again. */
-    readonly resumed: number;
-    /** How many could not be resumed, and why the release did not take them back. */
-    readonly refusals: readonly {
-        readonly sessionId: SessionId;
-        readonly refusal: ResumeRefusal;
-    }[];
-    /** The copy for whoever pressed the release. */
-    readonly answer: PauseAnswer;
-}
-/**
- * How one tree-wide release answers the person who pressed it. One release, one
- * sentence about all of it: what came back, and — by name, because those rows
- * are what the morning list is for — what did not.
- * @param released - the sessions this release covered, in release order.
- * @returns the result text, e.g. `pause resumed 2 sessions from where they stopped; "child" did not pause completely`.
- */
-export declare function summarizeTreeRelease(released: readonly ResumeAttempt[]): string;
 /**
  * Build the clean resume path.
  * @param ctx - host context carrying the agent store, the session store, and the goal service when one is mounted.

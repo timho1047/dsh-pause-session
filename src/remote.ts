@@ -13,7 +13,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
+import { principalOf, Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { RemoteInvocation } from '@deepseek-ai/dsh-typert-protocol'
 
 declare module '@deepseek-ai/dsh-typert-protocol' {
@@ -106,6 +106,24 @@ function ownerOnly(ctx: Context): void {
   if (invocation.peer.principal?.kind !== 'owner') {
     throw new RemoteError('pause/owner-only', 'pause controls are available only to the owner', {})
   }
+}
+
+/**
+ * Record one state-changing Remote action in the host log. The principal is
+ * the owning user for owner calls and trusted in-process invocations; no wire
+ * field can forge it.
+ * @param ctx - the service Context.
+ * @param action - the action pressed.
+ * @param sessionId - the addressed Session.
+ */
+function logAction(ctx: Context, action: string, sessionId: string): void {
+  const invocation = (ctx as Context & { readonly invocation?: RemoteInvocation }).invocation
+  const principal = principalOf(invocation)
+  ctx.logger.info(`pause: ${action} "${sessionId}"`, {
+    action,
+    sessionId,
+    principal: principal?.kind ?? 'owner',
+  })
 }
 
 export interface PauseRemoteApi {
@@ -220,6 +238,7 @@ export class PauseRemote extends TypertRemoteService {
   @Remote('act')
   async act(request: PauseActionRequest, signal?: AbortSignal): Promise<PauseActionResultWire> {
     ownerOnly(this.ctx)
+    logAction(this.ctx, request.action, request.sessionId)
     return await this.api.act(request, signal)
   }
 
@@ -244,6 +263,7 @@ export class PauseRemote extends TypertRemoteService {
   @Remote('decide')
   async decide(request: PauseDecisionRequest, signal?: AbortSignal): Promise<PauseActionResultWire> {
     ownerOnly(this.ctx)
+    logAction(this.ctx, request.decision, request.target)
     return await this.api.decide(request, signal)
   }
 }

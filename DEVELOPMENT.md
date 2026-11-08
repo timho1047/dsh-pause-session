@@ -5,8 +5,11 @@ official DSH source tree; it is only the author's local layout.
 
 ## Layout
 
-- `src/` — host-half TypeScript: pause gate, park registry, resume path,
-  triage, and host services.
+- `src/` — host-half TypeScript: pause gate, park registry, park-state
+  machine, snapshot projection, resume path, triage, and host services.
+  `control.ts` is the composition root; `park-state.ts`, `snapshot.ts`,
+  `resume.ts`, `resume-text.ts`, and `release-order.ts` own their respective
+  change reasons.
 - `src/client/` — Web client TypeScript/React: the session control, global
   control, state mapping, and locale dictionaries.
 - `lib/` — committed build output. Run `pnpm run build` to refresh it before a
