@@ -28,6 +28,7 @@ import type { TriageAction } from './shared.js'
 import { describeError, foldTreePhases, UNRECORDED_TEXT } from './shared.js'
 import type { ParkPhase, ParkStatus, PauseSnapshot, TriageList } from './shared.js'
 import { walkDescendants } from './tree.js'
+import type { TreeWalk } from './tree.js'
 import type { PauseAnswer } from './shared.js'
 
 /**
@@ -288,8 +289,13 @@ export function installSessionControl(
    * @param mark - the session's own mark, whose phase the fold starts from.
    * @returns the phase to publish and the goal opt-out that rides beside it.
    */
-  const treeStatus = async (sessionId: SessionId, mark: ParkMark, signal?: AbortSignal): Promise<ParkStatus> => {
-    const walk = await walkDescendants(ctx, sessionId, signal)
+  const treeStatus = async (
+    sessionId: SessionId,
+    mark: ParkMark,
+    signal?: AbortSignal,
+    knownWalk?: TreeWalk,
+  ): Promise<ParkStatus> => {
+    const walk = knownWalk ?? await walkDescendants(ctx, sessionId, signal)
     const phases: ParkPhase[] = [mark.phase]
     const extraRunning: string[] = []
     for (const member of walk.members) {
@@ -600,10 +606,15 @@ export function installSessionControl(
    */
   const readSnapshot = async (signal?: AbortSignal): Promise<PauseSnapshot> => {
     const sessions: Record<string, ParkStatus> = {}
+    const walks = new Map<SessionId, TreeWalk>()
     await Promise.all([...marks].map(async ([sessionId, mark]) => {
-      sessions[String(sessionId)] = await treeStatus(sessionId, mark, signal)
+      const walk = await walkDescendants(ctx, sessionId, signal)
+      // The aggregate has its own blind-spot reading for a host with no
+      // subagent service; sharing an empty walk would erase that fact.
+      if (ctx.get('subagents') !== undefined) walks.set(sessionId, walk)
+      sessions[String(sessionId)] = await treeStatus(sessionId, mark, signal, walk)
     }))
-    return { global: await globalPause.readState(signal), sessions }
+    return { global: await globalPause.readState(signal, walks), sessions }
   }
 
   // One effect owns the subscriptions and the mark cleanup. There is no

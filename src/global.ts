@@ -98,7 +98,7 @@ export interface GlobalPause {
    * @param signal - cancellation for the tree reads this read performs.
    * @returns the aggregate as of this read.
    */
-  readState(signal?: AbortSignal): Promise<GlobalStatus>
+  readState(signal?: AbortSignal, walks?: ReadonlyMap<SessionId, TreeWalk>): Promise<GlobalStatus>
   /**
    * Report one session a press could not register, so the aggregate names it.
    * The whole-app action records that fact for its own targets; a press of a
@@ -192,8 +192,14 @@ export function mountGlobalPause(
    * answer; the cache keeps that read from repeating a catalog round-trip it
    * has already paid for.
    */
-  const walkTree = async (sessionId: SessionId, signal?: AbortSignal): Promise<TreeReading> => {
+  const walkTree = async (
+    sessionId: SessionId,
+    signal?: AbortSignal,
+    shared?: ReadonlyMap<SessionId, TreeWalk>,
+  ): Promise<TreeReading> => {
     signal?.throwIfAborted()
+    const provided = shared?.get(sessionId)
+    if (provided !== undefined) return readingOf(provided, watch)
     const cached = walks.get(sessionId)
     if (cached !== undefined) return cached
     // No subagent service at all: the walk would answer "no members", which is
@@ -254,7 +260,10 @@ export function mountGlobalPause(
    * The park also names the session it belongs to, so a client can address its
    * reads there rather than at whatever session it is showing.
    */
-  const status = async (signal?: AbortSignal): Promise<GlobalStatus> => {
+  const status = async (
+    signal?: AbortSignal,
+    sharedWalks?: ReadonlyMap<SessionId, TreeWalk>,
+  ): Promise<GlobalStatus> => {
     const phases = new Map<SessionId, LivePark>()
     // The durable list is the promise; a live mark is the same episode's
     // fresher phase, and a press that could not be recorded is neither.
@@ -308,7 +317,7 @@ export function mountGlobalPause(
     // One walk is one catalog read, and the walks do not depend on each other:
     // a read of N registered sessions must not take N catalog round-trips end
     // to end. `walkTree` answers from its per-episode cache when it has one.
-    const trees = await Promise.all(owners.map(async sessionId => [sessionId, await walkTree(sessionId, signal)] as const))
+    const trees = await Promise.all(owners.map(async sessionId => [sessionId, await walkTree(sessionId, signal, sharedWalks)] as const))
     for (const [sessionId, tree] of trees) {
       if (tree.unresumable) unresumable.push(String(sessionId))
       if (tree.unread) unreadTrees.push(String(sessionId))
@@ -386,7 +395,7 @@ export function mountGlobalPause(
             text: `${answer} ${String(blocked)} session${blocked === 1 ? '' : 's'} could not be paused because its route is not resumable.`,
           }
     },
-    readState: async (signal) => await status(signal),
+    readState: async (signal, walks) => await status(signal, walks),
     markUnrecorded,
   }
 }

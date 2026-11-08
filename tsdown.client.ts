@@ -227,6 +227,11 @@ export function clientBundle(id: string, options: ClientBundleOptions = {}): Use
       'import.meta.env': JSON.stringify({ MODE: process.env.NODE_ENV ?? 'production' }),
     },
     plugins: [{
+      name: 'dsh-zod-lite',
+      resolveId(source: string) {
+        return source === 'zod' ? resolvePath('src/client/zod-lite.ts') : null
+      },
+    }, {
       // Build-time mirror of the module-edge rules: the baseline and the
       // package's declared requests stay external; every other
       // `@deepseek-ai/*` value import is a build error (cross-plugin value

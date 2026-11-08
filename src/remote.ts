@@ -124,12 +124,27 @@ declare module '@deepseek-ai/cordis' {
 
 /** Host service exposed to the browser as the `pauseSession` Remote namespace. */
 export class PauseRemote extends TypertRemoteService {
+  /** One snapshot per host version, shared by every connected observer. */
+  private snapshotCache: { readonly version: number; readonly value: Promise<PauseSnapshotWire> } | undefined
+  /** Bumped by every host notification; each observer compares it to its own cursor. */
+  private version = 0
+  /** Observers waiting for the next version. */
+  private readonly waiters = new Set<() => void>()
+  private readonly unsubscribe: () => void
+
   /**
    * @param ctx - host context owning the service.
    * @param api - the pause engine behind the wire methods.
    */
   constructor(ctx: Context, private readonly api: PauseRemoteApi) {
     super(ctx, 'pauseSession', { namespace: 'pauseSession' })
+    this.unsubscribe = this.api.subscribe(() => {
+      this.version += 1
+      this.snapshotCache = undefined
+      for (const wake of [...this.waiters]) wake()
+      this.waiters.clear()
+    })
+    ctx.effect(() => this.unsubscribe, 'pause: remote updates')
   }
 
   /**
@@ -145,6 +160,20 @@ export class PauseRemote extends TypertRemoteService {
   }
 
   /**
+   * The snapshot for one host version, computed once even when several clients
+   * are watching. A new notification discards the cached promise.
+   * @param version - the host version this snapshot answers.
+   * @param signal - stream cancellation.
+   * @returns the shared snapshot promise.
+   */
+  private snapshotFor(version: number, signal?: AbortSignal): Promise<PauseSnapshotWire> {
+    if (this.snapshotCache?.version === version) return this.snapshotCache.value
+    const value = this.api.snapshot(signal)
+    this.snapshotCache = { version, value }
+    return value
+  }
+
+  /**
    * Live status: the opening snapshot, then one new snapshot whenever the host
    * reports a change.
    * @param signal - stream cancellation.
@@ -153,42 +182,31 @@ export class PauseRemote extends TypertRemoteService {
   @Remote({ mode: 'stream' })
   async *observe(signal?: AbortSignal): AsyncIterable<PauseSnapshotWire> {
     ownerOnly(this.ctx)
-    let version = 0
     let seen = -1
-    let wake: (() => void) | undefined
-    const unsubscribe = this.api.subscribe(() => {
-      version += 1
-      wake?.()
-      wake = undefined
-    })
-    try {
-      for (;;) {
-        signal?.throwIfAborted()
-        if (version !== seen) {
-          seen = version
-          yield await this.api.snapshot(signal)
-          continue
-        }
-        await new Promise<void>((resolve, reject) => {
-          const finish = (): void => {
-            signal?.removeEventListener('abort', onAbort)
-            wake = undefined
-            resolve()
-          }
-          const onAbort = (): void => {
-            wake = undefined
-            signal?.removeEventListener('abort', onAbort)
-            reject(signal?.reason)
-          }
-          wake = finish
-          signal?.addEventListener('abort', onAbort, { once: true })
-          // A notification may have landed between the version check and the
-          // waiter assignment. It still owes this loop one read.
-          if (version !== seen) finish()
-        })
+    for (;;) {
+      signal?.throwIfAborted()
+      if (this.version !== seen) {
+        seen = this.version
+        yield await this.snapshotFor(seen, signal)
+        continue
       }
-    } finally {
-      unsubscribe()
+      await new Promise<void>((resolve, reject) => {
+        const finish = (): void => {
+          signal?.removeEventListener('abort', onAbort)
+          this.waiters.delete(finish)
+          resolve()
+        }
+        const onAbort = (): void => {
+          this.waiters.delete(finish)
+          signal?.removeEventListener('abort', onAbort)
+          reject(signal?.reason)
+        }
+        this.waiters.add(finish)
+        signal?.addEventListener('abort', onAbort, { once: true })
+        // A notification may have landed between the version check and the
+        // waiter assignment. It still owes this loop one read.
+        if (this.version !== seen) finish()
+      })
     }
   }
 

@@ -99,6 +99,13 @@ declare module '@deepseek-ai/cordis' {
 /** Host service exposed to the browser as the `pauseSession` Remote namespace. */
 export declare class PauseRemote extends TypertRemoteService {
     private readonly api;
+    /** One snapshot per host version, shared by every connected observer. */
+    private snapshotCache;
+    /** Bumped by every host notification; each observer compares it to its own cursor. */
+    private version;
+    /** Observers waiting for the next version. */
+    private readonly waiters;
+    private readonly unsubscribe;
     /**
      * @param ctx - host context owning the service.
      * @param api - the pause engine behind the wire methods.
@@ -111,6 +118,14 @@ export declare class PauseRemote extends TypertRemoteService {
      * @returns the current aggregate and session states.
      */
     snapshot(signal?: AbortSignal): Promise<PauseSnapshotWire>;
+    /**
+     * The snapshot for one host version, computed once even when several clients
+     * are watching. A new notification discards the cached promise.
+     * @param version - the host version this snapshot answers.
+     * @param signal - stream cancellation.
+     * @returns the shared snapshot promise.
+     */
+    private snapshotFor;
     /**
      * Live status: the opening snapshot, then one new snapshot whenever the host
      * reports a change.

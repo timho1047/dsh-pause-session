@@ -22,6 +22,8 @@ and this project uses [Semantic Versioning](https://semver.org/).
 - The global pill can be dragged, remembers its position, and can be reset from
   the decision panel.
 - The Remote namespace is owner-only.
+- The client bundle uses a build-time codec-builder shim instead of bundling the full Zod runtime.
+- One snapshot is shared by every connected Remote observer, and the snapshot projection shares its tree walks.
 
 ### Fixed
 

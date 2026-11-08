@@ -35,6 +35,12 @@ action. The Client mounts the generated contribution (`dsh-pause-session/remote`
 and consumes the namespace through a child injection; the same Gateway path is
 used on Web and Desktop. No slash command is registered anywhere.
 
+The client build aliases the generated contribution's `zod` import to
+`src/client/zod-lite.ts`: the Gateway validates browser-to-host arguments, and
+host results are produced by this plugin, so the browser keeps only the codec
+builder shape. The client bundle stays around 20 KB gzip instead of pulling the
+full codec runtime.
+
 `scripts/generate-typert.mjs` builds a temporary Typert workspace containing
 this Remote service and the Harness protocol source, then commits the generated
 `lib/typert.*` artifacts beside the other build output. The release workflow

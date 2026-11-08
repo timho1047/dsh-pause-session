@@ -14,14 +14,16 @@ const snapshot: PauseSnapshotWire = {
 }
 
 /** A Remote API double with a mutable snapshot and a listener set. */
-function apiDouble(): { api: PauseRemoteApi; fire(): void; set(next: PauseSnapshotWire): void; actions: unknown[] } {
+function apiDouble(): { api: PauseRemoteApi; fire(): void; set(next: PauseSnapshotWire): void; actions: unknown[]; snapshots(): number } {
   let current = snapshot
+  let snapshotCalls = 0
   const listeners = new Set<() => void>()
   const actions: unknown[] = []
   return {
     actions,
+    snapshots: () => snapshotCalls,
     api: {
-      snapshot: async () => current,
+      snapshot: async () => { snapshotCalls += 1; return current },
       subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener) } },
       act: async (request) => { actions.push(request); return { ok: true, message: request.action } },
       triage: async () => [],
@@ -61,6 +63,22 @@ describe('native Remote transport', () => {
     await expect(stream.next()).resolves.toMatchObject({ value: next })
     abort.abort()
     await expect(stream.next()).rejects.toBeTruthy()
+  })
+
+  it('serves one shared snapshot to concurrent observers', async () => {
+    const { api, snapshots } = apiDouble()
+    const remote = new PauseRemote(new Context(), api)
+    const firstAbort = new AbortController()
+    const secondAbort = new AbortController()
+    const first = remote.observe(firstAbort.signal)[Symbol.asyncIterator]()
+    const second = remote.observe(secondAbort.signal)[Symbol.asyncIterator]()
+
+    await Promise.all([first.next(), second.next()])
+    expect(snapshots()).toBe(1)
+    firstAbort.abort()
+    secondAbort.abort()
+    await expect(first.next()).rejects.toBeTruthy()
+    await expect(second.next()).rejects.toBeTruthy()
   })
 
   it('forwards an action to the engine', async () => {
