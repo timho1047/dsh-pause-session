@@ -27,15 +27,19 @@ the build. A fresh clone can run `pnpm pack` (the release path does not install
 dependencies), but cannot run the full verification suite without the harness
 checkout.
 
-## Browser status route
+## Native Remote transport
 
-On a browser host, `src/status-route.ts` registers an authenticated
-`GET /dsh-pause-session/status` route and `src/client/status.ts` reads it. This
-is the normal status path: a background refresh must not append
-`command/run`/`command/done` records to a Session's log. The route is read-only
-and passes through `connection.requestRejection`; it is absent on Desktop/IPC
-carriers, where both controls fall back to the command channel. Actions and the
-manual `/pause-*` verbs always remain commands.
+`src/remote.ts` is the generated Remote surface. Its `observe` stream carries
+status snapshots and its `act` / `triage` / `decide` methods carry every button
+action. The Client mounts the generated contribution (`dsh-pause-session/remote`)
+and consumes the namespace through a child injection; the same Gateway path is
+used on Web and Desktop. No slash command is registered anywhere.
+
+`scripts/generate-typert.mjs` builds a temporary Typert workspace containing
+this Remote service and the Harness protocol source, then commits the generated
+`lib/typert.*` artifacts beside the other build output. The release workflow
+never needs a Harness checkout. The tests drive the same native namespace via
+`tests/native-driver.ts`; no command-shaped test compatibility surface remains.
 
 ## Build and test
 

@@ -34,8 +34,9 @@ afterAll(() => { rmSync(storageRoot, { recursive: true, force: true }) })
 beforeAll(() => {
   // The child imports the plugin's BUILT entry: its own sources use `.js`
   // specifiers for relative imports, which Node's type stripping cannot
-  // resolve. Building here keeps this spec runnable on its own.
-  const build = spawnSync('pnpm run build:host', {
+  // resolve. The full build refreshes both the entry and its bundle, so the
+  // child reads the same inject list this working tree declares.
+  const build = spawnSync('pnpm run build', {
     cwd: repositoryRoot,
     encoding: 'utf8',
     shell: true,

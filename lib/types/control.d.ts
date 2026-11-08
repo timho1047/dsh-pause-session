@@ -2,71 +2,22 @@
  * The session control the browser half drives: the pause verb, the park state
  * machine behind it, and the live state channel that accompanies both.
  *
- * A third-party plugin can add neither a `ctx.remote` namespace nor a forwarded
- * event: the Client's Remote namespaces and the forwarded-event allowlist are
- * compiled into the harness's own API assembly. The documented Client-callable
- * Host entry point is therefore a session command run through
- * `ctx.remote.commands.execute`, and the one live channel such a plugin can
- * publish through is the command registry itself — `commands/change` is a
- * forwarded event, and `commands.list(sessionId)` is a Client-callable read.
- *
- * That same registry is how a phase change leaves this process: a transition
- * re-registers the status verb, which emits the change a client needs to read
- * the new phase. It is the only way a third-party plugin can announce anything,
- * and it is what makes the flush that resolves `parking` into `safe` observable
- * at all — that step changes no registration of its own.
- *
- * So the resume definition IS the paused marker: it is registered on a paused
- * session's own agent context and removed on resume, and the browser half reads
- * "paused" from that registration rather than inventing it. A descriptor cannot
- * change after registration, so the park state rides a companion status
- * definition (registered beside the marker) whose answer is derived per call
- * rather than frozen into a descriptor — see `./shared.ts`. That one read
- * carries the record's goal opt-out too, so the session-header control can show
- * and switch it while the session is parked and clean — the state in which a
- * silent morning resume would otherwise spend the user's rounds unasked. The
- * switch is addressed to the session it changes, so it needs no listed row.
- *
- * The header control is the user's button for ONE session's work, and that work
- * includes the subagents under it: the press registers the session and its
- * descendant tree, the release takes the same tree back, and the status the
- * header shows is the worst phase among the members the press registered. The
- * whole-app control covers every running tree and answers for all of them; this
- * one answers for the tree it owns.
- *
- * A mark is not a park. A session is parked only once nothing is left to drain:
- * no call in flight AND either its next model request is held at the gate or no
- * turn is open at all (there will be no next request to hold). Only then is the
- * session flushed, at the session level — `SessionHandle.flush()` does not
- * drain the routed live buffer, so it would record a park that a crash erases.
- * The "safe to close" phase appears only after that flush resolves.
- *
- * Every phase a pause reaches is written to the durable registry before it is
- * published — including the move into `parking`, which the status command may
- * therefore never serve ahead of the record. A restart re-holds exactly the
- * sessions the last process left parked, and a phase that could not be recorded
- * is never shown as cleaner than the record says.
- *
- * A park verb changes state, so it acts only on a person's command: a command
- * dispatched from inside a model turn is refused. The listed verbs add the
- * one binding their target needs — the row must be one the calling session was
- * shown — and that rule lives with the list (`./triage.ts`).
+ * The host exposes this control through the native Typert Remote namespace:
+ * `observe` streams snapshots and `act` / `triage` / `decide` drive the UI. No
+ * slash command is registered. Phase changes wake the Remote stream through a
+ * local listener set; the durable registry remains the source of truth for what
+ * the snapshot reports.
  * @module dsh-pause-session/control
  */
 import type { Context } from '@deepseek-ai/cordis';
+import type { CommandResult } from '@deepseek-ai/dsh-commands';
 import { SessionId } from '@deepseek-ai/dsh-session';
 import type { PauseGate } from './gate.js';
 import type { ParkWatch } from './park.js';
 import type { ParkRegistry } from './registry.js';
-import type { ResumeAttempt, ResumeOptions } from './resume.js';
-import type { PauseSnapshot } from './shared.js';
-/**
- * Result copy for a state-changing park verb issued from inside a model turn.
- * The invocation carries no origin of its own, so this refusal is the plugin's
- * own reading of the one signal that separates a person's command from a
- * model's.
- */
-export declare const UNATTENDED_TEXT: string;
+import type { ReleaseTreeOutcome, ResumeAttempt, ResumeOptions } from './resume.js';
+import type { TriageAction } from './shared.js';
+import type { PauseSnapshot, TriageList } from './shared.js';
 /** What one tree-wide press registered, and what it could not. */
 export interface PressTreeOutcome {
     /** How many sessions this press covered: the session plus its descendants. */
@@ -95,6 +46,22 @@ export interface SessionControl {
      * @returns the whole-app verdict and the paused sessions this process holds.
      */
     readSnapshot(signal?: AbortSignal): Promise<PauseSnapshot>;
+    /** Wake a listener after any visible status change. */
+    subscribe(listener: () => void): () => void;
+    /** Press one Session tree. */
+    pressTree(sessionId: SessionId, signal?: AbortSignal): Promise<PressTreeOutcome>;
+    /** Release one Session's registered tree. */
+    releaseTree(sessionId: SessionId, signal?: AbortSignal): Promise<ReleaseTreeOutcome>;
+    /** Press every running Session tree. */
+    pauseAll(signal?: AbortSignal): Promise<CommandResult>;
+    /** Resume every cleanly paused Session. */
+    resumeAll(signal?: AbortSignal): Promise<CommandResult>;
+    /** Flip one Session's goal re-arm opt-out. */
+    toggleGoal(sessionId: SessionId, signal?: AbortSignal): Promise<CommandResult>;
+    /** Read the morning list for one calling Session. */
+    readTriage(caller: SessionId, signal?: AbortSignal): Promise<TriageList>;
+    /** Take one listed decision for one calling Session. */
+    decideTriage(caller: SessionId, target: SessionId, action: TriageAction, signal?: AbortSignal): Promise<CommandResult>;
 }
 /** How resuming all parked sessions answers the command that asked for it. */
 export declare function summarizeResume(attempts: readonly ResumeAttempt[]): string;

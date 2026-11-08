@@ -13,10 +13,11 @@
 
 import { afterAll, describe, expect, it } from 'vitest'
 import type { SessionId } from '@deepseek-ai/dsh-session'
+import type { PauseTransport } from '../../src/client/remote.ts'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { PauseControl } from '../../src/client/control.ts'
 import { PauseGlobalControl } from '../../src/client/global.ts'
-import { STATE_ALL_COMMAND, STATUS_COMMAND } from '../../src/shared.ts'
+import { pause, pauseRemote } from '../native-driver.ts'
 import { readParkRegistry } from '../registry/read.ts'
 import { writeParkRecord } from '../registry/write.ts'
 import {
@@ -30,54 +31,43 @@ afterAll(() => { cleanRoots(temporaryRoots) })
 
 const ask = (text: string) => createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
 
-/** What the browser paid the host: one count per read a control can make. */
-interface EyeReads {
-  /** `commands.list` calls: one per session header read. */
-  readonly lists: number
-  /** `pause-state` executions: the per-session status the header control reads. */
-  readonly status: number
-  /** `pause-state-all` executions: the aggregate the pill reads. */
-  readonly aggregate: number
-  /**
-   * The session each aggregate read was addressed at, in order: a read leaves
-   * its two durable rows in the transcript it was taken through, so this is
-   * where those rows landed.
-   */
-  readonly aggregateAt: readonly string[]
-}
-
-/**
- * The browser's command Remote over this process's own command registry, so a
- * spec can drive the real client controls against the real host. The only part
- * of the page's wiring that does not travel is the transport: the forwarded
- * `commands/change` is delivered through `ctx.on`, exactly as the harness
- * forwards it.
- * @param home - the mounted process whose registry the controls talk through.
- * @returns the Remote face the controls take, and a running count of the reads it served.
- */
-function clientEye(home: GlobalHome): { readonly commands: never; readonly reads: () => EyeReads } {
-  const reads = { lists: 0, status: 0, aggregate: 0, aggregateAt: [] as string[] }
-  const commands = {
-    list: (sessionId: SessionId) => {
-      reads.lists += 1
-      const agent = home.ctx.agents.get(sessionId)
-      if (agent === undefined) return Promise.resolve({ ok: false, error: { code: 'gateway/internal' } })
-      return Promise.resolve({ ok: true, value: home.ctx.commands.list(agent) })
+/** One client transport over the real native service, with a count of its reads. */
+function nativeEye(home: GlobalHome): { transport: PauseTransport; reads: () => number; stop(): void } {
+  const listeners = new Set<() => void>()
+  const abort = new AbortController()
+  let latest: Awaited<ReturnType<PauseTransport['source']['read']>>
+  let reads = 0
+  const pump = (async () => {
+    try {
+      for await (const snapshot of pauseRemote(home.ctx).observe(abort.signal)) {
+        latest = snapshot as never
+        for (const listener of [...listeners]) listener()
+      }
+    } catch {
+      // The stream was aborted when the spec settled.
+    }
+  })()
+  const remote = pauseRemote(home.ctx)
+  return {
+    transport: {
+      source: {
+        read: async (signal) => {
+          signal?.throwIfAborted()
+          reads += 1
+          return latest ?? await remote.snapshot(signal) as never
+        },
+        onChange: (listener) => {
+          listeners.add(listener)
+          return () => { listeners.delete(listener) }
+        },
+      },
+      act: async (request, signal) => await remote.act(request, signal),
+      triage: async (caller, signal) => await remote.triage({ caller }, signal),
+      decide: async (caller, target, decision, signal) => await remote.decide({ caller, target, decision }, signal),
     },
-    execute: async (sessionId: SessionId, line: string, _attachments: unknown, signal: AbortSignal) => {
-      if (line === `/${STATE_ALL_COMMAND}`) {
-        reads.aggregate += 1
-        reads.aggregateAt.push(String(sessionId))
-      } else if (line === `/${STATUS_COMMAND}`) reads.status += 1
-      const agent = home.ctx.agents.get(sessionId)
-      if (agent === undefined) return { ok: false, error: { code: 'gateway/internal' } }
-      const execution = await home.ctx.commands.execute(agent, line, [], signal)
-      return execution === undefined
-        ? { ok: false, error: { code: 'gateway/internal' } }
-        : { ok: true, value: execution }
-    },
+    reads: () => reads,
+    stop: () => { abort.abort(); void pump },
   }
-  return { commands: commands as never, reads: () => ({ ...reads, aggregateAt: [...reads.aggregateAt] }) }
 }
 
 /**
@@ -105,14 +95,20 @@ describe('the aggregate answer', () => {
     const caseRoot = temporaryRoot('dsh-pause-session-agg-cycle-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, { script: blockingScript() })
     const lifetime = new AbortController()
-    const eye = clientEye(home)
+    const headerEye = nativeEye(home)
+    const pillEye = nativeEye(home)
     // The page's two controls, on burst timings a spec can wait out.
-    const pill = new PauseGlobalControl(eye.commands, lifetime.signal, 25, { visible: () => true })
+    const pill = new PauseGlobalControl(pillEye.transport, lifetime.signal, 25, { visible: () => true })
     const header = new PauseControl(
-      eye.commands, lifetime.signal, 25, { visible: () => true },
+      headerEye.transport, lifetime.signal, 25, { visible: () => true },
       () => pill.store.getSnapshot().global,
     )
-    home.ctx.on('commands/change', () => { header.refreshAll(); pill.refreshAll() })
+    // The page's wiring: either stream's change re-reads both controls.
+    const offHeader = headerEye.transport.source.onChange(() => { header.refreshAll(); pill.refreshAll() })
+    const offPill = pillEye.transport.source.onChange(() => { header.refreshAll(); pill.refreshAll() })
+    // The page also lets a header answered from "nothing is registered" read
+    // for real once the aggregate names the park.
+    const offAggregate = pill.store.subscribe(() => { header.reconsider() })
     const headerReading = () => header.store.getSnapshot().bySession[String(eveningId)]
     let eveningId: SessionId
     try {
@@ -126,57 +122,48 @@ describe('the aggregate answer', () => {
       await pill.refresh(evening.id)
       expect(headerReading()).toEqual({ phase: 'active', runningTools: [] })
       expect(pill.store.getSnapshot().global).toMatchObject({ kind: 'reported', status: { registered: 0 } })
-      const atMount = eye.reads()
 
-      // The user presses the session control while the tool is still running. The
-      // pill did not press, so the changes the press causes are news to it and it
-      // reads them once; the header's own read answers the header.
-      await header.toggle(evening.id)
+      // Another window presses while the tool is still running. This window
+      // performs no user action; the stream is what tells it, and the read it
+      // buys is the only one it makes for this transition.
+      await pause(home.ctx, evening)
+      await untilAsync(async () => headerReading()?.phase === 'draining', 'the header to see the press')
       expect(headerReading()).toMatchObject({ phase: 'draining', runningTools: ['gated'] })
-      await settles(200)
-      const afterPress = eye.reads()
-      expect(afterPress.aggregate - atMount.aggregate, 'the pill did not read the park the press started').toBe(1)
+      await untilAsync(async () => {
+        const reading = pill.store.getSnapshot().global
+        return reading?.kind === 'reported' && reading.status.registered === 1
+      }, 'the pill to see the press')
+      const afterPress = { header: headerEye.reads(), pill: pillEye.reads() }
 
-      // The drain is long — far longer than any burst — and it is not watched.
-      // The header owes one look at the close of its own echo window, because a
-      // park can finish inside that window and never announce anything again;
-      // the pill owes nothing at all, because the end of a drain announces
-      // itself.
+      // The drain is long — far longer than any burst — and it is not watched:
+      // no further transition is announced until the tool lands.
       await settles(3_000)
-      expect(eye.reads().status - afterPress.status, 'the header watched the drain instead of reading its transitions').toBe(1)
-      expect(eye.reads().aggregate - afterPress.aggregate, 'the pill watched a drain it should have been told about').toBe(0)
+      expect(headerEye.reads() - afterPress.header, 'the header watched the drain instead of reading its transitions').toBe(0)
+      expect(pillEye.reads() - afterPress.pill, 'the pill watched a drain it should have been told about').toBe(0)
       expect(headerReading()).toMatchObject({ phase: 'draining' })
 
       // The tool lands and the park walks itself to the end. Both transitions
       // announce themselves, so both readings reach the truth without a press, a
-      // decision, or any other user action — this is the read the pill used to be
-      // missing while it still said "finishing up".
+      // decision, or any other user action.
       home.blocking.release(0)
       await untilAsync(async () => headerReading()?.phase === 'safe', 'the session reading to reach safe')
       await untilAsync(async () => {
         const reading = pill.store.getSnapshot().global
         return reading?.kind === 'reported' && reading.status.verdict === 'safe'
       }, 'the aggregate reading to reach safe')
-
-      // One read per announced transition, never a watch: the park point and the
-      // flush are two transitions, so at most two reads each — and the pill, which
-      // followed the drain by being told, spends fewer than the header that had to
-      // close its own echo window.
-      const followed = eye.reads()
-      expect(followed.status - afterPress.status, 'the header read more than its look and one read per transition')
-        .toBeLessThanOrEqual(3)
-      expect(followed.aggregate - afterPress.aggregate, 'the pill read more than one read per transition')
-        .toBeLessThanOrEqual(2)
-      expect(followed.aggregate - afterPress.aggregate, 'the pill never read the park it was told about')
-        .toBeGreaterThanOrEqual(1)
       expect(await home.status(evening)).toMatchObject({ verdict: 'safe', registered: 1, safe: 1, parkedAt: 'evening-job', draining: [], parking: 0 })
 
       // And silence: nothing about a settled park is asked again.
-      const settled = eye.reads()
+      const settled = { header: headerEye.reads(), pill: pillEye.reads() }
       await settles(500)
-      expect(eye.reads(), 'a settled park was read again').toEqual(settled)
+      expect({ header: headerEye.reads(), pill: pillEye.reads() }, 'a settled park was read again').toEqual(settled)
     } finally {
       lifetime.abort(new Error('spec over'))
+      offHeader()
+      offPill()
+      offAggregate()
+      headerEye.stop()
+      pillEye.stop()
       home.blocking.releaseAll()
       await home.ctx.fiber.dispose()
     }
@@ -193,7 +180,7 @@ describe('the aggregate answer', () => {
       second.followup(ask('run the tool'))
       await untilAsync(async () => home.blocking.started() === 2, 'the second tool in flight')
 
-      expect((await home.run(first, 'pause-all')).kind).toBe('success')
+      expect((await home.run(first, 'pause-all')).ok).toBe(true)
       const pressed = await home.status(first)
       expect(pressed.verdict).toBe('waiting')
       expect(pressed.registered).toBe(2)
@@ -235,7 +222,7 @@ describe('the aggregate answer', () => {
       stuck.followup(ask('run the tool'))
       await untilAsync(async () => home.blocking.started() === 1, 'the tool in flight')
 
-      expect((await home.run(stuck, 'pause-all')).kind).toBe('success')
+      expect((await home.run(stuck, 'pause-all')).ok).toBe(true)
       // Time passing is the point: the aggregate must keep saying "waiting, and
       // here is who" rather than rounding the park up to a number that forgets
       // the session it could not park.
@@ -367,48 +354,42 @@ describe('the aggregate answer', () => {
     }
   })
 
-  it('keeps a clean park\'s rows in the parked session, not in the window that reads them', async () => {
+  it('reads the park through the native stream without writing status rows into any session', async () => {
     const caseRoot = temporaryRoot('dsh-pause-session-agg-window-', temporaryRoots)
     const home = await mountGlobalHome(caseRoot, { script: blockingScript() })
     const lifetime = new AbortController()
-    const eye = clientEye(home)
-    const pill = new PauseGlobalControl(eye.commands, lifetime.signal, 25, { visible: () => true })
-    home.ctx.on('commands/change', () => { pill.refreshAll() })
+    const eye = nativeEye(home)
+    const pill = new PauseGlobalControl(eye.transport, lifetime.signal, 25, { visible: () => true })
+    const off = eye.transport.source.onChange(() => { pill.refreshAll() })
     try {
       const parked = await home.create('parked-job')
       const bystander = await home.create('bystander-job')
       parked.followup(ask('run the tool'))
       await untilAsync(async () => home.blocking.started() === 1, 'the tool in flight')
 
-      // The other window parks everything, and the park reaches `safe`: nothing
-      // is draining, stalled, unresumable or unread, so the park's own name is
-      // the only thing in the answer that says which session it belongs to.
+      // This window opens on a session of its own, with the park already clean,
+      // and reads once. The stream carries the whole-app answer, so the read
+      // costs the same whatever session is on screen.
+      await pill.refresh(bystander.id)
+      expect(pill.store.getSnapshot().global).toMatchObject({ kind: 'reported' })
+
+      // The other window parks everything, and the park reaches `safe`.
       await home.run(bystander, 'pause-all')
       home.blocking.release(0)
       await untilAsync(async () => (await home.status(bystander)).verdict === 'safe', 'the park to finish cleanly')
+      await untilAsync(async () => {
+        const reading = pill.store.getSnapshot().global
+        return reading?.kind === 'reported' && reading.status.verdict === 'safe'
+      }, 'the pill to read the settled park from the stream')
 
-      // This window opens on a session of its own, with the park already clean,
-      // and reads once. That first read cannot know where the park is — the
-      // answer it gets is what tells it — and it is the only aggregate read the
-      // uninvolved session pays for.
-      await pill.refresh(bystander.id)
-      expect(eye.reads().aggregateAt).toEqual([String(bystander.id)])
-      const paidByBystander = await commandRuns(home, bystander.id)
-      expect(paidByBystander, 'the uninvolved session paid for nothing at all').toBeGreaterThan(0)
-
-      // The other window resumes the park. The forwarded change reaches this
-      // window, and the read it buys goes through the session the park belonged
-      // to — the transcript the rows are about — while the session this window
-      // is showing gains nothing.
-      await home.run(parked, 'pause-resume-all')
-      await untilAsync(async () => eye.reads().aggregateAt.length > 1, 'the forwarded change to be read')
-      const addresses = eye.reads().aggregateAt
-      expect(new Set(addresses.slice(1)), 'a row about the park landed in the session on screen')
-        .toEqual(new Set([String(parked.id)]))
-      expect(await commandRuns(home, bystander.id), 'the uninvolved transcript gained a row')
-        .toBe(paidByBystander)
+      // Status reads are snapshots: neither transcript gains a command row for
+      // them, whoever's window asked.
+      expect(await commandRuns(home, bystander.id), 'the uninvolved transcript gained a status row').toBe(0)
+      expect(await commandRuns(home, parked.id), 'the parked transcript gained a status row').toBe(0)
     } finally {
       lifetime.abort(new Error('spec over'))
+      off()
+      eye.stop()
       home.blocking.releaseAll()
       await home.ctx.fiber.dispose()
     }

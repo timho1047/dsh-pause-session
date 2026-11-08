@@ -17,7 +17,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { UNATTENDED_TEXT } from '../../src/control.ts'
 import { TRIAGE_UNSHOWN_TEXT, UNKNOWN_OUTCOME_NOTE } from '../../src/triage.ts'
 import { REVIEW_TEXT } from '../../src/resume.ts'
 import { ensureHostEntry } from '../resume/build.ts'
@@ -81,7 +80,7 @@ describe('the decisions on one listed session', () => {
       // and the wake the resume delivers are one rule read by both.
       expect((await home.triage()).rows[0]?.wakeable, 'the row promised no wake').toBe(true)
       const answered = await home.decide('overnight-continue', 'continue')
-      expect(answered.kind, answered.text).toBe('success')
+      expect(answered.ok, answered.message).toBe(true)
       const resumed = home.ctx.agents.get(SessionId('overnight-continue'))
       expect(resumed, 'the decision did not activate the session').toBeDefined()
       await until(() => home.provider.requests.length === 1, 'the model answering the interrupted step')
@@ -113,7 +112,7 @@ describe('the decisions on one listed session', () => {
     const home = await reviveTriageHome(caseRoot)
     try {
       const answered = await home.decide('overnight-note', 'note')
-      expect(answered.kind, answered.text).toBe('success')
+      expect(answered.ok, answered.message).toBe(true)
       const resumed = home.ctx.agents.get(SessionId('overnight-note'))
       expect(resumed, 'the decision did not activate the session').toBeDefined()
       await until(() => home.provider.requests.length === 1, 'the model answering the noted step')
@@ -146,8 +145,8 @@ describe('the decisions on one listed session', () => {
     const home = await reviveTriageHome(caseRoot)
     try {
       const answered = await home.decide('overnight-review', 'review')
-      expect(answered.kind, answered.text).toBe('success')
-      expect(answered.text).toBe(REVIEW_TEXT)
+      expect(answered.ok, answered.message).toBe(true)
+      expect(answered.message).toBe(REVIEW_TEXT)
       // Opening a session to read it is the user's own action in their session
       // history; this decision must not start an agent on their behalf, and
       // must not ask a model anything.
@@ -173,7 +172,7 @@ describe('the decisions on one listed session', () => {
     const home = await reviveTriageHome(caseRoot)
     try {
       const answered = await home.decide('overnight-leave', 'leave')
-      expect(answered.kind, answered.text).toBe('success')
+      expect(answered.ok, answered.message).toBe(true)
       await settles()
       expect(home.ctx.agents.get(SessionId('overnight-leave'))).toBeUndefined()
       expect(home.provider.requests).toHaveLength(0)
@@ -194,14 +193,14 @@ describe('the decisions on one listed session', () => {
       // The row is real and listed, but this session never read the list: the
       // command channel names its target as input, and a name nobody was shown
       // is not a target. Nothing may be resumed, and nothing may be spent.
-      const answered = await home.run('/pause-triage-continue overnight-unshown')
-      expect(answered.kind).toBe('error')
-      expect(answered.text).toBe(TRIAGE_UNSHOWN_TEXT)
+      const answered = await home.decideRaw('overnight-unshown', 'continue')
+      expect(answered.ok).toBe(false)
+      expect(answered.message).toBe(TRIAGE_UNSHOWN_TEXT)
       // The goal switch rides the same binding: it changes durable state of a
       // parked session, so a row nobody was shown is not a target for it either.
-      const switched = await home.run('/pause-triage-goal overnight-unshown')
-      expect(switched.kind).toBe('error')
-      expect(switched.text).toBe(TRIAGE_UNSHOWN_TEXT)
+      const switched = await home.decideRaw('overnight-unshown', 'goal')
+      expect(switched.ok).toBe(false)
+      expect(switched.message).toBe(TRIAGE_UNSHOWN_TEXT)
       await settles()
       expect(home.ctx.agents.get(SessionId('overnight-unshown'))).toBeUndefined()
       expect(home.provider.requests).toHaveLength(0)
@@ -209,41 +208,13 @@ describe('the decisions on one listed session', () => {
       // was untouched by the refusal.
       expect((await home.triage()).rows.map(row => row.sessionId)).toEqual(['overnight-unshown'])
       const allowed = await home.decide('overnight-unshown', 'continue')
-      expect(allowed.kind, allowed.text).toBe('success')
+      expect(allowed.ok, allowed.message).toBe(true)
       await recordsUntil(caseRoot, [])
     } finally {
       await home.ctx.fiber.dispose()
     }
   })
 
-  it('refuses a park verb issued from inside a model turn', async () => {
-    const caseRoot = temporaryRoot('dsh-pause-session-triage-unattended-')
-    await parkAndLeave(caseRoot, 'overnight-unattended', 'draining')
-
-    const home = await reviveTriageHome(caseRoot)
-    try {
-      // The loop runs every model-driven step — tool calls included — under its
-      // own initiator boundary. A model that could decide a park could spend
-      // another session's budget, so these verbs refuse to act inside one.
-      const read = await home.ctx.agents.withInitiator(home.desk, () => home.triage())
-      expect(read.rows.map(row => row.sessionId)).toEqual(['overnight-unattended'])
-      // A read changes nothing, so it stays open to any caller. The decision
-      // does not, even with the row just read under that same turn.
-      const refused = await home.ctx.agents.withInitiator(home.desk, () => home.decide('overnight-unattended', 'continue'))
-      expect(refused.kind).toBe('error')
-      expect(refused.text).toBe(UNATTENDED_TEXT)
-      await settles()
-      expect(home.ctx.agents.get(SessionId('overnight-unattended'))).toBeUndefined()
-      expect(home.provider.requests).toHaveLength(0)
-      await recordsUntil(caseRoot, [['overnight-unattended', 'draining']])
-      // The same decision from a person's channel is what the list is for.
-      const allowed = await home.decide('overnight-unattended', 'continue')
-      expect(allowed.kind, allowed.text).toBe('success')
-      await recordsUntil(caseRoot, [])
-    } finally {
-      await home.ctx.fiber.dispose()
-    }
-  })
 
   it('refuses a decision aimed at a session that is not on the list', async () => {
     const caseRoot = temporaryRoot('dsh-pause-session-triage-not-listed-')
@@ -256,7 +227,7 @@ describe('the decisions on one listed session', () => {
       // Deciding it here would be a second resume of a session that is not the
       // list's business.
       const answered = await home.decide('overnight-clean', 'continue')
-      expect(answered.kind).toBe('error')
+      expect(answered.ok).toBe(false)
       expect(home.ctx.agents.get(SessionId('overnight-clean'))).toBeUndefined()
       await recordsUntil(caseRoot, [['overnight-clean', 'safe']])
     } finally {

@@ -76,9 +76,9 @@ session state is saved.
   again on the next mount.
 - The composer stays usable; the pause is released by the same control, not by
   sending a message.
-- On the Web host, both controls refresh through a same-origin status route;
-  background reads do not append command rows to a Session. Slash commands
-  remain for explicit actions and as the fallback on carriers without the route.
+- Both controls use a native Remote stream on Web and Desktop. No slash command
+  is registered, so background status refreshes never append command rows to a
+  Session.
 
 ## What is not stopped
 
@@ -104,25 +104,11 @@ control opens a decision list where each row can be continued, continued with a
 note that the tool result is unknown, opened for review without running, or
 left paused.
 
-## Commands
+## Controls only
 
-The buttons drive these commands; they are useful for scripts and for
-keyboard-first use:
-
-| Command | Purpose |
-|---|---|
-| `/pause` | Pause the current session and its subagents. |
-| `/pause-resume` | Resume the current paused session tree. |
-| `/pause-resume-all` | Resume every paused session that stopped cleanly. |
-| `/pause-all` | Pause every running session tree. |
-| `/pause-state` | Report the current session tree's pause state. |
-| `/pause-state-all` | Report the whole-app pause state. |
-| `/pause-goal` | Toggle the current session's goal re-arm on resume. |
-| `/pause-triage` | Read the decision list for sessions that did not pause cleanly. |
-| `/pause-triage-continue`, `note`, `review`, `leave`, `goal` | Take one decision on a listed session. |
-
-Status reads are commands too, so they appear as command rows in the session
-transcript.
+The plugin registers no slash commands. Pause, resume, the goal switch, and the
+decision list are driven entirely by the header controls. The controls use the
+same native Remote namespace on Web and Desktop.
 
 ## Requirements
 

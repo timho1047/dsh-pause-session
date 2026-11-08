@@ -31,7 +31,6 @@ import type { SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-jobs'
 import type { ParkWatch } from './park.js'
 import type { ParkRegistry } from './registry.js'
-import { encodeGlobalStatus } from './shared.js'
 import type { GlobalBlindSpot, GlobalStatus, GlobalVerdict, ParkPhase } from './shared.js'
 import { walkDescendants } from './tree.js'
 import type { TreeWalk } from './tree.js'
@@ -95,13 +94,7 @@ export interface GlobalPause {
    */
   pressAll(signal?: AbortSignal): Promise<CommandResult>
   /**
-   * @param signal - cancellation for the tree reads this read performs.
-   * @returns the aggregate as of this read.
-   */
-  readStatus(signal?: AbortSignal): Promise<CommandResult>
-  /**
-   * The same aggregate as {@link readStatus}, as structured data for the
-   * browser status route.
+   * The aggregate as structured data for the native Remote stream.
    * @param signal - cancellation for the tree reads this read performs.
    * @returns the aggregate as of this read.
    */
@@ -365,12 +358,16 @@ export function mountGlobalPause(
           }
         }
       }
-      const answer = encodeGlobalStatus(await status(signal))
+      const aggregate = await status(signal)
+      const answer = aggregate.verdict === 'safe'
+        ? 'Every session is paused.'
+        : aggregate.verdict === 'idle'
+          ? 'Nothing is running.'
+          : 'Pausing is in progress.'
       return unrecorded.size === 0
         ? { kind: 'success', text: answer }
         : { kind: 'error', text: answer }
     },
-    readStatus: async (signal) => ({ kind: 'success', text: encodeGlobalStatus(await status(signal)) }),
     readState: async (signal) => await status(signal),
     markUnrecorded,
   }

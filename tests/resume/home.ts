@@ -15,7 +15,6 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import CommandRuntime from '@deepseek-ai/dsh-commands'
 import GoalService from '@deepseek-ai/dsh-goal'
 import * as GoalRoundDriver from '@deepseek-ai/dsh-goal-round-driver'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
@@ -26,6 +25,7 @@ import type { AgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { apply, Config, inject, name } from '../../src/index.ts'
 import type { Config as PauseConfig } from '../../src/index.ts'
 import { defineContentToolFixture } from '@deepseek-ai/dsh-tool-testkit'
+import { ensureOk, resumeAll as nativeResumeAll } from '../native-driver.ts'
 import { FakeProvider, textResponse } from '../assumptions/fake-provider.ts'
 import { mountParkStorage } from '../registry/storage.ts'
 import type { ParkMode } from './case.ts'
@@ -90,7 +90,7 @@ export async function parkAndLeave(
   return { sessionId: payload.sessionId, route: payload.route, ...payload.request === undefined ? {} : { request: payload.request } }
 }
 
-/** One fresh process: the loop, the command registry, the storage, the plugin under test. */
+/** One fresh process: the loop, the storage, the plugin under test. */
 export interface ResumeHome {
   readonly ctx: Context
   readonly harness: AgentLoopTestHarness
@@ -131,7 +131,6 @@ export async function reviveHome(caseRoot: string, options: ResumeHomeOptions = 
   // The same log the child wrote: activating a parked session means opening it
   // for write, so the parent cannot resume anything without it.
   await ctx.plugin(JsonlSessionPersistence, { root: sessionRootOf(caseRoot), compression: 'none' })
-  await ctx.plugin(CommandRuntime)
   await mountParkStorage(ctx, storageOf(caseRoot))
   if (options.goals === true) {
     await ctx.plugin(GoalService)
@@ -160,14 +159,10 @@ export async function reviveHome(caseRoot: string, options: ResumeHomeOptions = 
   return { ctx, harness, provider, seen, desk, plugin }
 }
 
-/** Press the morning verb the way the browser half does, and read its answer. */
+/** Press the morning action the way the browser half does, and read its answer. */
 export async function resumeAll(home: ResumeHome): Promise<string> {
-  const execution = await home.ctx.commands.execute(home.desk, '/pause-resume-all', [], new AbortController().signal)
-  if (execution === undefined) throw new Error('pause: the global resume verb is not registered')
-  if (execution.result.kind !== 'success') {
-    throw new Error(`pause: resume-all failed: ${execution.result.text}`)
-  }
-  return execution.result.text ?? ''
+  const answer = ensureOk(await nativeResumeAll(home.ctx, home.desk), 'resume-all')
+  return answer.message
 }
 
 /** Poll until `predicate` holds, letting the loop's own microtasks run. */

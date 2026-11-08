@@ -19,8 +19,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import CommandRuntime from '@deepseek-ai/dsh-commands'
-import type { CommandResult } from '@deepseek-ai/dsh-commands'
 import GoalService from '@deepseek-ai/dsh-goal'
 import * as GoalRoundDriver from '@deepseek-ai/dsh-goal-round-driver'
 import type { JobId } from '@deepseek-ai/dsh-jobs'
@@ -36,8 +34,10 @@ import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deep
 import type { AgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { defineContentToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 import { apply, inject, name } from '../../src/index.ts'
-import { decodeGlobalStatus, decodeParkStatus, RESUME_COMMAND, PAUSE_ALL_COMMAND } from '../../src/shared.ts'
-import type { GlobalStatus, ParkStatus } from '../../src/shared.ts'
+import type { GlobalStatusWire, PauseActionResultWire } from '../../src/remote.ts'
+import type { ParkStatus } from '../../src/shared.ts'
+import { aggregate, press, statusOf } from '../native-driver.ts'
+import type { PauseVerb } from '../native-driver.ts'
 import { FakeProvider, textResponse } from '../assumptions/fake-provider.ts'
 import type { ScriptEntry } from '../assumptions/fake-provider.ts'
 import { mountHeldParkStorage } from '../registry/held.ts'
@@ -125,20 +125,20 @@ export interface GlobalHome {
   readonly plugin: { dispose(): Promise<void> }
   /** Create one live session the way a user's open session arrives. */
   create(id: string): Promise<Agent>
-  /** Run one slash command on one session, exactly as the browser half does. */
-  run(agent: Agent, command: string): Promise<CommandResult>
-  /** Press the session-header pause verb on one session and hand back its answer. */
-  stop(agent: Agent): Promise<CommandResult>
-  /** Press the session-header release verb on one session and hand back its answer. */
-  release(agent: Agent): Promise<CommandResult>
+  /** Press one native action on one session and hand back its answer. */
+  run(agent: Agent, verb: PauseVerb): Promise<PauseActionResultWire>
+  /** Press the session-header pause action on one session and hand back its answer. */
+  stop(agent: Agent): Promise<PauseActionResultWire>
+  /** Press the session-header release action on one session and hand back its answer. */
+  release(agent: Agent): Promise<PauseActionResultWire>
   /**
-   * Read the park state of one session the way its header control does: the
-   * marker's presence is the pause, and the status command's own answer carries
-   * the phase.
+   * Read one session's park state out of the native snapshot the way its header
+   * control does: presence in `sessions` is the pause, and the entry carries the
+   * phase.
    */
   headerStatus(agent: Agent): Promise<ParkStatus | undefined>
-  /** Read the aggregate through the verb the whole-app control executes. */
-  status(agent: Agent): Promise<GlobalStatus>
+  /** Read the whole-app aggregate out of the same native snapshot. */
+  status(agent?: Agent): Promise<GlobalStatusWire>
   /** Start a live background job owned by one session. */
   job(owner: SessionId, label: string): StartedJob
   /** Flush every live session, so a later context over the same root sees them whole. */
@@ -219,7 +219,6 @@ export async function mountGlobalHome(caseRoot: string, options: GlobalHomeOptio
   // fiber stays pending and the tree walk below silently finds no children.
   await mountAgentLoopTestDependencies(ctx, { workingDirectory: true })
   await ctx.plugin(JsonlSessionPersistence, { root: sessionRootOf(caseRoot), compression: 'none' })
-  await ctx.plugin(CommandRuntime)
   if (options.failingRecordKeys === undefined) await mountParkStorage(ctx, storageOf(caseRoot))
   else {
     // A case that only needs a write refused wants that refusal to land at the
@@ -262,11 +261,7 @@ export async function mountGlobalHome(caseRoot: string, options: GlobalHomeOptio
   const plugin = await ctx.plugin({ name, inject, apply })
   const signal = new AbortController().signal
 
-  const run = async (agent: Agent, command: string): Promise<CommandResult> => {
-    const execution = await ctx.commands.execute(agent, `/${command}`, [], signal)
-    if (execution === undefined) throw new Error(`pause: /${command} did not resolve for "${agent.id}"`)
-    return execution.result
-  }
+  const run = async (agent: Agent, verb: PauseVerb): Promise<PauseActionResultWire> => press(ctx, agent, verb, signal)
 
   return {
     ctx,
@@ -278,21 +273,11 @@ export async function mountGlobalHome(caseRoot: string, options: GlobalHomeOptio
     create: (id) => harness.create(SessionId(id), { provider: 'fake', model: 'fake' }),
     run,
     stop: agent => run(agent, 'pause'),
-    release: agent => run(agent, RESUME_COMMAND),
-    headerStatus: async (agent) => {
-      const answer = await run(agent, 'pause-state')
-      const text = answer.text
-      const status = text === undefined ? undefined : decodeParkStatus(text)
-      if (status === undefined) {
-        throw new Error(`pause: the header status answered in an unknown vocabulary: ${String(text)}`)
-      }
-      return status
-    },
-    status: async (agent) => {
-      const answer = await run(agent, 'pause-state-all')
-      const status = answer.text === undefined ? undefined : decodeGlobalStatus(answer.text)
-      if (status === undefined) throw new Error(`pause: the aggregate read answered in an unknown vocabulary: ${String(answer.text)}`)
-      return status
+    release: agent => run(agent, 'pause-resume'),
+    headerStatus: async (agent) => await statusOf(ctx, agent, signal),
+    status: async (agent?: Agent) => {
+      void agent
+      return await aggregate(ctx, signal)
     },
     job: (owner, label) => {
       if (options.jobs === false) throw new Error('pause: this home mounts no job registry')

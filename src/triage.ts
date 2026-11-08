@@ -11,8 +11,8 @@
  * stored log through a read handle that claims no ownership and writes nothing,
  * so asking what happened cannot itself change what happened.
  *
- * WHAT ONE READ COSTS. The list is read again on every command-registry change
- * while the panel is open, and what it publishes is about the end of a log that
+ * WHAT ONE READ COSTS. The list is read when the panel opens and when a native
+ * action changes the park, and what it publishes is about the end of a log that
  * only grows, so `./coldlog.ts` bounds each row's read to that end. A row whose
  * facts the bound cannot hold reports itself unreadable rather than publishing
  * a fragment.
@@ -35,10 +35,10 @@
  * reported; a withheld promise costs a user nothing, a broken one spends their
  * money.
  *
- * WHO MAY DECIDE. A decision names its target as command input, and the command
- * channel carries no origin of its own, so this list acts only on rows its most
- * recent read published to the calling session: the caller's own read is what
- * makes a target actionable. Anything else is refused, not looked up.
+ * WHO MAY DECIDE. A decision carries the calling session and its target as wire
+ * input, so this list acts only on rows its most recent read published to the
+ * calling session: the caller's own read is what makes a target actionable.
+ * Anything else is refused, not looked up.
  *
  * TWO OF THE FIVE VERBS PUT THE SESSION BACK ON THE CLEAN PATH. Continue and
  * continue-with-the-note go through `ResumePath.decideUnclean`, which activates
@@ -85,7 +85,7 @@ export const TRIAGE_NOT_LISTED_TEXT = 'pause has no unfinished pause for this se
  * is refused rather than acted on.
  */
 export const TRIAGE_UNSHOWN_TEXT = 'pause did not act: this Session has not been shown that row.'
-  + ' Read the list first (/pause-triage).'
+  + ' Read the decision list first.'
 
 /**
  * Model-facing text that goes with a wake when the user chooses to continue

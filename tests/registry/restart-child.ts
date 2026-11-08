@@ -22,12 +22,12 @@
 
 import { writeSync } from 'node:fs'
 import { Context } from '@deepseek-ai/cordis'
-import CommandRuntime from '@deepseek-ai/dsh-commands'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { apply, inject, name } from 'dsh-pause-session'
+import { statusOf, pause as nativePause } from '../native-driver.ts'
 import { FakeProvider, textResponse } from '../assumptions/fake-provider.ts'
 import { mountParkStorage } from './storage.ts'
 
@@ -41,7 +41,6 @@ const id = SessionId(rawId)
 const ctx = new Context()
 await mountAgentLoopTestDependencies(ctx)
 await ctx.plugin(JsonlSessionPersistence, { root: sessionRoot, compression: 'none' })
-await ctx.plugin(CommandRuntime)
 // The registry lives under its own root, beside the session logs rather than in
 // them: the parent asserts the pause outlives the process without being part of
 // any session's history.
@@ -53,9 +52,9 @@ await ctx.plugin({ name, inject, apply })
 
 // Park the session, then hand it one more message: the loop opens a turn for
 // it, builds the request, and stops at the gate with that input still pending.
-const pause = await ctx.commands.execute(agent, '/pause', [], new AbortController().signal)
-if (pause?.result.kind !== 'success') {
-  throw new Error(`child: pause did not succeed: ${JSON.stringify(pause?.result)}`)
+const pause = await nativePause(ctx, agent, new AbortController().signal)
+if (!pause.ok) {
+  throw new Error(`child: pause did not succeed: ${JSON.stringify(pause)}`)
 }
 agent.followup(createUserMessage({
   content: [{ type: 'text', text: 'delivered while parked' }],
@@ -63,22 +62,17 @@ agent.followup(createUserMessage({
 }))
 
 // Wait for the session to report safe, read the same way the browser does: the
-// resume definition is the pause, and the status command answers with the phase
-// as of the read.
-const resumeDefinitionId = 'dsh-pause-session/resume'
+// native snapshot's entry for this session is the pause, and its phase is the
+// answer as of the read.
 for (let attempt = 0; attempt < 4000; attempt++) {
-  const listed = ctx.commands.list(agent)
-  if (listed.some(descriptor => descriptor.definitionId === resumeDefinitionId)) {
-    const status = await ctx.commands.execute(agent, '/pause-state', [], new AbortController().signal)
-    const text = status?.result.kind === 'success' ? status.result.text : undefined
-    if (text?.includes('paused') === true) {
-      writeSync(1, `RESTART_READY ${text}\n`)
-      if (mode === 'kill') process.kill(process.pid, 'SIGKILL')
-      await ctx.fiber.dispose()
-      writeSync(1, 'RESTART_CLEAN_EXIT\n')
-      process.exit(0)
-    }
+  const phase = (await statusOf(ctx, agent, new AbortController().signal))?.phase
+  if (phase === 'safe') {
+    writeSync(1, `RESTART_READY ${phase}\n`)
+    if (mode === 'kill') process.kill(process.pid, 'SIGKILL')
+    await ctx.fiber.dispose()
+    writeSync(1, 'RESTART_CLEAN_EXIT\n')
+    process.exit(0)
   }
   await new Promise(resolve => setTimeout(resolve, 10))
 }
-throw new Error('child: the session never reported paused')
+throw new Error('child: the session never reported safe')

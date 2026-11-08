@@ -7,7 +7,7 @@
  * list only has to name where the session stopped, which tool call the log
  * never heard back from, and whether an answer is still owed — all of them
  * facts about the log's END. Reading from seq 0 to the end for every row, on
- * every command-registry change while the panel is open, would make a long
+ * every time the panel opens, would make a long
  * session's cost grow with a log nobody is asking about.
  *
  * WHAT THE BOUND BUYS. A stored log is append-only, so the tail is stable: the

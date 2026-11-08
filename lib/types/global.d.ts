@@ -76,13 +76,7 @@ export interface GlobalPause {
      */
     pressAll(signal?: AbortSignal): Promise<CommandResult>;
     /**
-     * @param signal - cancellation for the tree reads this read performs.
-     * @returns the aggregate as of this read.
-     */
-    readStatus(signal?: AbortSignal): Promise<CommandResult>;
-    /**
-     * The same aggregate as {@link readStatus}, as structured data for the
-     * browser status route.
+     * The aggregate as structured data for the native Remote stream.
      * @param signal - cancellation for the tree reads this read performs.
      * @returns the aggregate as of this read.
      */

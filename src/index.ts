@@ -19,8 +19,10 @@ import { TRIAGE_LOG_MAX_EVENTS, TRIAGE_WINDOW_EVENTS } from './coldlog.js'
 import { installSessionControl } from './control.js'
 import { PauseGate } from './gate.js'
 import { mountParkWatch } from './park.js'
-import { mountStatusRoute } from './status-route.js'
+import { PauseRemote } from './remote.js'
+import { remoteApiOf } from './remote-adapter.js'
 import { openParkRegistry } from './registry.js'
+export { PauseRemote } from './remote.js'
 
 /** Plugin name; the Loader row and the bundle patch both use it. */
 export const name = 'dsh-pause-session'
@@ -30,7 +32,7 @@ export const name = 'dsh-pause-session'
  * needs, the projection registry the park predicate reads turn state from, and
  * the profile's storage, which holds the pause registry.
  */
-export const inject = ['llm', 'commands', 'agents', 'sessions', 'sessionProjections', 'storageDomain']
+export const inject = ['llm', 'agents', 'sessions', 'sessionProjections', 'storageDomain']
 
 /**
  * Provider routes whose request conversion drops an empty user message, so the
@@ -96,6 +98,6 @@ export async function apply(ctx: Context, config: Config = Config.parse({})): Pr
     silentWakeRoutes: config.silentWakeRoutes,
     maxListedLogEvents: config.maxListedLogEvents,
   })
-  mountStatusRoute(ctx, signal => control.readSnapshot(signal))
+  new PauseRemote(ctx, remoteApiOf(control))
   await control.adopt()
 }

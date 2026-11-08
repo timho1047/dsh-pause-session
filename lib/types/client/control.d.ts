@@ -1,44 +1,23 @@
 /**
  * Browser-side reading and driving of the host's park state for one session.
  *
- * The browser reads the host's same-origin JSON status route when the Web
- * carrier mounts it. That route is the normal path and keeps background status
- * reads out of the Session log. On a carrier without the route, the control
- * falls back to the host's command registry: `commands.list(sessionId)` marks
- * whether this session is paused, and the status command's answer carries the
- * phase. Either path is host-authoritative; this module never derives a state
- * from its own press. The answer also carries the record's goal opt-out, so the
- * switch beside the pause button can show it without a second host round-trip.
+ * The browser reads the native `pauseSession` stream; actions travel through
+ * the same Remote namespace. No slash command is involved. The stream is
+ * host-authoritative, so this module never derives a state from its own press.
+ * The snapshot also carries the record's goal opt-out, so the switch beside the
+ * pause button can show it without a second host round-trip.
  *
- * Every phase the host reaches announces itself on that channel: a transition
- * re-registers the status verb, so a transition is what buys the next read and a
- * read that finds a phase still moving is the answer to the transition that
- * produced it rather than a reason to keep asking (`./burst.ts`). One transition
- * arrives as several registry changes — parking a session also registers its
- * three commands — so the burst's own collection window is what turns a tick of
- * changes into one read per shown session. A press or a goal switch reads as it
- * runs, and the marker changes it causes are that action's own echo: those are
- * absorbed for a short window (`./burst.ts`) rather than read back — except for
- * the one look an action owes when that window closes, if the reading it left
- * behind is still moving, because a transition announced inside the window would
- * otherwise never be read at all.
- *
- * The whole-app control reads the same park and publishes what it found
- * (`./global.ts`), and a header consults that answer before spending a read of
- * its own: with nothing registered, no session can be paused, so a header that
- * already says "running" is left saying it rather than paying a round-trip to
- * hear it again. A header the host last showed on its way to a park is never
- * answered that way — that reading is the newer fact — and the derivation is
- * voided by the next whole-app answer that names a registered session, which
- * the forwarded change a park causes is what brings in.
+ * The stream is the change feed: a fresh snapshot wakes the controls' own
+ * coalescing burst, which reads the cached snapshot and publishes it. A press or
+ * a goal switch reads as it runs, and the snapshot it causes is that action's
+ * own echo, absorbed for a short window (`./burst.ts`).
  * @module dsh-pause-session/client/control
  */
-import type { ClientRemote } from '@deepseek-ai/dsh-api-remotes/client';
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store';
 import type { SessionId } from '@deepseek-ai/dsh-session/types';
+import type { PauseTransport } from './remote.js';
 import type { BurstPolicy } from './burst.js';
 import type { GlobalReading } from './global.js';
-import type { PauseStatusSource } from './status.js';
 /**
  * The whole-app answer as the session headers read it, or `undefined` before
  * that control has heard from the host. Reading it costs nothing: it is the
@@ -75,10 +54,9 @@ export interface PauseState {
 }
 /** Owns the published reading per session; nothing else writes that state. */
 export declare class PauseControl {
-    private readonly commands;
+    private readonly transport;
     private readonly lifetime;
     private readonly aggregate;
-    private readonly source?;
     /** State source the Session-header contribution binds its selector hook to. */
     readonly store: SnapshotStore<PauseState>;
     /** Sessions this control has shown; a host registry change re-reads every one of them. */
@@ -114,7 +92,7 @@ export declare class PauseControl {
      * @param policy - the burst waits and visibility source; defaults to the real page.
      * @param aggregate - the whole-app control's published answer; absent means it is never consulted.
      */
-    constructor(commands: ClientRemote['commands'], lifetime: AbortSignal, windowMs?: number, policy?: Omit<BurstPolicy, 'windowMs' | 'waitsMs'>, aggregate?: AggregateSource, source?: PauseStatusSource | undefined);
+    constructor(transport: PauseTransport, lifetime: AbortSignal, windowMs?: number, policy?: Omit<BurstPolicy, 'windowMs' | 'waitsMs'>, aggregate?: AggregateSource);
     /**
      * Read the host's state for one session.
      * @param sessionId - session whose control was rendered.
@@ -159,7 +137,7 @@ export declare class PauseControl {
      * @returns after the control re-reads the host.
      */
     toggleGoal(sessionId: SessionId): Promise<void>;
-    /** Ask the host what this session's park state is, in the browser's vocabulary. */
+    /** Ask the native stream what this session's park state is. */
     private read;
     private publish;
     /**

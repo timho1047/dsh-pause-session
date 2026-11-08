@@ -16,7 +16,7 @@ interface Recorded {
 
 /**
  * Minimal stand-in for the client Context: records what the plugin registers,
- * and answers the two Client-callable calls the control makes.
+ * and answers the native Remote namespace the control consumes.
  */
 function fakeClientContext() {
   const recorded: Recorded[] = []
@@ -32,11 +32,16 @@ function fakeClientContext() {
       },
     },
     remote: {
-      commands: {
-        list: () => Promise.resolve({ ok: true, value: [] }),
-        execute: () => Promise.resolve({ ok: true, value: undefined }),
+      pauseSession: {
+        observe: async function* () {},
+        act: () => Promise.resolve({ ok: true, value: { ok: true, message: 'done' } }),
+        triage: () => Promise.resolve({ ok: true, value: [] }),
+        decide: () => Promise.resolve({ ok: true, value: { ok: true, message: 'done' } }),
       },
-      $on: () => () => {},
+    },
+    inject(_names: readonly string[], callback: (child: typeof ctx) => unknown) {
+      callback(ctx)
+      return () => {}
     },
     slots: {
       inject(name: string, callback: () => unknown) {
@@ -82,10 +87,10 @@ describe('client slot contribution', () => {
     expect(namespaces).toEqual(['pause'])
   })
 
-  it('requires the slot registry, the locale service, and the host command round-trip', () => {
-    // A third-party client half reaches its host half only through a
-    // Client-callable command namespace; without it the control cannot know
-    // the host's state, so the plugin stays unloaded instead of guessing.
-    expect(inject).toEqual(['slots', 'locale', 'remote', 'remote.commands'])
+  it('requires the slot registry, the locale service, and the native Remote face', () => {
+    // The generated Remote namespace is the only transport; without it the
+    // control cannot know the host's state, so the plugin stays unloaded
+    // instead of guessing.
+    expect(inject).toEqual(['slots', 'locale', 'remote'])
   })
 })

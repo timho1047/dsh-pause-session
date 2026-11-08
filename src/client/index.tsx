@@ -17,8 +17,8 @@
  * Both controls are host-authoritative. On a browser Host they read the
  * same-origin JSON status route, which keeps background reads out of the
  * Session log; a carrier without that route falls back to the command channel.
- * User actions still run through the host's session commands (`./control.ts`
- * and `./global.ts` own both transports). Each control stays inert wherever no
+ * User actions and status both use the generated native Remote namespace;
+ * no slash command is involved. Each control stays inert wherever no
  * round-trip is available rather than rendering a state it cannot support. The
  * header control also reads the whole-app answer the whole-app control
  * publishes, so a park that holds nothing does not cost a host round-trip per
@@ -43,7 +43,9 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { PauseControl } from './control.js'
 import type { PauseState } from './control.js'
 import { PauseGlobalControl } from './global.js'
-import { createStatusSource } from './status.js'
+import { remoteTransport } from './remote.js'
+import pauseRemote from 'dsh-pause-session/remote'
+import type {} from 'dsh-pause-session/remote'
 import { GoalIcon, PauseIcon, ResumeIcon } from './icons.js'
 import { PausePill } from './pill.js'
 import type { PausePillInjected } from './pill.js'
@@ -62,7 +64,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 const NS = 'pause'
 
 /** Required services: the slot registry, the locale registry, and the host round-trip. */
-export const inject = ['slots', 'locale', 'remote', 'remote.commands']
+export const inject = ['slots', 'locale', 'remote']
 
 /** Browser state and operations injected into the Session-header contribution. */
 export interface PauseInjected {
@@ -149,95 +151,93 @@ export function PauseButton(props: PauseButtonProps): ReactNode {
  * and the whole-app control into the session header.
  * @param ctx - client context carrying slots, locale, and the Remote face.
  */
+
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'pause: dictionaries')
   const lifetime = new AbortController()
   ctx.effect(() => () => { lifetime.abort(new Error('pause: client unloaded')) }, 'pause: lifetime')
-  const source = createStatusSource(lifetime.signal)
-  const globalControl = new PauseGlobalControl(ctx.remote.commands, lifetime.signal, undefined, undefined, source)
-  const control = new PauseControl(
-    ctx.remote.commands,
-    lifetime.signal,
-    undefined,
-    undefined,
-    () => globalControl.store.getSnapshot().global,
-    source,
-  )
-  // A header answered from the whole-app "nothing is registered" is read for
-  // real the moment that stops holding: the session it stood in for may be the
-  // one the park just took.
-  ctx.effect(
-    () => globalControl.store.subscribe(() => { control.reconsider() }),
-    'pause: the whole-app answer serves the session headers',
-  )
-  // The host announces every transition on the command channel — a park's
-  // registrations, a resume's unregistrations, and the re-registration that
-  // carries a phase change. Those announcements trigger the status reads; the
-  // reads themselves use the JSON route on Web and the command fallback
-  // elsewhere, so a status transition does not append two records to a Session.
-  //
-  // The host announces one event per registration step, so parking N sessions
-  // arrives as several events per session. Both controls coalesce that
-  // themselves, over the burst's own collection window (`./burst.ts`): a change
-  // that lands inside the window postpones the single read it buys rather than
-  // starting one of its own. A change that follows one of the user's own
-  // actions is that action's echo instead, and the burst absorbs it for a short
-  // window rather than reading back an answer the action already put on screen.
-  ctx.effect(
-    () => ctx.remote.$on('commands/change', () => {
-      control.refreshAll()
-      globalControl.refreshAll()
-    }),
-    'pause: host command registry changes',
-  )
-  // A page that is not on screen is not being read: the controls stop their
-  // re-read timers while it is hidden and continue them when it comes back.
-  ctx.effect(() => {
-    if (typeof document === 'undefined') return () => {}
-    const onVisibility = (): void => {
-      control.watchVisibility()
-      globalControl.watchVisibility()
-    }
-    document.addEventListener('visibilitychange', onVisibility)
-    return () => { document.removeEventListener('visibilitychange', onVisibility) }
-  }, 'pause: page visibility')
-  ctx.slots.inject('conversation.session.header.actions', () =>
-    ctx.slots.register(
-      {
-        name: 'conversation.session.header.actions',
-        id: NS,
-        order: 40,
-        locale: NS,
-        inject: (): PauseInjected => ({
-          hooks: { pause: control.store },
-          refresh: (sessionId) => { void control.refresh(sessionId) },
-          toggle: (sessionId) => { void control.toggle(sessionId) },
-          toggleGoal: (sessionId) => { void control.toggleGoal(sessionId) },
-        }),
-      },
-      PauseButton,
-    ),
-  )
-  // The whole-app control goes in the header's right-aligned utilities row:
-  // the conversation column's own top-right corner, additive beside the
-  // entries already there, and inside the layout rather than above it. Its
-  // order puts it past the shipped utilities, which is the row's right end.
-  ctx.slots.inject('conversation.session.header.utilities', () =>
-    ctx.slots.register(
-      {
-        name: 'conversation.session.header.utilities',
-        id: 'pause-all',
-        order: 60,
-        locale: NS,
-        inject: (): PausePillInjected => ({
-          hooks: { pauseGlobal: globalControl.store },
-          refresh: (sessionId) => { void globalControl.refresh(sessionId) },
-          toggle: (sessionId) => { void globalControl.toggle(sessionId) },
-          setPanel: (open) => { globalControl.setPanel(open) },
-          decide: (sessionId, action) => { void globalControl.decide(sessionId, action) },
-        }),
-      },
-      PausePill,
-    ),
-  )
+
+  // The generated contribution is the only transport. It is mounted before
+  // the namespace consumer below; that consumer uses a child inject because a
+  // Remote namespace does not exist until its contribution is mounted.
+  if (typeof ctx.remote.$mount === 'function') {
+    ctx.effect(async () => {
+      const dispose = await ctx.remote.$mount(pauseRemote)
+      return dispose
+    }, 'pause: remote transport')
+  }
+
+  ctx.inject(['remote.pauseSession'], (remoteCtx) => {
+    const remote = remoteCtx.remote.pauseSession
+    const transport = remoteTransport(remote, lifetime.signal)
+    const globalControl = new PauseGlobalControl(transport, lifetime.signal)
+    const control = new PauseControl(
+      transport,
+      lifetime.signal,
+      undefined,
+      undefined,
+      () => globalControl.store.getSnapshot().global,
+    )
+    // A header answered from the whole-app "nothing is registered" is read for
+    // real the moment that stops holding.
+    remoteCtx.effect(
+      () => globalControl.store.subscribe(() => { control.reconsider() }),
+      'pause: the whole-app answer serves the session headers',
+    )
+    // The native stream is the change feed: every fresh snapshot wakes the
+    // controls' own coalescing burst, which reads the cached snapshot.
+    remoteCtx.effect(
+      () => transport.source.onChange(() => {
+        control.refreshAll()
+        globalControl.refreshAll()
+      }),
+      'pause: native status stream',
+    )
+    // A page that is not on screen is not being read: the controls stop their
+    // re-read timers while it is hidden and continue them when it comes back.
+    remoteCtx.effect(() => {
+      if (typeof document === 'undefined') return () => {}
+      const onVisibility = (): void => {
+        control.watchVisibility()
+        globalControl.watchVisibility()
+      }
+      document.addEventListener('visibilitychange', onVisibility)
+      return () => { document.removeEventListener('visibilitychange', onVisibility) }
+    }, 'pause: page visibility')
+    remoteCtx.slots.inject('conversation.session.header.actions', () =>
+      remoteCtx.slots.register(
+        {
+          name: 'conversation.session.header.actions',
+          id: NS,
+          order: 40,
+          locale: NS,
+          inject: (): PauseInjected => ({
+            hooks: { pause: control.store },
+            refresh: (sessionId) => { void control.refresh(sessionId) },
+            toggle: (sessionId) => { void control.toggle(sessionId) },
+            toggleGoal: (sessionId) => { void control.toggleGoal(sessionId) },
+          }),
+        },
+        PauseButton,
+      ),
+    )
+    remoteCtx.slots.inject('conversation.session.header.utilities', () =>
+      remoteCtx.slots.register(
+        {
+          name: 'conversation.session.header.utilities',
+          id: 'pause-all',
+          order: 60,
+          locale: NS,
+          inject: (): PausePillInjected => ({
+            hooks: { pauseGlobal: globalControl.store },
+            refresh: (sessionId) => { void globalControl.refresh(sessionId) },
+            toggle: (sessionId) => { void globalControl.toggle(sessionId) },
+            setPanel: (open) => { globalControl.setPanel(open) },
+            decide: (sessionId, action) => { void globalControl.decide(sessionId, action) },
+          }),
+        },
+        PausePill,
+      ),
+    )
+  })
 }

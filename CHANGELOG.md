@@ -5,14 +5,20 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
-## [0.1.1] - 2026-11-06
+## [0.2.0] - 2026-11-06
 
 ### Changed
 
-- On a browser host, status refreshes use an authenticated same-origin JSON
-  route instead of slash commands. Background reads no longer append
-  `command/run`/`command/done` records to a Session's log; actions and
-  non-browser carriers keep the command channel.
+- Both controls now use a native DSH Remote namespace and stream. The plugin
+  registers no slash commands, so a status refresh never appends
+  `command/run`/`command/done` records to a Session.
+- Pause, resume, goal, and decision-list actions travel through the same
+  native namespace on Web and Desktop.
+
+### Removed
+
+- The `/pause`, `/pause-resume`, `/pause-state`, `/pause-goal`, and
+  `/pause-triage*` command surface.
 
 ## [0.1.0] - 2026-11-02
 
@@ -47,5 +53,5 @@ and this project uses [Semantic Versioning](https://semver.org/).
   exit, archive, compaction, and `wait_agent` can behave differently while held.
 - External one-shot subagent routes cannot be cold-resumed.
 
-[0.1.1]: https://github.com/timho1047/dsh-pause-session/releases/tag/v0.1.1
+[0.2.0]: https://github.com/timho1047/dsh-pause-session/releases/tag/v0.2.0
 [0.1.0]: https://github.com/timho1047/dsh-pause-session/releases/tag/v0.1.0

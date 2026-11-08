@@ -1,71 +1,18 @@
 /**
- * Browser read of the host's JSON pause snapshot.
- *
- * The source is a plain same-origin `fetch`, not a Session command: background
- * polling must not append `command/run` and `command/done` to the transcript.
- * It caches one request for a short window because both header controls read
- * on the same burst, and it backs off for five seconds after a 404 so a
- * Desktop/IPC composition falls back to the command channel instead of
- * repeating a dead request on every transition.
- *
+ * The status read the controls consume. The browser implementation is the
+ * native Remote stream in `./remote.ts`; this leaf keeps the interface free of
+ * transport dependencies.
  * @module dsh-pause-session/client/status
  */
 
-import { STATUS_PATH } from '../shared.js'
 import type { PauseSnapshot } from '../shared.js'
 
 /** The one read the two browser controls share. */
 export interface PauseStatusSource {
   /**
-   * Read the host snapshot.
+   * Read the latest host snapshot.
    * @param signal - lifetime cancellation, supplied by the owning control.
-   * @returns the snapshot, or undefined when the route is unavailable.
+   * @returns the snapshot, or undefined before the stream has answered.
    */
   read(signal?: AbortSignal): Promise<PauseSnapshot | undefined>
-}
-
-/** How long two controls' reads share one request. */
-const CACHE_MS = 75
-
-/**
- * Create the browser status source.
- * @param lifetime - aborts an in-flight request when the client unloads.
- * @returns the shared source.
- */
-export function createStatusSource(lifetime: AbortSignal): PauseStatusSource {
-  let retryAfter = 0
-  let cachedAt = 0
-  let cached: Promise<PauseSnapshot | undefined> | undefined
-
-  const load = async (signal?: AbortSignal): Promise<PauseSnapshot | undefined> => {
-    if (Date.now() < retryAfter) return undefined
-    const requestSignal = signal ?? lifetime
-    try {
-      const response = await fetch(STATUS_PATH, {
-        method: 'GET',
-        headers: { accept: 'application/json' },
-        credentials: 'same-origin',
-        cache: 'no-store',
-        signal: requestSignal,
-      })
-      if (response.status === 404 || response.status === 405) {
-        retryAfter = Date.now() + 5_000
-        return undefined
-      }
-      if (!response.ok) return undefined
-      return await response.json() as PauseSnapshot
-    } catch {
-      return undefined
-    }
-  }
-
-  return {
-    read: (signal) => {
-      const now = Date.now()
-      if (cached !== undefined && now - cachedAt < CACHE_MS) return cached
-      cachedAt = now
-      cached = load(signal)
-      return cached
-    },
-  }
 }

@@ -14,7 +14,6 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
-import { decodeGlobalStatus } from '../../src/shared.ts'
 import {
   blockingScript, cleanRoots, mountGlobalHome, settles, temporaryRoot, untilAsync,
 } from './home.ts'
@@ -73,11 +72,10 @@ describe('the whole-app report', () => {
 
       // The report a user reads says both things, and says them about the very
       // read that also says the lid can be closed.
-      const answer = await home.run(parent, 'pause-state-all')
-      const decoded = answer.text === undefined ? undefined : decodeGlobalStatus(answer.text)
-      expect(decoded?.verdict).toBe('safe')
-      expect(answer.text).toContain('unresumable: bridge-user')
-      expect(answer.text).toContain(`jobs: ${job!.id}`)
+      const answer = await home.status(parent)
+      expect(answer.verdict).toBe('safe')
+      expect(answer.unresumable).toEqual(['bridge-user'])
+      expect(answer.jobs).toEqual([job!.id])
 
       // The background job is outside the agent loop: nothing this park did
       // stopped it, and it is still running after the park finished.

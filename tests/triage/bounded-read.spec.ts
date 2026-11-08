@@ -8,9 +8,9 @@
  * holds the facts reports exactly what a full read reports, and a window that
  * does not is reported unreadable rather than filled with a guess.
  *
- * The subject is the row a user reads, driven through the same verb the browser
- * half executes for the end-to-end case, and the same derivation the row is
- * built from for the window-by-window cases.
+ * The subject is the row a user reads, driven through the same native list read
+ * the browser half uses for the end-to-end case, and the same derivation the row
+ * is built from for the window-by-window cases.
  * @module dsh-pause-session/test/triage/bounded-read
  */
 
@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
@@ -54,6 +55,42 @@ beforeAll(() => { ensureHostEntry() })
 async function parkPairSession(caseRoot: string): Promise<void> {
   await parkAndLeave(caseRoot, 'bounded-session', 'pair')
   await recordsUntil(caseRoot, [['bounded-session', 'draining']])
+  await appendInboxTail(caseRoot, 'bounded-session')
+}
+
+/**
+ * Leave the log ending in its own bookkeeping, the way a delivery spliced into
+ * the inbox of a session whose gate is holding the turn does.
+ *
+ * The end position is the row's first fact, and a window that reaches only this
+ * tail cannot establish it; without such a tail every suffix of the log holds
+ * the stop event and the bound has nothing to refuse.
+ */
+async function appendInboxTail(caseRoot: string, id: string): Promise<void> {
+  const ctx = new Context()
+  await ctx.plugin(JsonlSessionPersistence, { root: sessionRootOf(caseRoot), compression: 'none' })
+  try {
+    const handle = await ctx.sessionPersistence.open(SessionId(id), 'write')
+    try {
+      const events = (await handle.read(0, undefined)).events
+      const next = (events.at(-1)?.seq ?? -1) + 1
+      await handle.append([{
+        type: 'agent/inbox/spliced',
+        seq: next,
+        time: Date.now(),
+        data: {
+          target: 'next-turn',
+          start: 0,
+          inserted: [createUserMessage({ content: [{ type: 'text', text: 'delivered while the gate held the turn' }], source: { kind: 'user' } })],
+        },
+      } as never])
+      await handle.flush()
+    } finally {
+      await handle.close()
+    }
+  } finally {
+    await ctx.fiber.dispose()
+  }
 }
 
 /** The stored events of that session, exactly as stored. */

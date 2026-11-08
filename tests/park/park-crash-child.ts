@@ -26,12 +26,12 @@
 import { writeSync } from 'node:fs'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
-import CommandRuntime from '@deepseek-ai/dsh-commands'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { apply, inject, name } from 'dsh-pause-session'
+import { statusOf, pause as nativePause } from '../native-driver.ts'
 import { FakeProvider } from '../assumptions/fake-provider.ts'
 import { textResponse } from '../assumptions/fake-provider.ts'
 import { mountParkStorage } from '../registry/storage.ts'
@@ -46,7 +46,6 @@ const id = SessionId(rawId)
 const ctx = new Context()
 await mountAgentLoopTestDependencies(ctx)
 await ctx.plugin(JsonlSessionPersistence, { root, compression: 'none' })
-await ctx.plugin(CommandRuntime)
 // The plugin opens its park registry through `storageDomain`, so it cannot
 // mount without the storage stack; this probe only needs the row to exist.
 await mountParkStorage(ctx, join(root, 'storages'))
@@ -57,26 +56,20 @@ await ctx.plugin({ name, inject, apply })
 
 // Park the session, then hand it one more message: the loop opens a turn for
 // it, builds the request, and stops at the gate with that input still pending.
-const pause = await ctx.commands.execute(agent, '/pause', [], new AbortController().signal)
-if (pause?.result.kind !== 'success') throw new Error('child: pause did not succeed')
+const pause = await nativePause(ctx, agent, new AbortController().signal)
+if (!pause.ok) throw new Error(`child: pause did not succeed: ${pause.message}`)
 agent.followup(createUserMessage({
   content: [{ type: 'text', text: 'pending while parked' }],
   source: { kind: 'user' },
 }))
 
 // Wait for the session to report safe, read the same way the browser does.
-const statusDefinitionId = 'dsh-pause-session/status'
-const resumeDefinitionId = 'dsh-pause-session/resume'
 for (let attempt = 0; attempt < 4000; attempt++) {
-  const listed = ctx.commands.list(agent)
-  if (listed.some(descriptor => descriptor.definitionId === resumeDefinitionId)) {
-    const status = await ctx.commands.execute(agent, '/pause-state', [], new AbortController().signal)
-    const text = status?.result.kind === 'success' ? status.result.text : undefined
-    if (text?.includes('paused') === true) {
-      writeSync(1, `CRASH_READY ${text}\n`)
-      process.kill(process.pid, 'SIGKILL')
-    }
+  const phase = (await statusOf(ctx, agent, new AbortController().signal))?.phase
+  if (phase === 'safe') {
+    writeSync(1, `CRASH_READY ${phase}\n`)
+    process.kill(process.pid, 'SIGKILL')
   }
   await new Promise(resolve => setTimeout(resolve, 10))
 }
-throw new Error('child: the session never reported paused')
+throw new Error('child: the session never reported safe')

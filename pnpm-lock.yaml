@@ -120,6 +120,12 @@ importers:
       '@deepseek-ai/dsh-tools':
         specifier: link:../../deepseek-harness/packages/core/tools
         version: link:../../deepseek-harness/packages/core/tools
+      '@deepseek-ai/dsh-typert-generator':
+        specifier: link:../../deepseek-harness/packages/typert/generator
+        version: link:../../deepseek-harness/packages/typert/generator
+      '@deepseek-ai/dsh-typert-protocol':
+        specifier: link:../../deepseek-harness/packages/typert/protocol
+        version: link:../../deepseek-harness/packages/typert/protocol
       '@types/node':
         specifier: ^22.10.0
         version: 22.20.5

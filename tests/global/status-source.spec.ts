@@ -1,16 +1,18 @@
 /**
- * The JSON status source is the no-log read path: when it answers, neither
- * control asks the command registry for status, so no background poll writes
- * `command/run`/`command/done` into a Session.
+ * The native snapshot source is the no-log read path: both controls read the
+ * host's stream snapshot and nothing else, so a background status read can never
+ * write `command/run`/`command/done` into a Session.
  * @module dsh-pause-session/test/global/status-source
  */
 
 import { describe, expect, it, vi } from 'vitest'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import type { PauseTransport } from '../../src/client/remote.ts'
 import { PauseControl } from '../../src/client/control.ts'
 import { PauseGlobalControl } from '../../src/client/global.ts'
-import type { PauseStatusSource } from '../../src/client/status.ts'
-import type { GlobalStatus, ParkStatus, PauseSnapshot } from '../../src/shared.ts'
+import type { PauseSnapshot } from '../../src/shared.ts'
+import type { GlobalStatus, ParkStatus } from '../../src/shared.ts'
+import type { PauseActionResultWire, TriageRowWire } from '../../src/remote.ts'
 
 const ADDRESS = SessionId('status-source-address')
 
@@ -33,34 +35,56 @@ function globalStatus(): GlobalStatus {
 /** One paused session shaped like the real one. */
 const paused: ParkStatus = { phase: 'safe', safe: true, runningTools: [], rearmGoal: true }
 
-/** A source whose one snapshot the controls read. */
-function sourceOf(snapshot: PauseSnapshot | undefined): PauseStatusSource {
-  return { read: vi.fn(async () => snapshot) }
+/** A transport whose only populated seam is the snapshot source. */
+function transportOf(snapshot: PauseSnapshot | undefined): {
+  transport: PauseTransport
+  acts: unknown[]
+  triage: () => number
+  decide: () => number
+} {
+  let triage = 0
+  let decide = 0
+  const acts: unknown[] = []
+  const transport: PauseTransport = {
+    source: { read: vi.fn(async () => snapshot as never) },
+    act: async (request): Promise<PauseActionResultWire> => {
+      acts.push(request)
+      return { ok: true, message: 'done' }
+    },
+    triage: async (): Promise<readonly TriageRowWire[]> => {
+      triage += 1
+      return []
+    },
+    decide: async (): Promise<PauseActionResultWire> => {
+      decide += 1
+      return { ok: true, message: 'done' }
+    },
+  }
+  return { transport, acts, triage: () => triage, decide: () => decide }
 }
 
-describe('the JSON status source replaces background command reads', () => {
-  it('publishes the aggregate without executing a command', async () => {
-    const commands = { list: vi.fn(), execute: vi.fn() }
-    const source = sourceOf({ global: globalStatus(), sessions: {} })
-    const control = new PauseGlobalControl(commands as never, new AbortController().signal, undefined, undefined, source)
+describe('the native snapshot source replaces background command reads', () => {
+  it('publishes the aggregate from the snapshot alone', async () => {
+    const { transport, acts, triage, decide } = transportOf({ global: globalStatus(), sessions: {} })
+    const control = new PauseGlobalControl(transport, new AbortController().signal)
 
     await control.refresh(ADDRESS)
 
     expect(control.store.getSnapshot().global).toEqual({ kind: 'reported', status: globalStatus() })
-    expect(commands.list).not.toHaveBeenCalled()
-    expect(commands.execute).not.toHaveBeenCalled()
+    expect(transport.source.read).toHaveBeenCalledTimes(1)
+    expect(acts).toEqual([])
+    expect(triage()).toBe(0)
+    expect(decide()).toBe(0)
   })
 
-  it('publishes one session status without listing its commands or executing one', async () => {
-    const commands = { list: vi.fn(), execute: vi.fn() }
-    const source = sourceOf({ global: globalStatus(), sessions: { [String(ADDRESS)]: paused } })
+  it('publishes one session status from the same snapshot', async () => {
+    const { transport } = transportOf({ global: globalStatus(), sessions: { [String(ADDRESS)]: paused } })
     const control = new PauseControl(
-      commands as never,
+      transport,
       new AbortController().signal,
       undefined,
       undefined,
       () => ({ kind: 'reported', status: globalStatus() }),
-      source,
     )
 
     await control.refresh(ADDRESS)
@@ -70,7 +94,6 @@ describe('the JSON status source replaces background command reads', () => {
       runningTools: paused.runningTools,
       rearmGoal: paused.rearmGoal,
     })
-    expect(commands.list).not.toHaveBeenCalled()
-    expect(commands.execute).not.toHaveBeenCalled()
+    expect(transport.source.read).toHaveBeenCalledTimes(1)
   })
 })
