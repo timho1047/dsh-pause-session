@@ -37,7 +37,7 @@ import type { PauseGate } from './gate.js';
 import type { ParkRegistry } from './registry.js';
 import type { PauseAnswer } from './shared.js';
 export * from './resume-text.js';
-import type { ReleaseTreeOutcome, ResumeAttempt, WakeRequest } from './resume-text.js';
+import type { ReleaseTreeOutcome, ResumeAttempt, ResumeOptions, WakeRequest } from './resume-text.js';
 declare module '@deepseek-ai/dsh-llm' {
     interface MessageSourceMap {
         /**
@@ -64,16 +64,6 @@ export interface ResumeDeps {
      * made and took back must never wake a model.
      */
     adopted(sessionId: SessionId): boolean;
-}
-/** Route knowledge this path needs from the composition. */
-export interface ResumeOptions {
-    /**
-     * Provider routes whose request conversion drops an empty user message, so an
-     * empty wake never reaches the model. Deployment-owned because it is a
-     * property of the adapter behind each route, and a third-party plugin cannot
-     * introspect an adapter.
-     */
-    readonly silentWakeRoutes: readonly string[];
 }
 /** The clean resume path, as the session control drives it. */
 export interface ResumePath {

@@ -6,6 +6,12 @@
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { PauseAnswer } from './shared.js'
 
+/** Route knowledge the clean resume path needs. */
+export interface ResumeOptions {
+  /** Provider routes whose request conversion drops an empty user message. */
+  readonly silentWakeRoutes: readonly string[]
+}
+
 /**
  * The one wake content a route that keeps an empty user message is given.
  */

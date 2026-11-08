@@ -46,13 +46,14 @@ import type { ParkRegistry } from './registry.js'
 import { describeError, UNRECORDED_TEXT } from './shared.js'
 import { walkDescendants } from './tree.js'
 import { releaseOrder } from './release-order.js'
+import { createActivator } from './resume-activation.js'
 import type { PauseAnswer } from './shared.js'
 export * from './resume-text.js'
 import {
   ACTIVATION_FAILED_TEXT, NOT_PARKED_TEXT, REARM_GOAL_OFF_TEXT, REARM_GOAL_ON_TEXT,
   RESUMED_TEXT, REVIEW_TEXT, summarizeTreeRelease, UNCLEAN_TEXT, UNRESUMABLE_TEXT, WAKE_MARKER,
 } from './resume-text.js'
-import type { ReleaseTreeOutcome, ResumeAttempt, ResumeRefusal, WakeRequest } from './resume-text.js'
+import type { ReleaseTreeOutcome, ResumeAttempt, ResumeOptions, ResumeRefusal, WakeRequest } from './resume-text.js'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
@@ -79,17 +80,6 @@ export interface ResumeDeps {
    * made and took back must never wake a model.
    */
   adopted(sessionId: SessionId): boolean
-}
-
-/** Route knowledge this path needs from the composition. */
-export interface ResumeOptions {
-  /**
-   * Provider routes whose request conversion drops an empty user message, so an
-   * empty wake never reaches the model. Deployment-owned because it is a
-   * property of the adapter behind each route, and a third-party plugin cannot
-   * introspect an adapter.
-   */
-  readonly silentWakeRoutes: readonly string[]
 }
 
 /** The clean resume path, as the session control drives it. */
@@ -170,152 +160,7 @@ export function installResumePath(
   deps: ResumeDeps,
 ): ResumePath {
   /** The route the session's next request will use, as its own log recorded it. */
-  const routeOf = (session: Session): LlmCallConfig | undefined => session.requestHeader()?.config
-
-  /**
-   * Give an agent that was loaded back without one the route its own log
-   * recorded. The loop refuses to build a request without a provider and model,
-   * and the persisted header is what the app's own activation path uses too, so
-   * this resumes onto the route the session stopped on.
-   *
-   * 0.2.2 replaced the installed route selection with the durable model-selection
-   * fold: `agent.model.current()` already returns a route replayed from the
-   * Session's own request headers, and `select()` records the header's route when
-   * that fold and the Agent options are both empty. The old per-agent
-   * `installModelSelection(agentCtx, selection)` no longer accepts a selection.
-   */
-  const ensureRoute = (agent: Agent): void => {
-    if (agent.model.current() !== undefined) return
-    const config = routeOf(agent.session)
-    if (config === undefined) return
-    agent.model.select({
-      provider: config.provider,
-      model: config.model,
-      ...config.reasoningEffort === undefined ? {} : { reasoningEffort: config.reasoningEffort },
-    })
-  }
-
-  /** What one wake input carries for the route in use. */
-  const wakeContent = (provider: string): ContentBlock[] =>
-    options.silentWakeRoutes.includes(provider) ? [] : [{ type: 'text', text: WAKE_MARKER }]
-
-  /**
-   * Ask the loop for the request it owes this session. Nothing is woken when a
-   * request is already standing at the gate or the loop is already running: the
-   * continuation is in flight, and a second wake would duplicate it. The content
-   * is the route's business only for the silent wake; a note is the user's
-   * decision and goes on the wire as written, on every route. Either way the
-   * message is attributed to this plugin: the wake is this path speaking on the
-   * session's behalf, not the user's own input.
-   * @param agent - the live agent to wake.
-   * @param request - which wake this resume delivers.
-   */
-  const wake = (agent: Agent, request: WakeRequest): void => {
-    if (request.kind === 'none') return
-    if (gate.isHeld(agent.id) || agent.status !== 'idle') return
-    if (!owesReply(agent.session.deriveMessages())) return
-    const provider = routeOf(agent.session)?.provider
-    if (provider === undefined) return
-    const content: ContentBlock[] = request.kind === 'message'
-      ? [{ type: 'text', text: request.text }]
-      : wakeContent(provider)
-    agent.followup(createUserMessage({ content, source: { kind: 'pause' } }))
-  }
-
-  /**
-   * Re-open one session's goal. Activation is process-local and is not part of
-   * the durable goal, so a restart leaves a healthy goal disarmed; only that
-   * case is repaired here. A goal the owner paused, blocked, or completed is a
-   * decision, and this path does not take decisions back. The wake (when there
-   * is one) runs first on purpose: the goal round driver queues the next round
-   * as soon as the agent is idle, and that round must not join the request that
-   * is answering the input already pending.
-   * @param agent - the agent whose goal may be re-armed.
-   */
-  const rearmGoal = (agent: Agent): void => {
-    const goals = ctx.get('goals')
-    if (goals === undefined) return
-    try {
-      const goal = goals.get(agent)
-      if (goal === undefined || goal.phase !== 'active' || goal.activation !== 'disarmed') return
-      if (goal.roundsStarted >= goal.maxGoalRounds) return
-      goals.resume(agent, { id: goal.id, revision: goal.revision })
-    } catch (error: unknown) {
-      ctx.logger.warn(`pause: could not re-open the goal of "${agent.id}": ${describeError(error)}`)
-    }
-  }
-
-  /**
-   * Load one parked session back from its stored log and hand it the request it
-   * stopped in front of. The pause is not released until the durable record is
-   * gone, so a record that cannot be dropped leaves the session parked rather
-   * than silently running.
-   *
-   * Activation is what makes a session run again, so nothing but a resume does
-   * it: the review answer never reaches this function.
-   * @param sessionId - the parked session to bring back.
-   * @param request - which wake the decision delivers; see {@link WakeRequest}.
-   * @param rearm - whether the record's goal opt-out allows re-opening its goal.
-   * @param parentId - the direct parent a batch release already brought back,
-   * when there is one. A subagent child resumed under its live parent is the
-   * shape the harness's own cold resume uses; with no live parent the session
-   * comes back on its own, which is all that can be done with it.
-   * @param signal - cancellation for the stored composition read and load.
-   */
-  const activate = async (
-    sessionId: SessionId,
-    request: WakeRequest,
-    rearm: boolean,
-    parentId?: SessionId,
-    signal?: AbortSignal,
-  ): Promise<ResumeAttempt> => {
-    const parent = parentId === undefined ? undefined : ctx.agents.get(parentId)
-    let agent: Agent
-    try {
-      const composition = await restoreComposition(ctx, sessionId, parent, signal)
-      // Owned by the root, not by this plugin's fiber: the session is the
-      // user's, and it must outlive a plugin reload.
-      agent = (await ctx.root.agents.resume({
-        resumeSessionId: sessionId,
-        ...parent === undefined ? {} : { parentAgent: parent },
-        ...composition,
-        ...signal === undefined ? {} : { signal },
-      })).agent
-    } catch (error: unknown) {
-      if (error instanceof UnresumableSessionError) {
-        return {
-          sessionId,
-          resumed: false,
-          refusal: 'unresumable',
-          answer: { kind: 'error', text: UNRESUMABLE_TEXT },
-        }
-      }
-      ctx.logger.warn(`pause: could not open "${sessionId}" from its stored log: ${describeError(error)}`)
-      return {
-        sessionId,
-        resumed: false,
-        refusal: 'activation-failed',
-        answer: { kind: 'error', text: ACTIVATION_FAILED_TEXT },
-      }
-    }
-    ensureRoute(agent)
-    // Delivered while the pause still holds the gate, so the request it builds
-    // waits there and leaves only once the durable record does.
-    // Whether that produced a wake says nothing about the release. A wake can
-    // be refused because the log owes no answer at all (a session parked while
-    // idle) or because the loop was already running; the user's decision to
-    // continue is what releases the session in every one of those cases.
-    wake(agent, request)
-    try {
-      await registry.forget(sessionId)
-    } catch (error: unknown) {
-      ctx.logger.warn(`pause: could not drop "${sessionId}" from the pause registry: ${describeError(error)}`)
-      return { sessionId, resumed: false, refusal: 'unrecorded', answer: { kind: 'error', text: UNRECORDED_TEXT } }
-    }
-    gate.resume(sessionId)
-    if (rearm) rearmGoal(agent)
-    return { sessionId, resumed: true, answer: { kind: 'success', text: RESUMED_TEXT } }
-  }
+  const { activate, ensureRoute, wake, rearmGoal } = createActivator(ctx, gate, registry, options)
 
   /**
    * Load one unclean session back from its stored log.
