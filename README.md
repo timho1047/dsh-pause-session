@@ -17,10 +17,10 @@ included, and the pause survives a DSH restart.
 > tracked in [REHEARSAL.md](REHEARSAL.md).
 
 <p align="center">
-  <img src="docs/images/pause-controls.webp" alt="dsh-pause-session controls showing a paused session and Safe to close for the whole app" width="100%">
+  <img src="docs/images/pause-controls.webp" alt="dsh-pause-session controls showing a paused session and Paused for the whole app" width="100%">
 </p>
 
-*The session is paused; the global pill shows Safe to close (1/1).*
+*The session is paused; the global pill shows Paused (1/1).*
 
 ## Quick start
 
@@ -50,9 +50,9 @@ included, and the pause survives a DSH restart.
    to pause that session and its subagents, or press the pill on the right side
    of the header to pause every running session tree.
 3. The control shows **Pausing** until the running tools finish and the next
-   model requests are held. When the global pill shows **Safe to close**, every
+   model requests are held. When the global pill shows **Paused**, every
    registered session is stopped and its pending input is durable.
-4. Next time, press **Safe to close** to resume every cleanly paused session, or
+4. Next time, press **Paused** to resume every cleanly paused session, or
    press the session button to resume that session and its subagents. While a
    park is still in progress, the pill names the draining sessions and tools and
    offers **Cancel this pause**. Drag the pill to move it; its position is
