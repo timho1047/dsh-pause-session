@@ -61,18 +61,16 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 // Type-only: the optional `ctx.sessionPersistence` read seam and its handle.
 import type {} from '@deepseek-ai/dsh-session-persistence'
-import type { CommandResult } from '@deepseek-ai/dsh-commands'
 import { coldRead, logFacts, positionOf, TRIAGE_WINDOW_EVENTS } from './coldlog.js'
 import type { ParkRegistry, ParkedSession } from './registry.js'
 import type { ResumePath } from './resume.js'
 import type { TriageAction, TriageList, TriageRow } from './shared.js'
+import type { PauseAnswer } from './shared.js'
 
 /** The route a wake input has to be addressed to; see `./resume.ts`. */
 type WakeOf = Parameters<ResumePath['resumeSession']>[1]
 
 /** Result copy for a decision the list itself could not carry out. */
-export const TRIAGE_FAILED_TEXT = 'pause could not carry out that decision; the session is exactly as it was.'
-
 /** Result copy for leaving one listed session alone. */
 export const TRIAGE_LEFT_TEXT = 'pause left this session paused; it is still on the list.'
 
@@ -168,7 +166,7 @@ export interface TriageListService {
     sessionId: SessionId,
     action: TriageAction,
     signal?: AbortSignal,
-  ): Promise<CommandResult>
+  ): Promise<PauseAnswer>
 }
 
 /**
@@ -191,7 +189,7 @@ export function mountTriageList(
 ): TriageListService {
   /**
    * The rows each calling session was last shown by its own read. A decision
-   * names its target as command input, and the command channel carries no
+   * names its target as wire input, and the channel carries no
    * origin of its own, so this is what ties a target to the list the user read:
    * only a row this caller has been shown is acted on.
    */
@@ -230,7 +228,7 @@ export function mountTriageList(
     sessionId: SessionId,
     action: TriageAction,
     signal?: AbortSignal,
-  ): Promise<CommandResult> => {
+  ): Promise<PauseAnswer> => {
     if (!(shown.get(caller)?.has(String(sessionId)) ?? false)) return { kind: 'error', text: TRIAGE_UNSHOWN_TEXT }
     const record = registry.get(sessionId)
     // `safe` is not a decision this list owns: that session belongs to the

@@ -13,6 +13,12 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol';
+declare module '@deepseek-ai/dsh-typert-protocol' {
+    interface RemoteErrorDetailsMap {
+        /** The pause control is personal; only the owner may read or drive it. */
+        'pause/owner-only': {};
+    }
+}
 /** The phase a Session reports to the controls. */
 export type PausePhaseWire = 'active' | 'draining' | 'parking' | 'safe' | 'flush-failed';
 /** One Session's pause state. */
@@ -51,7 +57,7 @@ export interface TriageRowWire {
     readonly step?: number;
     readonly traces: readonly {
         readonly tool: string;
-        readonly callId?: string;
+        readonly callId: string;
     }[];
     readonly owed: boolean;
     readonly wakeable: boolean;
@@ -59,11 +65,9 @@ export interface TriageRowWire {
 }
 /** One button action. */
 export interface PauseActionRequest {
-    readonly action: 'pause' | 'resume' | 'pause-all' | 'resume-all' | 'goal';
+    readonly action: 'pause' | 'resume' | 'pause-all' | 'resume-all' | 'cancel-all' | 'goal';
     /** The Session the control is addressed through. */
     readonly sessionId: string;
-    /** The listed Session a decision targets; absent for direct actions. */
-    readonly target?: string;
 }
 /** One action outcome. */
 export interface PauseActionResultWire {
@@ -80,7 +84,6 @@ export interface PauseDecisionRequest {
     readonly target: string;
     readonly decision: 'continue' | 'note' | 'review' | 'leave' | 'goal';
 }
-/** Host callbacks the Remote service delegates to. */
 export interface PauseRemoteApi {
     snapshot(signal?: AbortSignal): Promise<PauseSnapshotWire>;
     subscribe(listener: () => void): () => void;

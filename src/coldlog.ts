@@ -58,9 +58,9 @@ export const TRIAGE_LOG_MAX_EVENTS = 1_000_000
 
 /**
  * Events that are not the session's own story: the bookkeeping of the pause
- * pre-0.2.0 command records the user pressed, and the pending-input splices the
- * inbox writes. They are real and durable, but "it stopped right after the
- * action finished"
+ * legacy command records a previous surface wrote, and the pending-input
+ * splices the inbox writes. They are real and durable, but "it stopped right
+ * after the action finished"
  * is not what "where did it stop" means.
  */
 const BOOKKEEPING_EVENTS: ReadonlySet<string> = new Set(['command/run', 'command/done', 'agent/inbox/spliced'])

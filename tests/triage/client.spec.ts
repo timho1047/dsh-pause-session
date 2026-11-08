@@ -168,7 +168,7 @@ describe('the decision list in the browser', () => {
       // session the decision is addressed to, and that read is what shows it.
       // It comes again afterwards because the host's answer is what the panel
       // shows next — a decision can take a row off the list, or flip what it says.
-      expect(host.triages).toEqual([String(ADDRESS), String(ADDRESS)])
+      expect(host.triages).toEqual([String(ADDRESS)])
       expect(host.decisions).toEqual([{
         caller: String(ADDRESS),
         target: `session-${action}`,

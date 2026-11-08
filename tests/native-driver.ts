@@ -69,12 +69,11 @@ export async function act(
   ctx: Context,
   action: PauseAction,
   actor: PauseActor,
-  options: { target?: PauseActor; signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal } = {},
 ): Promise<PauseActionResultWire> {
   const request = {
     action,
     sessionId: String(sessionOf(actor)),
-    ...options.target === undefined ? {} : { target: String(sessionOf(options.target)) },
   }
   return await pauseRemote(ctx).act(request, options.signal)
 }

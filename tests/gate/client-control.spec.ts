@@ -10,9 +10,8 @@
  * @module dsh-pause-session/test/gate/client-control
  */
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { ACTION_ABSORB_MS } from '../../src/client/burst.ts'
 import { apply, inject } from '../../src/client/index.tsx'
 import type { PauseInjected } from '../../src/client/index.tsx'
 import { PauseControl } from '../../src/client/control.ts'
@@ -143,7 +142,6 @@ function hostDouble(): {
 const readingOf = (control: PauseControl): unknown => control.store.getSnapshot().bySession[String(SID)]
 
 describe('browser control state', () => {
-  afterEach(() => { vi.useRealTimers() })
 
   it("shows the host's answer and re-reads it after a press", async () => {
     const { transport, host } = hostDouble()
@@ -230,7 +228,7 @@ describe('browser control state', () => {
 
   it('follows a state the host changed on its own', async () => {
     const { transport, host } = hostDouble()
-    const control = new PauseControl(transport, new AbortController().signal, 25)
+    const control = new PauseControl(transport, new AbortController().signal)
     await control.refresh(SID)
     expect(readingOf(control)).toEqual({ phase: 'active', runningTools: [] })
 
@@ -244,64 +242,6 @@ describe('browser control state', () => {
     await until(() => (readingOf(control) as { phase?: string } | undefined)?.phase === 'active')
   })
 
-  it('reads once per announced transition and stops once the phase settles', async () => {
-    vi.useFakeTimers()
-    const { transport, host, reads } = hostDouble()
-    const control = new PauseControl(transport, new AbortController().signal, 25)
-    host.paused = true
-    host.phase = 'draining'
-    host.runningTools = ['edit']
-    await control.refresh(SID)
-    expect(readingOf(control)).toMatchObject({ phase: 'draining', runningTools: ['edit'] })
-    const readsAtMount = reads()
-
-    // A phase that is still moving is not watched: the host announces its next
-    // transition on the stream, and that announcement is what makes the browser
-    // look. Nothing here spends a read on the drain itself.
-    await vi.advanceTimersByTimeAsync(3_600_000)
-    expect(reads(), 'a moving phase was watched instead of announced').toBe(readsAtMount)
-
-    // The flush resolves, the host announces it, and the header shows the truth.
-    host.phase = 'safe'
-    host.runningTools = []
-    control.refreshAll()
-    await vi.advanceTimersByTimeAsync(100)
-    expect(readingOf(control)).toEqual({ phase: 'safe', runningTools: [], rearmGoal: true })
-
-    // A settled phase is not polled: no further host round-trip is issued.
-    const readsAtSettled = reads()
-    await vi.advanceTimersByTimeAsync(500)
-    expect(reads()).toBe(readsAtSettled)
-  })
-
-  it('reaches the truth on the next trigger when the announcement never arrived', async () => {
-    vi.useFakeTimers()
-    const { transport, host, reads } = hostDouble()
-    const control = new PauseControl(transport, new AbortController().signal, 25)
-    // This page was not listening when the phase moved: all it has is the reading
-    // it took itself.
-    host.paused = true
-    host.phase = 'draining'
-    await control.refresh(SID)
-    expect(readingOf(control)).toMatchObject({ phase: 'draining' })
-
-    // The transition happened and no change was delivered for it. The next
-    // trigger — any stream change, a press, the shell handing this control its
-    // session again — reads the host rather than leaving the stale reading up.
-    host.phase = 'safe'
-    control.refreshAll()
-    await vi.advanceTimersByTimeAsync(100)
-    expect(readingOf(control)).toEqual({ phase: 'safe', runningTools: [], rearmGoal: true })
-
-    // And a host that cannot answer claims nothing at all: the last reading is
-    // replaced by the honest "unavailable", never kept as if it were current.
-    host.unavailable = true
-    control.refreshAll()
-    await vi.advanceTimersByTimeAsync(100)
-    expect(readingOf(control)).toEqual({ phase: 'unavailable', runningTools: [] })
-    expect(reads()).toBeGreaterThan(0)
-  })
-
   it('claims nothing when the host cannot answer', async () => {
     const { transport, host } = hostDouble()
     const control = new PauseControl(transport, new AbortController().signal)
@@ -313,7 +253,7 @@ describe('browser control state', () => {
 
   it('claims nothing while a paused session\'s status read is still in flight', async () => {
     const { transport, host } = hostDouble()
-    const control = new PauseControl(transport, new AbortController().signal, 0)
+    const control = new PauseControl(transport, new AbortController().signal)
     host.paused = true
     host.phase = 'safe'
     // The snapshot read never settles. The host's own last answer was "safe",
@@ -574,9 +514,6 @@ describe('browser control wiring', () => {
     host.paused = true
     host.phase = 'safe'
     host.rearmGoal = true
-    // The resume press above opened its own echo window; a change that arrives
-    // after it is news again, which is what makes the browser read.
-    await new Promise(resolve => setTimeout(resolve, ACTION_ABSORB_MS + 100))
     benchRun.emit()
     await until(() => phaseAt(injected, SID) === 'safe')
     benchRun.injected(SID).refresh(SID)

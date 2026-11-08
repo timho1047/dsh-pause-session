@@ -7,6 +7,16 @@
  * vocabulary; there is no command encoding or slash-command surface here.
  * @module dsh-pause-session/shared
  */
+/** Result copy for a press or a release the durable registry refused to record. */
+export declare const UNRECORDED_TEXT = "pause could not write the pause registry, so it did not change the pause state.";
+/**
+ * One user-facing answer from an action. The controls render `text` verbatim;
+ * `kind` only says whether the press succeeded.
+ */
+export interface PauseAnswer {
+    readonly kind: 'success' | 'error';
+    readonly text: string;
+}
 /**
  * One log line's text for a caught value.
  * @param error - the caught value.
@@ -111,7 +121,7 @@ export interface GlobalStatus {
     readonly parkedAt?: string;
     /**
      * Registered sessions still working: a tool is in flight or a turn is between
-     * steps. Their park point is announced by the marker commands the park
+     * steps. Their park point is announced on the native stream the park
      * registers, so a reader has nothing to watch here.
      */
     readonly draining: readonly string[];

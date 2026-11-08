@@ -23,11 +23,11 @@
  * @module dsh-pause-session/global
  */
 import type { Context } from '@deepseek-ai/cordis';
-import type { CommandResult } from '@deepseek-ai/dsh-commands';
 import type { SessionId } from '@deepseek-ai/dsh-session';
 import type { ParkWatch } from './park.js';
 import type { ParkRegistry } from './registry.js';
 import type { GlobalStatus, ParkPhase } from './shared.js';
+import type { PauseAnswer } from './shared.js';
 /** One session's live park state, as the per-session control sees it. */
 export interface LivePark {
     readonly phase: ParkPhase;
@@ -74,7 +74,7 @@ export interface GlobalPause {
      * @param signal - cancellation for the tree reads this action performs.
      * @returns the aggregate as of this action's end.
      */
-    pressAll(signal?: AbortSignal): Promise<CommandResult>;
+    pressAll(signal?: AbortSignal): Promise<PauseAnswer>;
     /**
      * The aggregate as structured data for the native Remote stream.
      * @param signal - cancellation for the tree reads this read performs.

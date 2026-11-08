@@ -34,6 +34,7 @@ const ask = (text: string) => createUserMessage({ content: [{ type: 'text', text
 /** One client transport over the real native service, with a count of its reads. */
 function nativeEye(home: GlobalHome): { transport: PauseTransport; reads: () => number; stop(): void } {
   const listeners = new Set<() => void>()
+  const snapshotListeners = new Set<(snapshot: Awaited<ReturnType<PauseTransport['source']['read']>>) => void>()
   const abort = new AbortController()
   let latest: Awaited<ReturnType<PauseTransport['source']['read']>>
   let reads = 0
@@ -42,6 +43,7 @@ function nativeEye(home: GlobalHome): { transport: PauseTransport; reads: () => 
       for await (const snapshot of pauseRemote(home.ctx).observe(abort.signal)) {
         latest = snapshot as never
         for (const listener of [...listeners]) listener()
+        for (const listener of [...snapshotListeners]) listener(latest)
       }
     } catch {
       // The stream was aborted when the spec settled.
@@ -59,6 +61,10 @@ function nativeEye(home: GlobalHome): { transport: PauseTransport; reads: () => 
         onChange: (listener) => {
           listeners.add(listener)
           return () => { listeners.delete(listener) }
+        },
+        onSnapshot: (listener) => {
+          snapshotListeners.add(listener)
+          return () => { snapshotListeners.delete(listener) }
         },
       },
       act: async (request, signal) => await remote.act(request, signal),
@@ -97,18 +103,17 @@ describe('the aggregate answer', () => {
     const lifetime = new AbortController()
     const headerEye = nativeEye(home)
     const pillEye = nativeEye(home)
-    // The page's two controls, on burst timings a spec can wait out.
-    const pill = new PauseGlobalControl(pillEye.transport, lifetime.signal, 25, { visible: () => true })
-    const header = new PauseControl(
-      headerEye.transport, lifetime.signal, 25, { visible: () => true },
-      () => pill.store.getSnapshot().global,
-    )
-    // The page's wiring: either stream's change re-reads both controls.
-    const offHeader = headerEye.transport.source.onChange(() => { header.refreshAll(); pill.refreshAll() })
-    const offPill = pillEye.transport.source.onChange(() => { header.refreshAll(); pill.refreshAll() })
-    // The page also lets a header answered from "nothing is registered" read
-    // for real once the aggregate names the park.
-    const offAggregate = pill.store.subscribe(() => { header.reconsider() })
+    const pill = new PauseGlobalControl(pillEye.transport, lifetime.signal)
+    const header = new PauseControl(headerEye.transport, lifetime.signal)
+    // The page's wiring: a pushed snapshot applies to both controls directly.
+    const offHeader = headerEye.transport.source.onSnapshot((snapshot) => {
+      header.apply(snapshot)
+      pill.apply(snapshot)
+    })
+    const offPill = pillEye.transport.source.onSnapshot((snapshot) => {
+      header.apply(snapshot)
+      pill.apply(snapshot)
+    })
     const headerReading = () => header.store.getSnapshot().bySession[String(eveningId)]
     let eveningId: SessionId
     try {
@@ -161,7 +166,6 @@ describe('the aggregate answer', () => {
       lifetime.abort(new Error('spec over'))
       offHeader()
       offPill()
-      offAggregate()
       headerEye.stop()
       pillEye.stop()
       home.blocking.releaseAll()
@@ -359,8 +363,8 @@ describe('the aggregate answer', () => {
     const home = await mountGlobalHome(caseRoot, { script: blockingScript() })
     const lifetime = new AbortController()
     const eye = nativeEye(home)
-    const pill = new PauseGlobalControl(eye.transport, lifetime.signal, 25, { visible: () => true })
-    const off = eye.transport.source.onChange(() => { pill.refreshAll() })
+    const pill = new PauseGlobalControl(eye.transport, lifetime.signal)
+    const off = eye.transport.source.onSnapshot(snapshot => { pill.apply(snapshot) })
     try {
       const parked = await home.create('parked-job')
       const bystander = await home.create('bystander-job')

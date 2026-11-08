@@ -67,12 +67,12 @@ function goalOf(reading: PauseReading): { rearmGoal?: boolean } {
  * @param reading - the host-reported reading, or `undefined` before the first answer.
  * @returns the view for that reading.
  */
-export function pauseView(reading: PauseReading | undefined): PauseView {
+export function pauseView(reading: PauseReading | undefined, running = true): PauseView {
   switch (reading?.phase) {
     case 'active':
       // Not parked, so no record exists for a resume to obey: there is nothing
-      // to switch, and saying "on" would describe a park that is not there.
-      return { paused: false, enabled: true, ariaKey: 'pause.aria', runningTools: [] }
+      // to switch, and an idle session has no work to park.
+      return { paused: false, enabled: running, ariaKey: 'pause.aria', runningTools: [] }
     case 'draining':
       // Still working: pressing again is exactly how the user takes the pause
       // back, so the control stays live.
@@ -82,7 +82,6 @@ export function pauseView(reading: PauseReading | undefined): PauseView {
         ariaKey: 'draining.aria',
         labelKey: 'state.draining',
         runningTools: reading.runningTools,
-        ...goalOf(reading),
       }
     case 'parking':
       return {
@@ -91,7 +90,6 @@ export function pauseView(reading: PauseReading | undefined): PauseView {
         ariaKey: 'parking.aria',
         labelKey: 'state.parking',
         runningTools: [],
-        ...goalOf(reading),
       }
     case 'safe':
       return {
@@ -109,7 +107,6 @@ export function pauseView(reading: PauseReading | undefined): PauseView {
         ariaKey: 'flushFailed.aria',
         labelKey: 'state.flushFailed',
         runningTools: [],
-        ...goalOf(reading),
       }
     case 'unavailable':
       return { paused: false, enabled: false, ariaKey: 'unavailable.aria', runningTools: [] }
@@ -127,7 +124,7 @@ export interface GlobalCaveat {
 }
 
 /** Which verb a whole-app press runs. */
-export type GlobalAction = 'pause-all' | 'resume-all' | 'none'
+export type GlobalAction = 'pause-all' | 'resume-all' | 'cancel-all' | 'none'
 
 /** One decision as the list renders it. */
 export interface TriageActionView {
@@ -146,6 +143,18 @@ export const TRIAGE_ACTION_VIEWS: readonly TriageActionView[] = [
   { action: 'review', labelKey: 'triage.review', ariaKey: 'triage.review.aria' },
   { action: 'leave', labelKey: 'triage.leave', ariaKey: 'triage.leave.aria' },
 ]
+
+/**
+ * The decisions one row may offer. Continue and note both deliver the owed
+ * request, so they are absent when the log is unreadable or the host says it
+ * cannot wake the entry; the remaining decisions still give the user a way out.
+ * @param row - the rendered row.
+ * @returns the actions that can be taken on it.
+ */
+export function triageActionsFor(row: TriageRowView): readonly TriageActionView[] {
+  return TRIAGE_ACTION_VIEWS.filter(action =>
+    action.action !== 'continue' && action.action !== 'note' ? true : row.readable && row.wakeable)
+}
 
 /**
  * The fifth listed verb, rendered apart from the four decisions: it is a
@@ -177,9 +186,11 @@ export interface TriageRowView {
 
 /** What the decision-list panel renders. */
 export interface TriageView {
-  /** Whether the panel has anything to show; a host that cannot answer shows nothing. */
+  /** Whether the host answered the list read at all. */
   readonly visible: boolean
-  /** Whether any listed session can actually be continued. */
+  /** Whether the last list read failed rather than returning rows. */
+  readonly unavailable: boolean
+  /** The rows the host reported. */
   readonly rows: readonly TriageRowView[]
 }
 
@@ -196,9 +207,11 @@ const PHASE_KEY: Readonly<Record<TriageRow['phase'], PauseKey>> = {
  * @returns the rows as the panel renders them.
  */
 export function triageView(reading: TriageReading | undefined): TriageView {
-  if (reading === undefined || reading.kind === 'unavailable') return { visible: false, rows: [] }
+  if (reading === undefined) return { visible: false, unavailable: false, rows: [] }
+  if (reading.kind === 'unavailable') return { visible: true, unavailable: true, rows: [] }
   return {
     visible: true,
+    unavailable: false,
     rows: reading.rows.map(row => ({
       sessionId: row.sessionId,
       phaseKey: PHASE_KEY[row.phase],
@@ -238,6 +251,8 @@ export interface GlobalPauseView {
   readonly unclean: number
   /** Named facts the user must not miss; rendered on the tooltip. */
   readonly caveats: readonly GlobalCaveat[]
+  /** Draining sessions and what each is running, when the host still has work. */
+  readonly running?: string
 }
 
 /**
@@ -245,7 +260,10 @@ export interface GlobalPauseView {
  * @param reading - the host-reported reading, or `undefined` before the first answer.
  * @returns the view for that reading.
  */
-export function globalPauseView(reading: GlobalReading | undefined): GlobalPauseView {
+export function globalPauseView(
+  reading: GlobalReading | undefined,
+  sessions?: Readonly<Record<string, { readonly runningTools: readonly string[] }>>,
+): GlobalPauseView {
   if (reading === undefined) {
     return { visible: false, enabled: false, ariaKey: 'all.checking.aria', action: 'none', detail: '', caveats: [], unclean: 0 }
   }
@@ -297,10 +315,14 @@ export function globalPauseView(reading: GlobalReading | undefined): GlobalPause
       return status.draining.length > 0 || status.parking > 0
         ? {
           ...base,
-          ariaKey: 'all.resume.aria',
-          action: 'resume-all',
+          ariaKey: 'all.cancel.aria',
+          action: 'cancel-all',
           labelKey: 'all.finishing',
           detail: `${String(status.safe)}/${String(status.registered)}`,
+          running: status.draining.map((id) => {
+            const tools = sessions?.[id]?.runningTools ?? []
+            return tools.length === 0 ? id : `${id}: ${tools.join(', ')}`
+          }).join(', ') || undefined,
         }
         : {
           ...base,

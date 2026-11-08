@@ -15,10 +15,30 @@ and this project uses [Semantic Versioning](https://semver.org/).
 - Pause, resume, goal, and decision-list actions travel through the same
   native namespace on Web and Desktop.
 
+### Added
+
+- Global progress names every draining session and its running tools, and the
+  in-progress action is **Cancel this pause**.
+- The global pill can be dragged, remembers its position, and can be reset from
+  the decision panel.
+- The Remote namespace is owner-only.
+
+### Fixed
+
+- A park reaches `safe` only when the session-level flush actually ran; an
+  unreadable record and a partially unread tree are reported instead of being
+  counted clean.
+- A restart-adopted park is no longer cancelled by the per-session button; it
+  stays on the decision path.
+- Stream and triage failures render as unavailable instead of stale rows, and
+  triage decisions that the host refuses show the refusal.
+
 ### Removed
 
 - The `/pause`, `/pause-resume`, `/pause-state`, `/pause-goal`, and
   `/pause-triage*` command surface.
+- The command-era `ReadBurst`/JSON-status-route client machinery and the
+  `@deepseek-ai/dsh-commands` dependency.
 
 ## [0.1.0] - 2026-11-02
 

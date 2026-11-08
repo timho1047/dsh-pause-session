@@ -8,14 +8,12 @@
  */
 import type { PauseActionResultWire, PauseDecisionRequest, PauseSnapshotWire, TriageRowWire } from '../remote.js';
 import type { GlobalStatus, ParkStatus } from '../shared.js';
-import type { PauseStatusSource } from './status.js';
 /** The generated namespace shape this bridge needs. */
 export interface RemotePauseNamespace {
     observe(signal?: AbortSignal): AsyncIterable<PauseSnapshotWire>;
     act(request: {
-        readonly action: 'pause' | 'resume' | 'pause-all' | 'resume-all' | 'goal';
+        readonly action: 'pause' | 'resume' | 'pause-all' | 'resume-all' | 'cancel-all' | 'goal';
         readonly sessionId: string;
-        readonly target?: string;
     }, signal?: AbortSignal): Promise<{
         readonly ok: boolean;
         readonly value?: PauseActionResultWire;
@@ -40,8 +38,12 @@ export interface PauseSnapshotLike {
     readonly sessions: Readonly<Record<string, ParkStatus>>;
 }
 /** A remote-backed status source with a change subscription. */
-export interface RemoteStatusSource extends PauseStatusSource {
+export interface RemoteStatusSource {
+    /** Read the latest host snapshot; undefined before the first answer or after failure. */
+    read(signal?: AbortSignal): Promise<PauseSnapshotLike | undefined>;
     onChange(listener: () => void): () => void;
+    /** Receive each pushed snapshot directly; `undefined` means the stream failed. */
+    onSnapshot(listener: (snapshot: PauseSnapshotLike | undefined) => void): () => void;
 }
 /**
  * Open the native status stream and expose its latest snapshot to both controls.
@@ -54,11 +56,10 @@ export declare function openRemoteSource(remote: RemotePauseNamespace, lifetime:
 export interface PauseTransport {
     readonly source: RemoteStatusSource;
     act(request: {
-        readonly action: 'pause' | 'resume' | 'pause-all' | 'resume-all' | 'goal';
+        readonly action: 'pause' | 'resume' | 'pause-all' | 'resume-all' | 'cancel-all' | 'goal';
         readonly sessionId: string;
-        readonly target?: string;
     }, signal?: AbortSignal): Promise<PauseActionResultWire>;
-    triage(caller: string, signal?: AbortSignal): Promise<readonly TriageRowWire[]>;
+    triage(caller: string, signal?: AbortSignal): Promise<readonly TriageRowWire[] | undefined>;
     decide(caller: string, target: string, decision: 'continue' | 'note' | 'review' | 'leave' | 'goal', signal?: AbortSignal): Promise<PauseActionResultWire>;
 }
 /**

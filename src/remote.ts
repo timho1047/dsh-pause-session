@@ -13,7 +13,15 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
+import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
+import type { RemoteInvocation } from '@deepseek-ai/dsh-typert-protocol'
+
+declare module '@deepseek-ai/dsh-typert-protocol' {
+  interface RemoteErrorDetailsMap {
+    /** The pause control is personal; only the owner may read or drive it. */
+    'pause/owner-only': {}
+  }
+}
 
 /** The phase a Session reports to the controls. */
 export type PausePhaseWire = 'active' | 'draining' | 'parking' | 'safe' | 'flush-failed'
@@ -55,7 +63,7 @@ export interface TriageRowWire {
   readonly lastEvent?: string
   readonly turn?: number
   readonly step?: number
-  readonly traces: readonly { readonly tool: string; readonly callId?: string }[]
+  readonly traces: readonly { readonly tool: string; readonly callId: string }[]
   readonly owed: boolean
   readonly wakeable: boolean
   readonly rearmGoal: boolean
@@ -63,11 +71,9 @@ export interface TriageRowWire {
 
 /** One button action. */
 export interface PauseActionRequest {
-  readonly action: 'pause' | 'resume' | 'pause-all' | 'resume-all' | 'goal'
+  readonly action: 'pause' | 'resume' | 'pause-all' | 'resume-all' | 'cancel-all' | 'goal'
   /** The Session the control is addressed through. */
   readonly sessionId: string
-  /** The listed Session a decision targets; absent for direct actions. */
-  readonly target?: string
 }
 
 /** One action outcome. */
@@ -89,6 +95,19 @@ export interface PauseDecisionRequest {
 }
 
 /** Host callbacks the Remote service delegates to. */
+/**
+ * Refuse a Remote call made by a principal other than the owner. In-process
+ * callers (tests, the Host itself) have no invocation and are trusted.
+ * @param ctx - the service Context.
+ */
+function ownerOnly(ctx: Context): void {
+  const invocation = (ctx as Context & { readonly invocation?: RemoteInvocation }).invocation
+  if (invocation === undefined) return
+  if (invocation.peer.principal?.kind !== 'owner') {
+    throw new RemoteError('pause/owner-only', 'pause controls are available only to the owner', {})
+  }
+}
+
 export interface PauseRemoteApi {
   snapshot(signal?: AbortSignal): Promise<PauseSnapshotWire>
   subscribe(listener: () => void): () => void
@@ -121,6 +140,7 @@ export class PauseRemote extends TypertRemoteService {
    */
   @Remote('snapshot')
   async snapshot(signal?: AbortSignal): Promise<PauseSnapshotWire> {
+    ownerOnly(this.ctx)
     return await this.api.snapshot(signal)
   }
 
@@ -132,6 +152,7 @@ export class PauseRemote extends TypertRemoteService {
    */
   @Remote({ mode: 'stream' })
   async *observe(signal?: AbortSignal): AsyncIterable<PauseSnapshotWire> {
+    ownerOnly(this.ctx)
     let version = 0
     let seen = -1
     let wake: (() => void) | undefined
@@ -180,6 +201,7 @@ export class PauseRemote extends TypertRemoteService {
    */
   @Remote('act')
   async act(request: PauseActionRequest, signal?: AbortSignal): Promise<PauseActionResultWire> {
+    ownerOnly(this.ctx)
     return await this.api.act(request, signal)
   }
 
@@ -191,6 +213,7 @@ export class PauseRemote extends TypertRemoteService {
    */
   @Remote('triage')
   async triage(request: PauseTriageRequest, signal?: AbortSignal): Promise<readonly TriageRowWire[]> {
+    ownerOnly(this.ctx)
     return await this.api.triage(request, signal)
   }
 
@@ -202,6 +225,7 @@ export class PauseRemote extends TypertRemoteService {
    */
   @Remote('decide')
   async decide(request: PauseDecisionRequest, signal?: AbortSignal): Promise<PauseActionResultWire> {
+    ownerOnly(this.ctx)
     return await this.api.decide(request, signal)
   }
 }

@@ -15,8 +15,8 @@
  * a sidebar or drawer that covers that area covers the control with it.
  *
  * Both controls are host-authoritative. On a browser Host they read the
- * same-origin JSON status route, which keeps background reads out of the
- * Session log; a carrier without that route falls back to the command channel.
+ * native `pauseSession` stream, which keeps status reads out of the Session
+ * log. The same path serves Web and Desktop.
  * User actions and status both use the generated native Remote namespace;
  * no slash command is involved. Each control stays inert wherever no
  * round-trip is available rather than rendering a state it cannot support. The
@@ -99,7 +99,8 @@ export type PauseButtonProps = PropsRuntime<'conversation.session.header.actions
 export function PauseButton(props: PauseButtonProps): ReactNode {
   const { sessionId, refresh, toggle, toggleGoal, t, useSession } = props
   const reading = props.usePause(state => state.bySession[String(sessionId)])
-  const view = pauseView(reading)
+  const running = useSession(snapshot => snapshot.running) ?? false
+  const view = pauseView(reading, running)
   const visible = showsPauseControl(useSession(snapshot => snapshot.subagent))
   // Read once per mounted control: the host is the source of truth, and the
   // forwarded registry change keeps it current afterwards.
@@ -171,39 +172,16 @@ export function apply(ctx: ClientContext): void {
     const remote = remoteCtx.remote.pauseSession
     const transport = remoteTransport(remote, lifetime.signal)
     const globalControl = new PauseGlobalControl(transport, lifetime.signal)
-    const control = new PauseControl(
-      transport,
-      lifetime.signal,
-      undefined,
-      undefined,
-      () => globalControl.store.getSnapshot().global,
-    )
-    // A header answered from the whole-app "nothing is registered" is read for
-    // real the moment that stops holding.
+    const control = new PauseControl(transport, lifetime.signal)
+    // The native stream is the change feed: every fresh snapshot applies to
+    // both controls directly, with no re-read timer.
     remoteCtx.effect(
-      () => globalControl.store.subscribe(() => { control.reconsider() }),
-      'pause: the whole-app answer serves the session headers',
-    )
-    // The native stream is the change feed: every fresh snapshot wakes the
-    // controls' own coalescing burst, which reads the cached snapshot.
-    remoteCtx.effect(
-      () => transport.source.onChange(() => {
-        control.refreshAll()
-        globalControl.refreshAll()
+      () => transport.source.onSnapshot((snapshot) => {
+        control.apply(snapshot)
+        globalControl.apply(snapshot)
       }),
       'pause: native status stream',
     )
-    // A page that is not on screen is not being read: the controls stop their
-    // re-read timers while it is hidden and continue them when it comes back.
-    remoteCtx.effect(() => {
-      if (typeof document === 'undefined') return () => {}
-      const onVisibility = (): void => {
-        control.watchVisibility()
-        globalControl.watchVisibility()
-      }
-      document.addEventListener('visibilitychange', onVisibility)
-      return () => { document.removeEventListener('visibilitychange', onVisibility) }
-    }, 'pause: page visibility')
     remoteCtx.slots.inject('conversation.session.header.actions', () =>
       remoteCtx.slots.register(
         {

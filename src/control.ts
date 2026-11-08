@@ -11,8 +11,6 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { Agent } from '@deepseek-ai/dsh-agent'
-import type { CommandResult } from '@deepseek-ai/dsh-commands'
 import { SessionId } from '@deepseek-ai/dsh-session'
 // Type-only: the optional `ctx.sessionPersistence` observation seam.
 import type {} from '@deepseek-ai/dsh-session-persistence'
@@ -27,12 +25,10 @@ import type { ReleaseTreeOutcome, ResumeAttempt, ResumeOptions, ResumePath } fro
 import { mountTriageList } from './triage.js'
 import type { TriageListService } from './triage.js'
 import type { TriageAction } from './shared.js'
-import { describeError, foldTreePhases } from './shared.js'
+import { describeError, foldTreePhases, UNRECORDED_TEXT } from './shared.js'
 import type { ParkPhase, ParkStatus, PauseSnapshot, TriageList } from './shared.js'
 import { walkDescendants } from './tree.js'
-
-/** Result copy for a press or a release the durable registry refused to record. */
-const UNRECORDED_TEXT = 'pause could not write the pause registry, so it did not change the pause state.'
+import type { PauseAnswer } from './shared.js'
 
 /**
  * Whether this host can read one recorded session at all — a live session, or a
@@ -49,7 +45,7 @@ async function sessionReadable(ctx: Context, sessionId: SessionId): Promise<bool
     return await persistence.stat(sessionId) !== undefined
   } catch (error: unknown) {
     ctx.logger.warn(`pause: could not look for the stored log of "${sessionId}": ${describeError(error)}`)
-    return true
+    return false
   }
 }
 
@@ -63,8 +59,12 @@ export interface PressTreeOutcome {
   readonly rootRegistered: boolean
   /** The members whose record could not be written; they are not paused. */
   readonly unrecorded: readonly SessionId[]
-  /** Whether the tree walk itself failed, so the session's subagents were not covered. */
+  /** Whether any branch was unread, so the subagent tree was not fully covered. */
   readonly unread: boolean
+  /** Tree members on a one-shot or unreadable route; they were not registered. */
+  readonly unresumable: readonly SessionId[]
+  /** Branch ids the tree walk could not read. */
+  readonly unreadBranches: readonly SessionId[]
 }
 
 /** One session's park in progress. */
@@ -75,7 +75,7 @@ interface ParkMark {
    * nothing is left to drain moves it to `parking`, and the session-level flush
    * resolves it to `safe` — or to `flush-failed`, which must never be reported
    * as clean. It is written by `commit` and by nothing else, so the answer the
-   * status command serves can never run ahead of what is on disk.
+   * snapshot serves can never run ahead of what is on disk.
    */
   phase: ParkPhase
   /**
@@ -112,7 +112,7 @@ export interface SessionControl {
   adopt(): Promise<void>
   /**
    * Read the whole app and every live paused session as one JSON-safe snapshot.
-   * The browser status route serves this; it never enters a Session log.
+   * The native snapshot serves this; it never enters a Session log.
    * @param signal - cancellation for the tree reads this snapshot performs.
    * @returns the whole-app verdict and the paused sessions this process holds.
    */
@@ -124,11 +124,13 @@ export interface SessionControl {
   /** Release one Session's registered tree. */
   releaseTree(sessionId: SessionId, signal?: AbortSignal): Promise<ReleaseTreeOutcome>
   /** Press every running Session tree. */
-  pauseAll(signal?: AbortSignal): Promise<CommandResult>
+  pauseAll(signal?: AbortSignal): Promise<PauseAnswer>
   /** Resume every cleanly paused Session. */
-  resumeAll(signal?: AbortSignal): Promise<CommandResult>
+  resumeAll(signal?: AbortSignal): Promise<PauseAnswer>
+  /** Release every registered tree, cancelling a press that is still draining. */
+  cancelAll(signal?: AbortSignal): Promise<PauseAnswer>
   /** Flip one Session's goal re-arm opt-out. */
-  toggleGoal(sessionId: SessionId, signal?: AbortSignal): Promise<CommandResult>
+  toggleGoal(sessionId: SessionId, signal?: AbortSignal): Promise<PauseAnswer>
   /** Read the morning list for one calling Session. */
   readTriage(caller: SessionId, signal?: AbortSignal): Promise<TriageList>
   /** Take one listed decision for one calling Session. */
@@ -137,10 +139,10 @@ export interface SessionControl {
     target: SessionId,
     action: TriageAction,
     signal?: AbortSignal,
-  ): Promise<CommandResult>
+  ): Promise<PauseAnswer>
 }
 
-/** How resuming all parked sessions answers the command that asked for it. */
+/** How resuming all parked sessions answers the caller. */
 export function summarizeResume(attempts: readonly ResumeAttempt[]): string {
   const resumed = attempts.filter(attempt => attempt.resumed).length
   const refused = attempts.length - resumed
@@ -171,7 +173,7 @@ export interface SessionControlOptions extends ResumeOptions {
  * Contribute the session control: the pause verb, the per-session status read,
  * the global resume verb, and — for every paused session that has a live agent
  * — the resume marker.
- * @param ctx - host context carrying the command registry, the agent store, the
+ * @param ctx - host context carrying the agent store, the
  * session store, and the projection registry.
  * @param gate - the pause gate this control drives and reflects.
  * @param watch - the per-session activity fold the park predicate reads.
@@ -190,7 +192,16 @@ export function installSessionControl(
   const marks = new Map<SessionId, ParkMark>()
   /** Host listeners the native Remote stream wakes after a visible change. */
   const listeners = new Set<() => void>()
-  const notify = (): void => { for (const listener of [...listeners]) listener() }
+  let notification: ReturnType<typeof setTimeout> | undefined
+  // One snapshot per burst of host changes, not one per phase write. A pause-all
+  // can touch many sessions in one pass; the stream only needs the last state.
+  const notify = (): void => {
+    if (notification !== undefined) return
+    notification = setTimeout(() => {
+      notification = undefined
+      for (const listener of [...listeners]) listener()
+    }, 20)
+  }
   /**
    * Records this process did not hold again because the session behind them
    * cannot be read here. Nothing can be parked, released, or decided for them
@@ -215,7 +226,7 @@ export function installSessionControl(
 
   /**
    * Write one phase to the durable registry, then publish it on the mark and
-   * announce it on the command channel.
+   * wake the native stream.
    *
    * The order is the whole point: a phase is published only once a later
    * process would read it back. A failed write leaves the mark on its previous
@@ -280,9 +291,22 @@ export function installSessionControl(
   const treeStatus = async (sessionId: SessionId, mark: ParkMark, signal?: AbortSignal): Promise<ParkStatus> => {
     const walk = await walkDescendants(ctx, sessionId, signal)
     const phases: ParkPhase[] = [mark.phase]
+    const extraRunning: string[] = []
     for (const member of walk.members) {
       const phase = recordedPhase(member.id)
-      if (phase !== undefined) phases.push(phase)
+      if (phase !== undefined) {
+        phases.push(phase)
+        continue
+      }
+      // A member this press could not register (one-shot/external route) is
+      // still part of the tree. If it is doing work, the tree is not safe.
+      if (member.mode !== 'continuable') {
+        const activity = watch.activity(member.id)
+        if (activity.turnOpen || activity.runningTools.length > 0) {
+          phases.push('draining')
+          extraRunning.push(...activity.runningTools)
+        }
+      }
     }
     // An unread branch: unknown is not clean, and it is not a settled state
     // either, so it folds in as the phase a member would report between the
@@ -290,13 +314,18 @@ export function installSessionControl(
     for (let at = 0; at < walk.unread.length + (walk.unreadWhole ? 1 : 0); at += 1) phases.push('parking')
 
     const folded = foldTreePhases(phases)
+    const runningTools = [
+      ...(mark.phase === 'draining' ? watch.activity(sessionId).runningTools : []),
+      ...walk.members.flatMap(member => recordedPhase(member.id) === 'draining' ? watch.activity(member.id).runningTools : []),
+      ...extraRunning,
+    ]
     // The goal opt-out is the session's own record's, never a member's: the
     // switch beside this marker names the session it changes.
     const record = registry.get(sessionId)
     return {
       phase: folded.phase,
       safe: folded.safe,
-      runningTools: mark.phase === 'draining' ? watch.activity(sessionId).runningTools : [],
+      runningTools,
       ...record === undefined ? {} : { rearmGoal: record.rearmGoal },
     }
   }
@@ -351,7 +380,11 @@ export function installSessionControl(
       await commit(sessionId, mark, 'parking')
       if (!owned()) return
       try {
-        await ctx.sessions.flush(session)
+        const flushed = await ctx.sessions.flush(session)
+        if (!flushed) {
+          await commit(sessionId, mark, 'flush-failed')
+          return
+        }
       } catch (error: unknown) {
         if (!owned()) return
         ctx.logger.warn(`pause: flush failed for "${sessionId}": ${describeError(error)}`)
@@ -369,6 +402,7 @@ export function installSessionControl(
 
   /** Look at one marked session and act on what it is doing. */
   const look = (sessionId: SessionId): void => {
+    if (marks.has(sessionId)) notify()
     if (!advance(sessionId)) return
     const attempt = marks.get(sessionId)?.generation
     if (attempt !== undefined) void settle(sessionId, attempt)
@@ -438,7 +472,7 @@ export function installSessionControl(
     // keeps a session disposed in the middle of a press on the path that
     // records the park point it reached.
     if (ctx.sessions.get(sessionId) === undefined) {
-      return { members: 0, registered: 0, rootRegistered: false, unrecorded: [], unread: false }
+      return { members: 0, registered: 0, rootRegistered: false, unrecorded: [], unread: false, unresumable: [], unreadBranches: [] }
     }
     const walk = await walkDescendants(ctx, sessionId, signal)
     // A tree this press could not read is not a reason to drop the session
@@ -459,10 +493,14 @@ export function installSessionControl(
         rootRegistered: pressed === 'registered',
         unrecorded: pressed === 'unrecordable' ? [sessionId] : [],
         unread: true,
+        unresumable: [],
+        unreadBranches: [],
       }
     }
     const registered: SessionId[] = []
     const unrecorded: SessionId[] = []
+    const unresumable = walk.members.filter(member => member.mode !== 'continuable').map(member => member.id)
+    const unreadBranches = walk.unread.map(branch => branch.id)
     const members = walk.members.filter(member => member.mode === 'continuable')
     for (const id of [sessionId, ...members.map(member => member.id)]) {
       // The press is per member on purpose: one member that cannot be recorded
@@ -489,7 +527,9 @@ export function installSessionControl(
       registered: registered.length,
       rootRegistered: registered.includes(sessionId),
       unrecorded,
-      unread: false,
+      unread: unreadBranches.length > 0,
+      unresumable,
+      unreadBranches,
     }
   }
 
@@ -508,7 +548,7 @@ export function installSessionControl(
    * record that cannot be dropped leaves the session paused, which is the state
    * the registry still describes.
    */
-  const release = async (sessionId: SessionId, text: string): Promise<CommandResult> => {
+  const release = async (sessionId: SessionId, text: string): Promise<PauseAnswer> => {
     if (!gate.isPaused(sessionId)) return { kind: 'success', text }
     try {
       await registry.forget(sessionId)
@@ -534,15 +574,6 @@ export function installSessionControl(
   // silent one when its record says `safe`, this one otherwise.
   const triage: TriageListService = mountTriageList(ctx, registry, resumePath, options.maxListedLogEvents)
 
-  /**
-   * The one handler the four decision verbs share. The list is addressed by
-   * session like every other command on this channel, so the row the user
-   * decided on travels as the command's own input. The calling session is what
-   * makes that row a target: the list acts only on rows it published to this
-   * caller, and never on a model's command.
-   */
-
-
   // The whole-app park reads the marks through this one accessor, so the
   // aggregate and the per-session control can never describe different states.
   const globalPause: GlobalPause = mountGlobalPause(ctx, watch, registry, {
@@ -562,8 +593,8 @@ export function installSessionControl(
 
   /**
    * Read the whole app and every live paused session in one pass. The browser
-   * status route is the only caller: it replaces the command reads that used
-   * to write `command/run` and `command/done` into an address Session's log.
+   * native snapshot is the only caller; reading it writes nothing into a
+   * Session's log.
    * @param signal - cancellation for the tree walks and the whole-app read.
    * @returns the JSON-safe snapshot.
    */
@@ -576,7 +607,7 @@ export function installSessionControl(
   }
 
   // One effect owns the subscriptions and the mark cleanup. There is no
-  // command surface: status is the Remote stream and actions are Remote methods.
+  // status is the Remote stream and actions are Remote methods.
   ctx.effect(function* () {
     yield gate.onChange(sessionId => { sync(sessionId) })
     yield gate.onHeld(sessionId => {
@@ -587,7 +618,10 @@ export function installSessionControl(
       sync(agent.id)
       return undefined
     })
-    yield async () => { marks.clear() }
+    yield async () => {
+      if (notification !== undefined) clearTimeout(notification)
+      marks.clear()
+    }
   }, 'pause: session events')
 
   return {
@@ -602,6 +636,25 @@ export function installSessionControl(
       const answer = await globalPause.pressAll(signal)
       notify()
       return answer
+    },
+    cancelAll: async (signal) => {
+      const outcomes = []
+      // A tree can mix a clean member with a press that is still draining. The
+      // clean release then resumes the clean member and keeps the draining one;
+      // repeat so the remaining all-unclean tree can take the cancel path.
+      for (let round = 0; round < 3; round += 1) {
+        const before = registry.parked.size
+        for (const sessionId of [...registry.parked.keys()]) {
+          signal?.throwIfAborted()
+          outcomes.push((await resumePath.releaseTree(sessionId, signal)).answer)
+        }
+        if (registry.parked.size === before) break
+      }
+      notify()
+      const failed = outcomes.filter(answer => answer.kind === 'error')
+      return failed.length === 0
+        ? { kind: 'success', text: 'Every pause was released.' }
+        : { kind: 'error', text: failed.map(answer => answer.text).join(' ') }
     },
     resumeAll: async (signal) => {
       const answer = { kind: 'success' as const, text: summarizeResume(await resumePath.resumeParked(signal)) }

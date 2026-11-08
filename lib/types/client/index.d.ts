@@ -15,8 +15,8 @@
  * a sidebar or drawer that covers that area covers the control with it.
  *
  * Both controls are host-authoritative. On a browser Host they read the
- * same-origin JSON status route, which keeps background reads out of the
- * Session log; a carrier without that route falls back to the command channel.
+ * native `pauseSession` stream, which keeps status reads out of the Session
+ * log. The same path serves Web and Desktop.
  * User actions and status both use the generated native Remote namespace;
  * no slash command is involved. Each control stays inert wherever no
  * round-trip is available rather than rendering a state it cannot support. The

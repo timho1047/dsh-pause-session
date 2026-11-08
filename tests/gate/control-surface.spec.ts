@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { pause, pauseRemote, resume, snapshot, statusOf } from '../native-driver.ts'
+import { act, pause, pauseRemote, resume, snapshot, statusOf } from '../native-driver.ts'
 import { textResponse } from '../assumptions/fake-provider.ts'
 import { mountGatedLoop, turnEnd } from './loop.ts'
 
@@ -97,6 +97,20 @@ describe('the native session control surface', () => {
       await agent.whenIdle()
       expect(provider.requests).toHaveLength(1)
       expect(turnEnd(agent)).toEqual({ turn: 1, reason: { kind: 'completed' } })
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('cancels a press that is still draining through the global action', async () => {
+    const loop = await mountGatedLoop('control-cancel-all', [])
+    const { ctx, agent } = loop
+    try {
+      await pause(ctx, agent)
+      expect(await statusOf(ctx, agent)).toBeDefined()
+      const answer = await act(ctx, 'cancel-all', agent)
+      expect(answer.ok, answer.message).toBe(true)
+      expect(await statusOf(ctx, agent)).toBeUndefined()
     } finally {
       await ctx.fiber.dispose()
     }

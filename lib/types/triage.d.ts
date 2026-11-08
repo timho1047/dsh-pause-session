@@ -58,12 +58,11 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { SessionId } from '@deepseek-ai/dsh-session';
-import type { CommandResult } from '@deepseek-ai/dsh-commands';
 import type { ParkRegistry } from './registry.js';
 import type { ResumePath } from './resume.js';
 import type { TriageAction, TriageList } from './shared.js';
+import type { PauseAnswer } from './shared.js';
 /** Result copy for a decision the list itself could not carry out. */
-export declare const TRIAGE_FAILED_TEXT = "pause could not carry out that decision; the session is exactly as it was.";
 /** Result copy for leaving one listed session alone. */
 export declare const TRIAGE_LEFT_TEXT = "pause left this session paused; it is still on the list.";
 /** Result copy for a decision aimed at a session that is not on the list. */
@@ -104,7 +103,7 @@ export interface TriageListService {
      * @param signal - cancellation for the cold load and setup.
      * @returns the outcome for whoever asked.
      */
-    decide(caller: SessionId, sessionId: SessionId, action: TriageAction, signal?: AbortSignal): Promise<CommandResult>;
+    decide(caller: SessionId, sessionId: SessionId, action: TriageAction, signal?: AbortSignal): Promise<PauseAnswer>;
 }
 /**
  * Mount the decision list over the durable registry and the clean resume path.

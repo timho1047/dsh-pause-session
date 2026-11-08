@@ -173,11 +173,11 @@ describe('park state: what the control reports between the press and the park', 
       // state actually moves.
       await pause(ctx, agent)
       expect(await published(ctx, agent)).toEqual({ phase: 'draining', safe: false, runningTools: ['gated'], rearmGoal: true })
+      // The press itself is one notification; wait out the coalescing window,
+      // then the drain is silent until the tool lands.
+      await new Promise(resolve => setTimeout(resolve, 80))
       const atPress = watched.phases.length
-
-      // The drain itself is silent: nothing about the session changes until its
-      // tool lands, so the stream owes no item.
-      await new Promise(resolve => setTimeout(resolve, 60))
+      await new Promise(resolve => setTimeout(resolve, 80))
       expect(watched.phases.length, 'a session still draining announced something').toBe(atPress)
 
       // The tool lands and the session reaches the park point. The state moves,

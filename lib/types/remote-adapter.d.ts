@@ -1,7 +1,7 @@
 /**
  * Wire adapter between the pause engine and the generated Remote namespace.
  *
- * The engine speaks in branded Session ids and CommandResult copy; the Remote
+ * The engine speaks in branded Session ids and user-facing answer copy; the Remote
  * contract is plain JSON. Mapping lives here so neither side depends on the
  * other's types.
  * @module dsh-pause-session/remote-adapter

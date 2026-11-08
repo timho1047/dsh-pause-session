@@ -10,7 +10,6 @@
  * @module dsh-pause-session/control
  */
 import type { Context } from '@deepseek-ai/cordis';
-import type { CommandResult } from '@deepseek-ai/dsh-commands';
 import { SessionId } from '@deepseek-ai/dsh-session';
 import type { PauseGate } from './gate.js';
 import type { ParkWatch } from './park.js';
@@ -18,6 +17,7 @@ import type { ParkRegistry } from './registry.js';
 import type { ReleaseTreeOutcome, ResumeAttempt, ResumeOptions } from './resume.js';
 import type { TriageAction } from './shared.js';
 import type { PauseSnapshot, TriageList } from './shared.js';
+import type { PauseAnswer } from './shared.js';
 /** What one tree-wide press registered, and what it could not. */
 export interface PressTreeOutcome {
     /** How many sessions this press covered: the session plus its descendants. */
@@ -28,8 +28,12 @@ export interface PressTreeOutcome {
     readonly rootRegistered: boolean;
     /** The members whose record could not be written; they are not paused. */
     readonly unrecorded: readonly SessionId[];
-    /** Whether the tree walk itself failed, so the session's subagents were not covered. */
+    /** Whether any branch was unread, so the subagent tree was not fully covered. */
     readonly unread: boolean;
+    /** Tree members on a one-shot or unreadable route; they were not registered. */
+    readonly unresumable: readonly SessionId[];
+    /** Branch ids the tree walk could not read. */
+    readonly unreadBranches: readonly SessionId[];
 }
 /** What mounting the session control hands back to the plugin entry. */
 export interface SessionControl {
@@ -41,7 +45,7 @@ export interface SessionControl {
     adopt(): Promise<void>;
     /**
      * Read the whole app and every live paused session as one JSON-safe snapshot.
-     * The browser status route serves this; it never enters a Session log.
+     * The native snapshot serves this; it never enters a Session log.
      * @param signal - cancellation for the tree reads this snapshot performs.
      * @returns the whole-app verdict and the paused sessions this process holds.
      */
@@ -53,17 +57,19 @@ export interface SessionControl {
     /** Release one Session's registered tree. */
     releaseTree(sessionId: SessionId, signal?: AbortSignal): Promise<ReleaseTreeOutcome>;
     /** Press every running Session tree. */
-    pauseAll(signal?: AbortSignal): Promise<CommandResult>;
+    pauseAll(signal?: AbortSignal): Promise<PauseAnswer>;
     /** Resume every cleanly paused Session. */
-    resumeAll(signal?: AbortSignal): Promise<CommandResult>;
+    resumeAll(signal?: AbortSignal): Promise<PauseAnswer>;
+    /** Release every registered tree, cancelling a press that is still draining. */
+    cancelAll(signal?: AbortSignal): Promise<PauseAnswer>;
     /** Flip one Session's goal re-arm opt-out. */
-    toggleGoal(sessionId: SessionId, signal?: AbortSignal): Promise<CommandResult>;
+    toggleGoal(sessionId: SessionId, signal?: AbortSignal): Promise<PauseAnswer>;
     /** Read the morning list for one calling Session. */
     readTriage(caller: SessionId, signal?: AbortSignal): Promise<TriageList>;
     /** Take one listed decision for one calling Session. */
-    decideTriage(caller: SessionId, target: SessionId, action: TriageAction, signal?: AbortSignal): Promise<CommandResult>;
+    decideTriage(caller: SessionId, target: SessionId, action: TriageAction, signal?: AbortSignal): Promise<PauseAnswer>;
 }
-/** How resuming all parked sessions answers the command that asked for it. */
+/** How resuming all parked sessions answers the caller. */
 export declare function summarizeResume(attempts: readonly ResumeAttempt[]): string;
 /**
  * Everything the session control needs from the composition: the clean resume
@@ -78,7 +84,7 @@ export interface SessionControlOptions extends ResumeOptions {
  * Contribute the session control: the pause verb, the per-session status read,
  * the global resume verb, and — for every paused session that has a live agent
  * — the resume marker.
- * @param ctx - host context carrying the command registry, the agent store, the
+ * @param ctx - host context carrying the agent store, the
  * session store, and the projection registry.
  * @param gate - the pause gate this control drives and reflects.
  * @param watch - the per-session activity fold the park predicate reads.

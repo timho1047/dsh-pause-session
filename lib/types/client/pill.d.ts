@@ -10,12 +10,11 @@
  * above the whole frame. The decision list hangs from the control into the
  * conversation area below.
  *
- * The pill reads the host through the JSON status route on Web, with the
- * command channel as its fallback (`./global.ts`). With no answer, or with no
- * session to address an action through, it renders nothing rather than a state
- * it would have to invent. The decision list is deliberately NOT part of that
- * first read — it costs more host round-trips, and a user who never opens it
- * pays nothing; the panel asks for its own rows when it opens.
+ * The pill reads the native status stream through `./global.ts`. With no
+ * answer, or with no session to address an action through, it renders nothing
+ * rather than a state it would have to invent. The decision list is
+ * deliberately NOT part of that first read; the panel asks for its own rows
+ * when it opens.
  * @module dsh-pause-session/client/pill
  */
 import type { ReactNode } from 'react';

@@ -32,10 +32,10 @@
  * @module dsh-pause-session/resume
  */
 import type { Context } from '@deepseek-ai/cordis';
-import type { CommandResult } from '@deepseek-ai/dsh-commands';
 import type { SessionId } from '@deepseek-ai/dsh-session';
 import type { PauseGate } from './gate.js';
 import type { ParkRegistry } from './registry.js';
+import type { PauseAnswer } from './shared.js';
 declare module '@deepseek-ai/dsh-llm' {
     interface MessageSourceMap {
         /**
@@ -95,8 +95,6 @@ export declare const UNRESUMABLE_TEXT = "pause did not resume this session: it i
  * session they asked only to look at.
  */
 export declare const REVIEW_TEXT: string;
-/** Result copy for a change the durable registry refused to record. */
-export declare const UNRECORDED_TEXT = "pause could not write the pause registry, so it did not change the pause state.";
 /** Copy for one goal opt-out change. */
 export declare const REARM_GOAL_ON_TEXT = "pause will re-open this session's goal when it resumes it.";
 export declare const REARM_GOAL_OFF_TEXT = "pause will leave this session's goal closed when it resumes it.";
@@ -110,9 +108,9 @@ export interface ResumeOutcome {
     /** Present exactly when `resumed` is false. */
     readonly refusal?: ResumeRefusal;
 }
-/** One resume attempt plus the answer the command that asked for it receives. */
+/** One resume attempt plus the answer the caller receives. */
 export interface ResumeAttempt extends ResumeOutcome {
-    readonly answer: CommandResult;
+    readonly answer: PauseAnswer;
 }
 /** How this path is wired into the session control that owns the pause state. */
 export interface ResumeDeps {
@@ -120,7 +118,7 @@ export interface ResumeDeps {
      * Take a live session's pause back: the durable record goes first, then the
      * gate. Owned by the session control so there is one release order.
      */
-    release(sessionId: SessionId, text: string): Promise<CommandResult>;
+    release(sessionId: SessionId, text: string): Promise<PauseAnswer>;
     /**
      * Whether the pause this process holds was adopted from the registry rather
      * than pressed here. Only an adopted pause is a restart: a press this process
@@ -177,7 +175,7 @@ export interface ResumePath {
      * @param rearmGoal - whether the clean resume path may re-arm its goal.
      * @returns the copy for whoever asked.
      */
-    setRearmGoal(sessionId: SessionId, rearmGoal: boolean): Promise<CommandResult>;
+    setRearmGoal(sessionId: SessionId, rearmGoal: boolean): Promise<PauseAnswer>;
     /**
      * Release one parked session and the registered members of its tree: the
      * counterpart of a press that registered a whole tree.
@@ -199,7 +197,7 @@ export interface ReleaseTreeOutcome {
         readonly refusal: ResumeRefusal;
     }[];
     /** The copy for whoever pressed the release. */
-    readonly answer: CommandResult;
+    readonly answer: PauseAnswer;
 }
 /**
  * How one tree-wide release answers the person who pressed it. One release, one

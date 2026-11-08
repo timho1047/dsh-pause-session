@@ -27,6 +27,9 @@ export async function mountFakeLoop(
 ): Promise<FakeLoop> {
   const ctx = new Context()
   await mountAgentLoopTestDependencies(ctx)
+  // A production host always has a durability listener; the in-memory harness
+  // supplies the same flush contract without writing a log.
+  ctx.effect(() => ctx.on('session/flush', () => undefined), 'spec: flush contract')
   const harness = await mountAgentLoopTestHarness(ctx)
   const provider = new FakeProvider(script, options.idleTimeoutMs)
   ctx.llm.registerAdapter(['fake'], provider)

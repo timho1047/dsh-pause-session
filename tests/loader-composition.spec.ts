@@ -63,7 +63,6 @@ function servicesConfigFor(pluginRow: string, storageRoot: string, pluginConfig?
     "- name: '@deepseek-ai/dsh-tools'",
     "- name: '@deepseek-ai/dsh-agent'",
     "- name: '@deepseek-ai/dsh-agent-loop'",
-    "- name: '@deepseek-ai/dsh-commands'",
     "- name: '@deepseek-ai/dsh-storage'",
     "- name: '@deepseek-ai/dsh-storage-json'",
     '  config:',

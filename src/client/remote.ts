@@ -11,15 +11,13 @@ import type {
   PauseActionResultWire, PauseDecisionRequest, PauseSnapshotWire, TriageRowWire,
 } from '../remote.js'
 import type { GlobalBlindSpot, GlobalStatus, ParkStatus, TriageRow } from '../shared.js'
-import type { PauseStatusSource } from './status.js'
 
 /** The generated namespace shape this bridge needs. */
 export interface RemotePauseNamespace {
   observe(signal?: AbortSignal): AsyncIterable<PauseSnapshotWire>
   act(request: {
-    readonly action: 'pause' | 'resume' | 'pause-all' | 'resume-all' | 'goal'
+    readonly action: 'pause' | 'resume' | 'pause-all' | 'resume-all' | 'cancel-all' | 'goal'
     readonly sessionId: string
-    readonly target?: string
   }, signal?: AbortSignal): Promise<{ readonly ok: boolean; readonly value?: PauseActionResultWire; readonly error?: { readonly code: string } }>
   triage(request: { readonly caller: string }, signal?: AbortSignal): Promise<{
     readonly ok: boolean
@@ -55,8 +53,12 @@ export interface PauseSnapshotLike {
 }
 
 /** A remote-backed status source with a change subscription. */
-export interface RemoteStatusSource extends PauseStatusSource {
+export interface RemoteStatusSource {
+  /** Read the latest host snapshot; undefined before the first answer or after failure. */
+  read(signal?: AbortSignal): Promise<PauseSnapshotLike | undefined>
   onChange(listener: () => void): () => void
+  /** Receive each pushed snapshot directly; `undefined` means the stream failed. */
+  onSnapshot(listener: (snapshot: PauseSnapshotLike | undefined) => void): () => void
 }
 
 /**
@@ -70,7 +72,11 @@ export function openRemoteSource(remote: RemotePauseNamespace, lifetime: AbortSi
   let failed = false
   let first: (() => void) | undefined
   const listeners = new Set<() => void>()
-  const notify = (): void => { for (const listener of [...listeners]) listener() }
+  const snapshotListeners = new Set<(snapshot: PauseSnapshotLike | undefined) => void>()
+  const notify = (): void => {
+    for (const listener of [...listeners]) listener()
+    for (const listener of [...snapshotListeners]) listener(failed ? undefined : latest)
+  }
   const ready = new Promise<void>((resolve) => { first = resolve })
 
   void (async () => {
@@ -83,9 +89,18 @@ export function openRemoteSource(remote: RemotePauseNamespace, lifetime: AbortSi
       }
     } catch {
       failed = true
+      latest = undefined
+      notify()
     } finally {
+      // A stream that ended without a cancellation is not a live transport; the
+      // controls must report unavailable rather than keep serving the last value.
+      if (!lifetime.aborted) {
+        failed = true
+        latest = undefined
+      }
       first?.()
       first = undefined
+      notify()
     }
   })()
 
@@ -93,6 +108,10 @@ export function openRemoteSource(remote: RemotePauseNamespace, lifetime: AbortSi
     onChange: (listener) => {
       listeners.add(listener)
       return () => { listeners.delete(listener) }
+    },
+    onSnapshot: (listener) => {
+      snapshotListeners.add(listener)
+      return () => { snapshotListeners.delete(listener) }
     },
     read: async (signal) => {
       if (latest === undefined && !failed) {
@@ -104,7 +123,7 @@ export function openRemoteSource(remote: RemotePauseNamespace, lifetime: AbortSi
         })
       }
       signal?.throwIfAborted()
-      return latest
+      return failed ? undefined : latest
     },
   }
 }
@@ -113,11 +132,10 @@ export function openRemoteSource(remote: RemotePauseNamespace, lifetime: AbortSi
 export interface PauseTransport {
   readonly source: RemoteStatusSource
   act(request: {
-    readonly action: 'pause' | 'resume' | 'pause-all' | 'resume-all' | 'goal'
+    readonly action: 'pause' | 'resume' | 'pause-all' | 'resume-all' | 'cancel-all' | 'goal'
     readonly sessionId: string
-    readonly target?: string
   }, signal?: AbortSignal): Promise<PauseActionResultWire>
-  triage(caller: string, signal?: AbortSignal): Promise<readonly TriageRowWire[]>
+  triage(caller: string, signal?: AbortSignal): Promise<readonly TriageRowWire[] | undefined>
   decide(
     caller: string,
     target: string,
@@ -143,7 +161,7 @@ export function remoteTransport(remote: RemotePauseNamespace, lifetime: AbortSig
     },
     triage: async (caller, signal) => {
       const answer = await remote.triage({ caller }, signal)
-      return answer.ok ? (answer.value ?? []) : []
+      return answer.ok ? answer.value : undefined
     },
     decide: async (caller, target, decision, signal) => {
       const answer = await remote.decide({ caller, target, decision }, signal)

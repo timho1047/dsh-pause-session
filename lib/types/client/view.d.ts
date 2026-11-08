@@ -51,7 +51,7 @@ export declare function showsPauseControl(subagent: {
  * @param reading - the host-reported reading, or `undefined` before the first answer.
  * @returns the view for that reading.
  */
-export declare function pauseView(reading: PauseReading | undefined): PauseView;
+export declare function pauseView(reading: PauseReading | undefined, running?: boolean): PauseView;
 /** One named fact from the whole-app report, with the copy key that introduces it. */
 export interface GlobalCaveat {
     /** What this list of names is. */
@@ -60,7 +60,7 @@ export interface GlobalCaveat {
     readonly names: readonly string[];
 }
 /** Which verb a whole-app press runs. */
-export type GlobalAction = 'pause-all' | 'resume-all' | 'none';
+export type GlobalAction = 'pause-all' | 'resume-all' | 'cancel-all' | 'none';
 /** One decision as the list renders it. */
 export interface TriageActionView {
     /** The decision this button takes. */
@@ -72,6 +72,14 @@ export interface TriageActionView {
 }
 /** The four decisions, in the order a user reads them: least to most cautious. */
 export declare const TRIAGE_ACTION_VIEWS: readonly TriageActionView[];
+/**
+ * The decisions one row may offer. Continue and note both deliver the owed
+ * request, so they are absent when the log is unreadable or the host says it
+ * cannot wake the entry; the remaining decisions still give the user a way out.
+ * @param row - the rendered row.
+ * @returns the actions that can be taken on it.
+ */
+export declare function triageActionsFor(row: TriageRowView): readonly TriageActionView[];
 /**
  * The fifth listed verb, rendered apart from the four decisions: it is a
  * switch on what the NEXT resume may spend, not a way to decide this row.
@@ -96,9 +104,11 @@ export interface TriageRowView {
 }
 /** What the decision-list panel renders. */
 export interface TriageView {
-    /** Whether the panel has anything to show; a host that cannot answer shows nothing. */
+    /** Whether the host answered the list read at all. */
     readonly visible: boolean;
-    /** Whether any listed session can actually be continued. */
+    /** Whether the last list read failed rather than returning rows. */
+    readonly unavailable: boolean;
+    /** The rows the host reported. */
     readonly rows: readonly TriageRowView[];
 }
 /**
@@ -128,10 +138,14 @@ export interface GlobalPauseView {
     readonly unclean: number;
     /** Named facts the user must not miss; rendered on the tooltip. */
     readonly caveats: readonly GlobalCaveat[];
+    /** Draining sessions and what each is running, when the host still has work. */
+    readonly running?: string;
 }
 /**
  * Map one whole-app reading to its view.
  * @param reading - the host-reported reading, or `undefined` before the first answer.
  * @returns the view for that reading.
  */
-export declare function globalPauseView(reading: GlobalReading | undefined): GlobalPauseView;
+export declare function globalPauseView(reading: GlobalReading | undefined, sessions?: Readonly<Record<string, {
+    readonly runningTools: readonly string[];
+}>>): GlobalPauseView;

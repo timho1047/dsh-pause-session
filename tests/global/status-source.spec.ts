@@ -79,13 +79,7 @@ describe('the native snapshot source replaces background command reads', () => {
 
   it('publishes one session status from the same snapshot', async () => {
     const { transport } = transportOf({ global: globalStatus(), sessions: { [String(ADDRESS)]: paused } })
-    const control = new PauseControl(
-      transport,
-      new AbortController().signal,
-      undefined,
-      undefined,
-      () => ({ kind: 'reported', status: globalStatus() }),
-    )
+    const control = new PauseControl(transport, new AbortController().signal)
 
     await control.refresh(ADDRESS)
 

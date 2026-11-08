@@ -128,7 +128,7 @@ describe('the whole-app control state', () => {
     expect(globalPauseView(readingOf(control))).toMatchObject({
       visible: true,
       enabled: true,
-      action: 'resume-all',
+      action: 'cancel-all',
       labelKey: 'all.finishing',
       detail: '1/2',
     })
@@ -154,8 +154,8 @@ describe('the whole-app control state', () => {
     })
 
     await control.toggle(ADDRESS)
-    expect(host.actions.map(action => action.action)).toEqual(['pause-all', 'resume-all'])
-    expect(globalPauseView(readingOf(control))).toMatchObject({ action: 'pause-all' })
+    expect(host.actions.map(action => action.action)).toEqual(['pause-all', 'cancel-all'])
+    expect(globalPauseView(readingOf(control))).toMatchObject({ action: 'cancel-all' })
   })
 
   it('reads once per announced transition, and stops once it settles', async () => {
@@ -166,7 +166,7 @@ describe('the whole-app control state', () => {
     // flush that settles it is a phase change, and that is what the host
     // announces.
     host.answered = status({ safe: 1, draining: [], parking: 1 })
-    const control = new PauseGlobalControl(transport, new AbortController().signal, 25)
+    const control = new PauseGlobalControl(transport, new AbortController().signal)
     await control.refresh(ADDRESS)
     expect(readingOf(control)).toMatchObject({ kind: 'reported' })
     const readsAtMount = reads()
@@ -194,13 +194,13 @@ describe('the whole-app control state', () => {
     const control = new PauseGlobalControl(transport, new AbortController().signal)
     host.unavailable = true
     await control.refresh(ADDRESS)
-    // The native source has no snapshot to serve: the control claims nothing
-    // rather than inventing "unavailable" from a read that simply has no reply.
-    expect(readingOf(control)).toBeUndefined()
+    // The native source has no snapshot to serve: the control reports
+    // unavailable rather than keeping the previous reading alive.
+    expect(readingOf(control)).toEqual({ kind: 'unavailable' })
     expect(globalPauseView(readingOf(control))).toEqual({
       visible: false,
       enabled: false,
-      ariaKey: 'all.checking.aria',
+      ariaKey: 'unavailable.aria',
       action: 'none',
       detail: '',
       caveats: [],
@@ -225,7 +225,7 @@ describe('the whole-app view', () => {
         stalled: ['late-session'],
       }),
     })
-    expect(view).toMatchObject({ visible: true, enabled: true, labelKey: 'all.finishing', action: 'resume-all' })
+    expect(view).toMatchObject({ visible: true, enabled: true, labelKey: 'all.finishing', action: 'cancel-all' })
     expect(view.caveats).toEqual([
       { key: 'all.caveat.jobs', names: ['bash-3'] },
       { key: 'all.caveat.unread', names: ['hidden-tree'] },
@@ -258,7 +258,7 @@ describe('the whole-app view', () => {
       visible: true,
       enabled: true,
       labelKey: 'all.finishing',
-      action: 'resume-all',
+      action: 'cancel-all',
       detail: '0/1',
     })
   })

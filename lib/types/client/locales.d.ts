@@ -2,14 +2,11 @@
 /** Simplified Chinese dictionary (the key-set source of truth). */
 export declare const zh: {
     'pause.aria': string;
-    'pause.tip': string;
-    'resume.aria': string;
     'resume.tip': string;
     'draining.aria': string;
     'parking.aria': string;
     'safe.aria': string;
     'flushFailed.aria': string;
-    'state.paused': string;
     'state.draining': string;
     'state.parking': string;
     'state.safe': string;
@@ -25,9 +22,14 @@ export declare const zh: {
     'all.resume.aria': string;
     'all.idle': string;
     'all.finishing': string;
+    'all.cancel': string;
+    'all.cancel.aria': string;
     'all.unclean': string;
     'all.unclean.aria': string;
     'all.safe': string;
+    'all.reset': string;
+    'all.reset.aria': string;
+    'all.drag': string;
     'all.checking.aria': string;
     'all.caveat.jobs': string;
     'all.caveat.unresumable': string;
@@ -54,7 +56,6 @@ export declare const zh: {
     'triage.continue.aria': string;
     'triage.note': string;
     'triage.note.aria': string;
-    'triage.note.hint': string;
     'triage.review': string;
     'triage.review.aria': string;
     'triage.leave': string;

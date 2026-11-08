@@ -179,7 +179,7 @@ describe('the session-header press covers the tree it owns', () => {
 
       const answer = await home.stop(root)
       expect(answer.ok, answer.message).toBe(true)
-      expect(answer.message).toBe('Paused 1 session.')
+      expect(answer.message).toBe('Paused 1 session. these subagents cannot be resumed: "one-shot-child".')
       expect(await phases(caseRoot)).toEqual({ 'one-shot-root': 'draining' })
 
       home.blocking.releaseAll()
@@ -355,7 +355,7 @@ describe('the session-header press covers the tree it owns', () => {
       // the press does not report the tree as registered.
       const answer = await home.stop(root)
       expect(answer.ok, answer.message).toBe(false)
-      expect(answer.message).toBe('pause could not record this session tree.')
+      expect(answer.message).toBe('pause could not record "unrecorded-grandchild".')
       expect(await phases(caseRoot)).toEqual({ 'unrecorded-root': 'draining', 'unrecorded-child': 'draining' })
 
       // The refused member keeps running, and the whole-app report still names

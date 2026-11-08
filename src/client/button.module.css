@@ -96,38 +96,8 @@
   user-select: none;
 }
 
-.dspTip {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 20;
-  max-width: min(46ch, calc(100vw - 48px));
-  padding: 4px 10px;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--dsw-alias-label-primary);
-  background: var(--dsw-alias-bg-layer-2);
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgb(0 0 0 / 0.18);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(-2px);
-  transition: opacity 120ms ease, transform 120ms ease;
-}
-
-.dsp:hover .dspTip,
-.dspBtn:focus-visible + .dspTip {
-  opacity: 1;
-  transform: translateY(0);
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .dspBtn,
-  .dspTip {
+  .dspBtn {
     transition: none;
   }
 }
@@ -140,6 +110,8 @@
   position: relative;
   display: inline-flex;
   align-items: center;
+  touch-action: none;
+  will-change: transform;
 }
 
 .dspPillBtn {
@@ -266,6 +238,13 @@
   justify-content: space-between;
   gap: 8px;
   font-weight: 600;
+}
+
+.dspPillError {
+  margin: 0 0 8px;
+  color: var(--dsw-alias-state-error-primary);
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .dspPillPanelNote {

@@ -1,7 +1,7 @@
 /**
  * Wire adapter between the pause engine and the generated Remote namespace.
  *
- * The engine speaks in branded Session ids and CommandResult copy; the Remote
+ * The engine speaks in branded Session ids and user-facing answer copy; the Remote
  * contract is plain JSON. Mapping lives here so neither side depends on the
  * other's types.
  * @module dsh-pause-session/remote-adapter
@@ -53,7 +53,7 @@ function triageRowOf(row: TriageRow): TriageRowWire {
     ...row.step === undefined ? {} : { step: row.step },
     traces: row.traces.map(trace => ({
       tool: trace.tool,
-      ...trace.callId === undefined ? {} : { callId: trace.callId },
+      callId: trace.callId,
     })),
     owed: row.owed,
     wakeable: row.wakeable,
@@ -69,21 +69,32 @@ export function snapshotOf(snapshot: { global: GlobalStatus; sessions: Readonly<
   }
 }
 
-/** Convert one CommandResult-like answer to the wire outcome. */
+/** Convert one engine answer to the wire outcome. */
 function outcomeOf(answer: { kind: 'success' | 'error'; text?: string }): PauseActionResultWire {
   return { ok: answer.kind === 'success', message: answer.text ?? (answer.kind === 'success' ? 'Done.' : 'Pause action failed.') }
 }
 
 /** Convert a press outcome to the wire outcome. */
 function pressOutcomeOf(outcome: PressTreeOutcome): PauseActionResultWire {
+  const names = (ids: readonly SessionId[]): string => ids.map(id => `"${String(id)}"`).join(', ')
   if (outcome.unrecorded.length > 0) {
-    return { ok: false, message: 'pause could not record this session tree.' }
+    return { ok: false, message: `pause could not record ${names(outcome.unrecorded)}.` }
   }
   if (!outcome.rootRegistered) return { ok: false, message: 'pause did not register this session.' }
+  const caveats: string[] = []
+  if (outcome.unresumable.length > 0) {
+    caveats.push(`these subagents cannot be resumed: ${names(outcome.unresumable)}.`)
+  }
+  if (outcome.unreadBranches.length > 0) {
+    caveats.push(`these subagent branches could not be read: ${names(outcome.unreadBranches)}.`)
+  }
+  if (outcome.unread && outcome.unreadBranches.length === 0) {
+    caveats.push('The subagent tree could not be fully read.')
+  }
   return {
     ok: true,
     message: `Paused ${String(outcome.registered)} session${outcome.registered === 1 ? '' : 's'}.`
-      + (outcome.unread ? ' The subagent tree could not be fully read.' : ''),
+      + (caveats.length === 0 ? '' : ` ${caveats.join(' ')}`),
   }
 }
 
@@ -107,6 +118,8 @@ export function remoteApiOf(control: SessionControl): PauseRemoteApi {
           return outcomeOf(await control.pauseAll(signal))
         case 'resume-all':
           return outcomeOf(await control.resumeAll(signal))
+        case 'cancel-all':
+          return outcomeOf(await control.cancelAll(signal))
         case 'goal':
           return outcomeOf(await control.toggleGoal(sessionId, signal))
       }

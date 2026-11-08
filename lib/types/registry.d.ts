@@ -72,7 +72,7 @@ export interface ParkRegistry {
      * The same list as {@link list}, as a lazily kept read-only view.
      *
      * The whole-app aggregate and the decision list read this once per status
-     * read, and a status read can happen on every command-registry change; the
+     * read, and a status read can happen on every native-stream notification; the
      * view is rebuilt only when the stored entries actually changed, so a read
      * that changes nothing does not build a second copy of the list to look at.
      * A caller must not mutate it.

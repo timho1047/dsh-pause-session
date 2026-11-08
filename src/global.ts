@@ -25,7 +25,6 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import type { CommandResult } from '@deepseek-ai/dsh-commands'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 // Type-only: the optional `ctx.jobs` service and its read-only projection.
 import type {} from '@deepseek-ai/dsh-jobs'
@@ -34,6 +33,7 @@ import type { ParkRegistry } from './registry.js'
 import type { GlobalBlindSpot, GlobalStatus, GlobalVerdict, ParkPhase } from './shared.js'
 import { walkDescendants } from './tree.js'
 import type { TreeWalk } from './tree.js'
+import type { PauseAnswer } from './shared.js'
 
 /**
  * How many times one press walks the trees again. A tree can grow while the
@@ -92,7 +92,7 @@ export interface GlobalPause {
    * @param signal - cancellation for the tree reads this action performs.
    * @returns the aggregate as of this action's end.
    */
-  pressAll(signal?: AbortSignal): Promise<CommandResult>
+  pressAll(signal?: AbortSignal): Promise<PauseAnswer>
   /**
    * The aggregate as structured data for the native Remote stream.
    * @param signal - cancellation for the tree reads this read performs.
@@ -117,10 +117,12 @@ interface TreeReading {
   readonly unresumable: boolean
   /** Whether any branch could not be read, so the tree is not vouched for. */
   readonly unread: boolean
+  /** Whether an unresumable member is still doing work. */
+  readonly running: boolean
 }
 
 /** Fold one shared tree walk into the two doubts this report publishes. */
-function readingOf(walk: TreeWalk): TreeReading {
+function readingOf(walk: TreeWalk, watch: ParkWatch): TreeReading {
   return {
     members: walk.members.map(member => member.id),
     // A route no restart can resume, either because the catalog says so or
@@ -130,6 +132,11 @@ function readingOf(walk: TreeWalk): TreeReading {
     // `unsupported` was traversed, so its members are known; the other reasons
     // mean that branch was not read at all.
     unread: walk.unreadWhole || walk.unread.some(branch => branch.reason !== 'unsupported'),
+    running: walk.members.some(member => {
+      if (member.mode === 'continuable') return false
+      const activity = watch.activity(member.id)
+      return activity.turnOpen || activity.runningTools.length > 0
+    }),
   }
 }
 
@@ -154,6 +161,9 @@ export function mountGlobalPause(
    * instead of quietly leaving them out of a park it then calls safe.
    */
   const unrecorded = new Set<SessionId>()
+  // Routes a whole-app press found running but could not register; named in the
+  // aggregate so the user sees what the press did not stop.
+  const notResumable = new Set<SessionId>()
   /** Record or clear one session's "pressed and the registry refused" state. */
   const markUnrecorded = (sessionId: SessionId, flag: boolean): void => {
     if (flag) unrecorded.add(sessionId)
@@ -189,8 +199,8 @@ export function mountGlobalPause(
     // No subagent service at all: the walk would answer "no members", which is
     // not the same claim as "no children", and this report may not make it.
     const reading = ctx.get('subagents') === undefined
-      ? { members: [], unresumable: false, unread: true }
-      : readingOf(await walkDescendants(ctx, sessionId, signal))
+      ? { members: [], unresumable: false, unread: true, running: false }
+      : readingOf(await walkDescendants(ctx, sessionId, signal), watch)
     walks.set(sessionId, reading)
     return reading
   }
@@ -314,7 +324,7 @@ export function mountGlobalPause(
     // itself is flushed.
     const verdict: GlobalVerdict = registered === 0
       ? 'idle'
-      : safe === registered && unreadTrees.length === 0
+      : safe === registered && unreadTrees.length === 0 && !trees.some(([, tree]) => tree.running)
         ? 'safe'
         : 'waiting'
 
@@ -326,7 +336,7 @@ export function mountGlobalPause(
       draining: draining.sort(),
       parking,
       stalled: stalled.sort(),
-      unresumable: unresumable.sort(),
+      unresumable: [...new Set(unresumable)].sort(),
       unreadTrees: unreadTrees.sort(),
       jobs: liveJobs(owners),
       blind,
@@ -347,11 +357,15 @@ export function mountGlobalPause(
           const pressed = await deps.press(sessionId, signal)
           switch (pressed) {
             case 'registered':
+              notResumable.delete(sessionId)
               markUnrecorded(sessionId, false)
               deps.look(sessionId)
               break
             case 'unrecordable':
               markUnrecorded(sessionId, true)
+              break
+            case 'not-resumable':
+              notResumable.add(sessionId)
               break
             default:
               break
@@ -364,9 +378,13 @@ export function mountGlobalPause(
         : aggregate.verdict === 'idle'
           ? 'Nothing is running.'
           : 'Pausing is in progress.'
-      return unrecorded.size === 0
+      const blocked = notResumable.size
+      return unrecorded.size === 0 && blocked === 0
         ? { kind: 'success', text: answer }
-        : { kind: 'error', text: answer }
+        : {
+            kind: 'error',
+            text: `${answer} ${String(blocked)} session${blocked === 1 ? '' : 's'} could not be paused because its route is not resumable.`,
+          }
     },
     readState: async (signal) => await status(signal),
     markUnrecorded,
