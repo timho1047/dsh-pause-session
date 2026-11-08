@@ -45,4 +45,4 @@ for (const line of section) {
   }
   output.push(line)
 }
-process.stdout.write(`${output.join('\n').trimEnd()}\n`)
+process.stdout.write(`${output.join('\n').trim()}\n`)
