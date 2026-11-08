@@ -146,8 +146,9 @@ export function PausePill(props: PausePillProps): ReactNode {
   if (!visible || !view.visible || address === undefined) return null
   const onPointerDown = (event: React.PointerEvent<HTMLSpanElement>): void => {
     if (event.button !== 0) return
+    // A new gesture is a new click: an old drag's suppression must not eat it.
+    suppressClick.current = false
     drag.current = { startX: event.clientX, startY: event.clientY, base: offset, moved: false }
-    event.currentTarget.setPointerCapture(event.pointerId)
   }
   const onPointerMove = (event: React.PointerEvent<HTMLSpanElement>): void => {
     const current = drag.current
@@ -158,6 +159,10 @@ export function PausePill(props: PausePillProps): ReactNode {
       const next = draggedOffset(current.base, dx, dy)
       if (next === undefined) return
       current.moved = true
+      // Capture only once this is a drag. Capturing on pointer-down retargets
+      // the following click to the wrapper, so a plain press stops reaching
+      // the button inside it.
+      event.currentTarget.setPointerCapture(event.pointerId)
       event.preventDefault()
       current.last = next
       setOffset(next)
@@ -171,7 +176,6 @@ export function PausePill(props: PausePillProps): ReactNode {
     const current = drag.current
     drag.current = undefined
     if (current === undefined) return
-    event.currentTarget.releasePointerCapture(event.pointerId)
     if (!current.moved) return
     suppressClick.current = true
     savePillOffset(current.last ?? current.base)
