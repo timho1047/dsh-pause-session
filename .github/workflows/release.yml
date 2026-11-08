@@ -115,7 +115,12 @@ jobs:
 
       - name: Extract release notes from the changelog
         run: |
-          node scripts/release-notes.mjs "$GITHUB_REF_NAME" CHANGELOG.md > release-notes.md
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v heading="## [${VERSION}]" '
+            index($0, heading) == 1 { capture = 1; next }
+            capture && substr($0, 1, 3) == "## " { exit }
+            capture && (printed || length($0) > 0) { printed = 1; print }
+          ' CHANGELOG.md > release-notes.md
           test -s release-notes.md
 
       - name: Create or update the GitHub Release
