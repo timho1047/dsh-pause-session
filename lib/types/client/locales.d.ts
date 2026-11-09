@@ -28,6 +28,7 @@ export declare const zh: {
     'all.unclean.aria': string;
     'all.safe': string;
     'all.checking.aria': string;
+    'all.unavailable.aria': string;
     'all.caveat.jobs': string;
     'all.caveat.unresumable': string;
     'all.caveat.stalled': string;

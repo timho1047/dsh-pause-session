@@ -269,8 +269,10 @@ export function globalPauseView(
   }
   // A host that cannot answer gets no control: this plugin never renders a
   // button whose state it would have to invent.
+  // A transient transport failure keeps the control on screen, disabled: it
+  // claims nothing, but it does not vanish and come back while reconnecting.
   if (reading.kind === 'unavailable') {
-    return { visible: false, enabled: false, ariaKey: 'unavailable.aria', action: 'none', detail: '', caveats: [], unclean: 0 }
+    return { visible: true, enabled: false, ariaKey: 'all.unavailable.aria', action: 'none', detail: '', caveats: [], unclean: 0 }
   }
   const { status } = reading
   const caveats: GlobalCaveat[] = []

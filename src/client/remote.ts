@@ -61,48 +61,70 @@ export interface RemoteStatusSource {
   onSnapshot(listener: (snapshot: PauseSnapshotLike | undefined) => void): () => void
 }
 
+/** First retry delay after the stream drops, in milliseconds. */
+const RECONNECT_BASE_MS = 300
+/** Ceiling for the reconnect backoff, in milliseconds. */
+const RECONNECT_MAX_MS = 5_000
+
 /**
  * Open the native status stream and expose its latest snapshot to both controls.
+ *
+ * The stream owns no retry of its own: a carrier can drop it on a mux reconnect,
+ * a host reload, or a network blip, and the controls must not stay unavailable
+ * until the page is refreshed. This source reconnects with a bounded backoff and
+ * republishes the new snapshot; while it is disconnected the last value is
+ * discarded, so readers see "unavailable" rather than a stale claim.
  * @param remote - the generated Remote namespace.
  * @param lifetime - client lifetime; aborting it releases the stream.
  * @returns the cached source and its change subscription.
  */
 export function openRemoteSource(remote: RemotePauseNamespace, lifetime: AbortSignal): RemoteStatusSource {
   let latest: PauseSnapshotLike | undefined
-  let failed = false
-  let first: (() => void) | undefined
+  let attempt = 0
+  let timer: ReturnType<typeof setTimeout> | undefined
+  /** Readers waiting for the first snapshot of any attempt. */
+  const waiters = new Set<() => void>()
   const listeners = new Set<() => void>()
   const snapshotListeners = new Set<(snapshot: PauseSnapshotLike | undefined) => void>()
-  const notify = (): void => {
-    for (const listener of [...listeners]) listener()
-    for (const listener of [...snapshotListeners]) listener(failed ? undefined : latest)
-  }
-  const ready = new Promise<void>((resolve) => { first = resolve })
 
-  void (async () => {
+  const notify = (): void => {
+    for (const wake of [...waiters]) wake()
+    waiters.clear()
+    for (const listener of [...listeners]) listener()
+    for (const listener of [...snapshotListeners]) listener(latest)
+  }
+
+  const schedule = (): void => {
+    if (lifetime.aborted || timer !== undefined) return
+    const delay = Math.min(RECONNECT_BASE_MS * 2 ** attempt, RECONNECT_MAX_MS)
+    attempt += 1
+    timer = setTimeout(() => {
+      timer = undefined
+      void pump()
+    }, delay)
+  }
+
+  const pump = async (): Promise<void> => {
+    if (lifetime.aborted) return
     try {
       for await (const snapshot of remote.observe(lifetime)) {
+        // A delivered snapshot proves this attempt healthy; the next drop starts
+        // its backoff from the short delay again.
+        attempt = 0
         latest = snapshotOf(snapshot)
-        first?.()
-        first = undefined
         notify()
       }
     } catch {
-      failed = true
-      latest = undefined
-      notify()
-    } finally {
-      // A stream that ended without a cancellation is not a live transport; the
-      // controls must report unavailable rather than keep serving the last value.
-      if (!lifetime.aborted) {
-        failed = true
-        latest = undefined
-      }
-      first?.()
-      first = undefined
-      notify()
+      // The carrier failed. Everything this attempt could have delivered is
+      // already published; the retry below owns the recovery.
     }
-  })()
+    if (lifetime.aborted) return
+    latest = undefined
+    notify()
+    schedule()
+  }
+
+  void pump()
 
   return {
     onChange: (listener) => {
@@ -114,16 +136,21 @@ export function openRemoteSource(remote: RemotePauseNamespace, lifetime: AbortSi
       return () => { snapshotListeners.delete(listener) }
     },
     read: async (signal) => {
-      if (latest === undefined && !failed) {
+      if (latest === undefined && !lifetime.aborted) {
         await new Promise<void>((resolve) => {
-          const done = (): void => { signal?.removeEventListener('abort', done); resolve() }
-          first = () => { first = undefined; done() }
-          signal?.addEventListener('abort', done, { once: true })
-          if (latest !== undefined || failed) done()
+          // Every reader gets its own wakeup: the two header controls mount
+          // together and both ask before the opening snapshot lands.
+          const wake = (): void => {
+            waiters.delete(wake)
+            signal?.removeEventListener('abort', wake)
+            resolve()
+          }
+          waiters.add(wake)
+          signal?.addEventListener('abort', wake, { once: true })
         })
       }
       signal?.throwIfAborted()
-      return failed ? undefined : latest
+      return latest
     },
   }
 }

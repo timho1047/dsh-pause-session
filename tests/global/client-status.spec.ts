@@ -198,9 +198,9 @@ describe('the whole-app control state', () => {
     // unavailable rather than keeping the previous reading alive.
     expect(readingOf(control)).toEqual({ kind: 'unavailable' })
     expect(globalPauseView(readingOf(control))).toEqual({
-      visible: false,
+      visible: true,
       enabled: false,
-      ariaKey: 'unavailable.aria',
+      ariaKey: 'all.unavailable.aria',
       action: 'none',
       detail: '',
       caveats: [],

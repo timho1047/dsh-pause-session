@@ -47,6 +47,12 @@ export interface RemoteStatusSource {
 }
 /**
  * Open the native status stream and expose its latest snapshot to both controls.
+ *
+ * The stream owns no retry of its own: a carrier can drop it on a mux reconnect,
+ * a host reload, or a network blip, and the controls must not stay unavailable
+ * until the page is refreshed. This source reconnects with a bounded backoff and
+ * republishes the new snapshot; while it is disconnected the last value is
+ * discarded, so readers see "unavailable" rather than a stale claim.
  * @param remote - the generated Remote namespace.
  * @param lifetime - client lifetime; aborting it releases the stream.
  * @returns the cached source and its change subscription.

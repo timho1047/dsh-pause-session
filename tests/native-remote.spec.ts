@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { PauseRemote } from '../src/remote.ts'
 import type { PauseRemoteApi, PauseSnapshotWire } from '../src/remote.ts'
-import { remoteTransport } from '../src/client/remote.ts'
+import type { RemotePauseNamespace } from '../src/client/remote.ts'
+import { openRemoteSource, remoteTransport } from '../src/client/remote.ts'
 
 const snapshot: PauseSnapshotWire = {
   global: {
@@ -79,6 +80,68 @@ describe('native Remote transport', () => {
     secondAbort.abort()
     await expect(first.next()).rejects.toBeTruthy()
     await expect(second.next()).rejects.toBeTruthy()
+  })
+
+  it('wakes every concurrent reader from the same opening snapshot', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const namespace: RemotePauseNamespace = {
+      observe: async function* () {
+        await gate
+        yield snapshot
+        for (;;) await new Promise(() => {})
+      },
+      act: async () => ({ ok: true, value: { ok: true, message: 'pause' } }),
+      triage: async () => ({ ok: true, value: [] }),
+      decide: async () => ({ ok: true, value: { ok: true, message: 'continue' } }),
+    }
+    const lifetime = new AbortController()
+    const source = openRemoteSource(namespace, lifetime.signal)
+
+    // Both header controls mount together and ask before the stream answers;
+    // neither may be left waiting for the other's wakeup.
+    const first = source.read(lifetime.signal)
+    const second = source.read(lifetime.signal)
+    release()
+
+    await expect(first).resolves.toMatchObject({ sessions: {} })
+    await expect(second).resolves.toMatchObject({ sessions: {} })
+    lifetime.abort()
+  })
+
+  it('reconnects after the stream drops and republishes the new snapshot', async () => {
+    let attempts = 0
+    const seen: (object | undefined)[] = []
+    const namespace: RemotePauseNamespace = {
+      observe: async function* () {
+        attempts += 1
+        if (attempts === 1) {
+          yield snapshot
+          return
+        }
+        yield { ...snapshot, global: { ...snapshot.global, registered: 2 } }
+        for (;;) await new Promise(() => {})
+      },
+      act: async () => ({ ok: true, value: { ok: true, message: 'pause' } }),
+      triage: async () => ({ ok: true, value: [] }),
+      decide: async () => ({ ok: true, value: { ok: true, message: 'continue' } }),
+    }
+    const lifetime = new AbortController()
+    const source = openRemoteSource(namespace, lifetime.signal)
+    source.onSnapshot(snapshot => { seen.push(snapshot) })
+
+    await expect(source.read(lifetime.signal)).resolves.toMatchObject({ global: { registered: 0 } })
+    // A dropped stream publishes "unavailable" once, then retries on its own.
+    await vi.waitFor(() => {
+      expect(seen).toContain(undefined)
+    })
+    await vi.waitFor(() => {
+      expect(attempts).toBeGreaterThan(1)
+    })
+    await vi.waitFor(async () => {
+      await expect(source.read(lifetime.signal)).resolves.toMatchObject({ global: { registered: 2 } })
+    })
+    lifetime.abort()
   })
 
   it('forwards an action to the engine', async () => {

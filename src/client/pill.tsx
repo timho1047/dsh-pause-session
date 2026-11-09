@@ -138,7 +138,10 @@ export function PausePill(props: PausePillProps): ReactNode {
   useEffect(() => {
     if (visible && address !== undefined) refresh(address)
   }, [refresh, address, visible])
-  if (!visible || !view.visible || address === undefined) return null
+  if (!visible || !view.visible) return null
+  // The status stream is process-wide, so a missing action address disables the
+  // press without hiding the reading.
+  const actionable = view.enabled && address !== undefined
   const tip = view.caveats
     .map(caveat => caveat.names.length === 0
       ? t(caveat.key)
@@ -198,9 +201,9 @@ export function PausePill(props: PausePillProps): ReactNode {
           : styles.dspPillBtn}
         aria-label={t(view.ariaKey)}
         aria-pressed={view.action === 'resume-all' || view.action === 'cancel-all'}
-        disabled={!view.enabled}
+        disabled={!actionable}
         {...tip.length === 0 ? {} : { title: tip }}
-        onClick={() => { toggle(address) }}
+        onClick={() => { if (address !== undefined) toggle(address) }}
       >
         {view.action === 'resume-all' || view.action === 'cancel-all' ? <ResumeIcon /> : <PauseIcon />}
         {view.labelKey === undefined ? null : <span className={styles.dspPillText}>{t(view.labelKey)}</span>}
