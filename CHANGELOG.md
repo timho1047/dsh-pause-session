@@ -4,22 +4,17 @@ All notable changes to this project are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.1] - 2026-11-11
 
 ### Changed
 
-- Adapt to DeepSeek Harness `0.2.2-rc.2`. Subagent children now resume through
-  `ctx.subagents.prompt`, so the runtime owns their activation, composition, and
-  tree membership; the plugin no longer loads them as independent Agents.
-- Release ordering reads `listDescendants` depth and reuses the tree walk, so a
-  tree release no longer reads the catalogs twice.
-- The composition seam resolves a root Session's preset only; a child's
-  composition is restored by the subagent runtime.
+- Adapt to DeepSeek Harness `0.2.2-rc.2`. Subagent children now resume through `ctx.subagents.prompt`, so the runtime owns their activation, composition, and tree membership; the plugin no longer loads them as independent Agents.
+- Release ordering reads `listDescendants` depth and reuses the tree walk, so a tree release no longer reads the catalogs twice.
+- The composition seam resolves a root Session's preset only; a child's composition is restored by the subagent runtime.
 
 ### Removed
 
-- The `parentAgent` resume option, `listChildren` catalog reads, and the
-  child-composition branch this plugin used to assemble itself.
+- The `parentAgent` resume option, `listChildren` catalog reads, and the child-composition branch this plugin used to assemble itself.
 
 ## [0.2.0] - 2026-11-08
 
@@ -72,5 +67,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - A paused session still appears `running` to parts of DSH's session lifecycle; exit, archive, compaction, and `wait_agent` can behave differently while held.
 - External one-shot subagent routes cannot be cold-resumed.
 
+[0.2.1]: https://github.com/timho1047/dsh-pause-session/releases/tag/v0.2.1
 [0.2.0]: https://github.com/timho1047/dsh-pause-session/releases/tag/v0.2.0
 [0.1.0]: https://github.com/timho1047/dsh-pause-session/releases/tag/v0.1.0
