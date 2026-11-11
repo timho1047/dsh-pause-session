@@ -123,8 +123,12 @@ export interface GlobalHome {
   readonly seen: GenerateOptions[]
   readonly blocking: BlockingTool
   readonly plugin: { dispose(): Promise<void> }
-  /** Create one live session the way a user's open session arrives. */
-  create(id: string): Promise<Agent>
+  /**
+   * Create one live session the way a user's open session arrives.
+   * @param id - the session id.
+   * @param meta - durable creation metadata; a subagent child names its parent.
+   */
+  create(id: string, meta?: { readonly parentSession?: SessionId; readonly origin?: 'subagent' }): Promise<Agent>
   /** Press one native action on one session and hand back its answer. */
   run(agent: Agent, verb: PauseVerb): Promise<PauseActionResultWire>
   /** Press the session-header pause action on one session and hand back its answer. */
@@ -270,7 +274,7 @@ export async function mountGlobalHome(caseRoot: string, options: GlobalHomeOptio
     seen,
     blocking,
     plugin,
-    create: (id) => harness.create(SessionId(id), { provider: 'fake', model: 'fake' }),
+    create: (id, meta) => harness.create(SessionId(id), { provider: 'fake', model: 'fake' }, meta),
     run,
     stop: agent => run(agent, 'pause'),
     release: agent => run(agent, 'pause-resume'),

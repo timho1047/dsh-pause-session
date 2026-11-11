@@ -14,6 +14,7 @@
 import { afterAll, describe, expect, it } from 'vitest'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import { snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
 import { readParkRegistry } from '../registry/read.ts'
 import {
   blockingScript, cleanRoots, mountGlobalHome, storageOf, temporaryRoot, until, untilAsync,
@@ -37,7 +38,7 @@ describe('resume all after a park', () => {
     const before = await mountGlobalHome(caseRoot, { script: blockingScript() })
     try {
       const parent = await before.create(String(PARENT))
-      const child = await before.create(String(CHILD))
+      const child = await before.create(String(CHILD), { parentSession: PARENT, origin: 'subagent' })
       const solo = await before.create(String(SOLO))
       parent.session.append('subagent/catalog', {
         version: 0,
@@ -46,6 +47,13 @@ describe('resume all after a park', () => {
         mode: 'continuable',
         label: 'continuable child',
       })
+      // The child's own durable record: the subagent runtime resolves the tree
+      // edge from this descriptor, and the resume hands the wake to it.
+      child.session.append('subagent/descriptor', snapshotSubagentDescriptor({
+        mode: 'continuable',
+        provider: 'spawn',
+        label: 'continuable child',
+      }))
       parent.followup(ask('parent work'))
       child.followup(ask('child work'))
       solo.followup(ask('solo work'))
@@ -103,7 +111,11 @@ describe('resume all after a park', () => {
       const childAgent = home.ctx.agents.get(CHILD)
       expect(parentAgent).toBeDefined()
       expect(childAgent).toBeDefined()
-      expect(home.ctx.agents.isOwnedBy(CHILD, parentAgent!)).toBe(true)
+      // The child is a managed member of the parent's tree, not a second root:
+      // the runtime resolves the tree root from its own activation.
+      const subagentRuntime = home.ctx.get('subagents')
+      const childRoot = subagentRuntime?.rootOf(childAgent!)
+      expect(String(childRoot?.id)).toBe(String(parentAgent!.id))
 
       // Each returned session answers the input it stopped in front of, so the
       // release really released them rather than just opening their logs.

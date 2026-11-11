@@ -10,7 +10,7 @@
 import type {
   PauseActionResultWire, PauseDecisionRequest, PauseSnapshotWire, TriageRowWire,
 } from '../remote.js'
-import type { GlobalBlindSpot, GlobalStatus, ParkStatus, TriageRow } from '../shared.js'
+import type { GlobalBlindSpot, GlobalStatus, ParkStatus } from '../shared.js'
 
 /** The generated namespace shape this bridge needs. */
 export interface RemotePauseNamespace {

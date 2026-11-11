@@ -33,15 +33,10 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { Agent } from '@deepseek-ai/dsh-agent'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import type { ContentBlock, LlmCallConfig } from '@deepseek-ai/dsh-llm'
-import type { Session, SessionId } from '@deepseek-ai/dsh-session'
+import type { SessionId } from '@deepseek-ai/dsh-session'
 // Type-only: brings `ctx.get('goals')` and the goal view this path reads.
 import type {} from '@deepseek-ai/dsh-goal'
 import type { PauseGate } from './gate.js'
-import { UnresumableSessionError, restoreComposition } from './composition.js'
-import { owesReply } from './history.js'
 import type { ParkRegistry } from './registry.js'
 import { describeError, UNRECORDED_TEXT } from './shared.js'
 import { walkDescendants } from './tree.js'
@@ -50,8 +45,8 @@ import { createActivator } from './resume-activation.js'
 import type { PauseAnswer } from './shared.js'
 export * from './resume-text.js'
 import {
-  ACTIVATION_FAILED_TEXT, NOT_PARKED_TEXT, REARM_GOAL_OFF_TEXT, REARM_GOAL_ON_TEXT,
-  RESUMED_TEXT, REVIEW_TEXT, summarizeTreeRelease, UNCLEAN_TEXT, UNRESUMABLE_TEXT, WAKE_MARKER,
+  NOT_PARKED_TEXT, REARM_GOAL_OFF_TEXT, REARM_GOAL_ON_TEXT,
+  RESUMED_TEXT, REVIEW_TEXT, summarizeTreeRelease, UNCLEAN_TEXT,
 } from './resume-text.js'
 import type { ReleaseTreeOutcome, ResumeAttempt, ResumeOptions, ResumeRefusal, WakeRequest } from './resume-text.js'
 
@@ -88,14 +83,12 @@ export interface ResumePath {
    * Resume one session the registry remembers.
    * @param sessionId - the session to resume.
    * @param request - which wake this resume delivers; see {@link WakeRequest}.
-   * @param parentId - the direct parent a batch release already brought back, when there is one.
    * @param signal - cancellation for the cold load and setup.
    * @returns what happened, and the copy for whoever asked.
    */
   resumeSession(
     sessionId: SessionId,
     request: WakeRequest,
-    parentId?: SessionId,
     signal?: AbortSignal,
   ): Promise<ResumeAttempt>
   /**
@@ -108,7 +101,6 @@ export interface ResumePath {
    * or only answers it (`'review'`). A review activates nothing and writes
    * nothing: opening a session to read it is the user's own action, not this
    * plugin's.
-   * @param parentId - the direct parent a batch release already brought back, when there is one.
    * @param signal - cancellation for the cold load and setup.
    * @returns what happened, and the copy for whoever asked.
    */
@@ -116,7 +108,6 @@ export interface ResumePath {
     sessionId: SessionId,
     request: WakeRequest,
     finalize: 'release' | 'review',
-    parentId?: SessionId,
     signal?: AbortSignal,
   ): Promise<ResumeAttempt>
   /**
@@ -182,7 +173,6 @@ export function installResumePath(
    * @param finalize - whether the decision continues the session (`'release'`)
    * or only answers it (`'review'`); a review activates nothing and writes
    * nothing.
-   * @param parentId - the direct parent a batch release already brought back, when there is one.
    * @param signal - cancellation for the cold load and setup.
    * @returns what happened, and the copy for whoever asked.
    */
@@ -190,7 +180,6 @@ export function installResumePath(
     sessionId: SessionId,
     request: WakeRequest,
     finalize: 'release' | 'review',
-    parentId?: SessionId,
     signal?: AbortSignal,
   ): Promise<ResumeAttempt> => {
     const record = registry.get(sessionId)
@@ -205,7 +194,7 @@ export function installResumePath(
       return { sessionId, resumed: false, refusal: 'not-activated', answer: { kind: 'success', text: REVIEW_TEXT } }
     }
     const live = ctx.agents.get(sessionId)
-    if (live === undefined) return await activate(sessionId, request, record.rearmGoal, parentId, signal)
+    if (live === undefined) return await activate(sessionId, request, record.rearmGoal, signal)
     if (!gate.isPaused(sessionId)) {
       // This process holds nothing for the session — its record was found
       // unreadable at mount, or something else already released it. The session
@@ -248,14 +237,12 @@ export function installResumePath(
    * back is the press's own undo, and it delivers no wake.
    * @param sessionId - the recorded session to resume.
    * @param request - which wake this resume delivers; see {@link WakeRequest}.
-   * @param parentId - the direct parent a batch release already brought back, when there is one.
    * @param signal - cancellation for the cold load and setup.
    * @returns what happened, and the copy for whoever asked.
    */
   const resumeSession = async (
     sessionId: SessionId,
     request: WakeRequest,
-    parentId?: SessionId,
     signal?: AbortSignal,
   ): Promise<ResumeAttempt> => {
     const record = registry.get(sessionId)
@@ -318,19 +305,9 @@ export function installResumePath(
     if (record.phase !== 'safe') {
       return { sessionId, resumed: false, refusal: 'not-clean', answer: { kind: 'error', text: UNCLEAN_TEXT } }
     }
-    return await activate(sessionId, request, record.rearmGoal, parentId, signal)
+    return await activate(sessionId, request, record.rearmGoal, signal)
   }
 
-  /**
-   * Order the recorded sessions so a session is released after the parent it
-   * hangs from: waking a child needs its direct parent to be live first. The
-   * relation is read from the parent catalogs themselves (which children this
-   * session actually has), never guessed from ids; a branch whose catalog
-   * cannot be read simply has no known parent and is released with the roots.
-   * @param sessionIds - every recorded session, in registry order.
-   * @param signal - cancellation for each catalog read.
-   * @returns the parent of each child, and one list per depth level, shallowest first.
-   */
   return {
     resumeSession,
     decideUnclean,
@@ -364,27 +341,26 @@ export function installResumePath(
             : { sessionId: member, resumed: true, answer })
         }
       } else {
-        const release = await releaseOrder(ctx, registered, signal)
-        for (const level of release.levels) {
+        // The walk is already pre-order, so walking it in order releases the
+        // parent before the child without a second catalog read.
+        for (const member of registered) {
           signal?.throwIfAborted()
-          for (const member of level) {
-            // The rule, applied here rather than left to the entry points
-            // below: a pause this process pressed is normally the user's own
-            // to take back, so the clean path releases it without asking its
-            // phase. In a tree release it is not — a member that did not stop
-            // cleanly keeps its pause, and the caller names it.
-            const record = registry.get(member)
-            if (record !== undefined && record.phase !== 'safe') {
-              released.push({
-                sessionId: member,
-                resumed: false,
-                refusal: 'not-clean',
-                answer: { kind: 'error', text: UNCLEAN_TEXT },
-              })
-              continue
-            }
-            released.push(await resumeSession(member, { kind: 'silent' }, release.parents.get(member), signal))
+          // The rule, applied here rather than left to the entry points below:
+          // a pause this process pressed is normally the user's own to take
+          // back, so the clean path releases it without asking its phase. In a
+          // tree release it is not — a member that did not stop cleanly keeps
+          // its pause, and the caller names it.
+          const record = registry.get(member)
+          if (record !== undefined && record.phase !== 'safe') {
+            released.push({
+              sessionId: member,
+              resumed: false,
+              refusal: 'not-clean',
+              answer: { kind: 'error', text: UNCLEAN_TEXT },
+            })
+            continue
           }
+          released.push(await resumeSession(member, { kind: 'silent' }, signal))
         }
       }
       const root = released.find(attempt => attempt.sessionId === sessionId)
@@ -411,7 +387,7 @@ export function installResumePath(
         // One release per level and no concurrency cap inside it: the levels
         // are the milliseconds a child's wake needs, not a queue.
         attempts.push(...await Promise.all(level.map(sessionId =>
-          resumeSession(sessionId, { kind: 'silent' }, release.parents.get(sessionId), signal))))
+          resumeSession(sessionId, { kind: 'silent' }, signal))))
       }
       return attempts
     },

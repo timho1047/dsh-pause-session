@@ -71,11 +71,10 @@ export interface ResumePath {
      * Resume one session the registry remembers.
      * @param sessionId - the session to resume.
      * @param request - which wake this resume delivers; see {@link WakeRequest}.
-     * @param parentId - the direct parent a batch release already brought back, when there is one.
      * @param signal - cancellation for the cold load and setup.
      * @returns what happened, and the copy for whoever asked.
      */
-    resumeSession(sessionId: SessionId, request: WakeRequest, parentId?: SessionId, signal?: AbortSignal): Promise<ResumeAttempt>;
+    resumeSession(sessionId: SessionId, request: WakeRequest, signal?: AbortSignal): Promise<ResumeAttempt>;
     /**
      * Resume one session the decision list officially owns — a record that is
      * known NOT to be clean, which the clean path above must refuse and this entry
@@ -86,11 +85,10 @@ export interface ResumePath {
      * or only answers it (`'review'`). A review activates nothing and writes
      * nothing: opening a session to read it is the user's own action, not this
      * plugin's.
-     * @param parentId - the direct parent a batch release already brought back, when there is one.
      * @param signal - cancellation for the cold load and setup.
      * @returns what happened, and the copy for whoever asked.
      */
-    decideUnclean(sessionId: SessionId, request: WakeRequest, finalize: 'release' | 'review', parentId?: SessionId, signal?: AbortSignal): Promise<ResumeAttempt>;
+    decideUnclean(sessionId: SessionId, request: WakeRequest, finalize: 'release' | 'review', signal?: AbortSignal): Promise<ResumeAttempt>;
     /**
      * Resume every session the registry remembers, clean ones only. One session's
      * failure never stops the others.

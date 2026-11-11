@@ -1,12 +1,14 @@
 /**
- * The composition a parked Session resumes into, observed at the seam the
- * resume path actually crosses.
+ * How a parked Session reaches the owner that can bring it back.
  *
- * The first group drives `installResumePath` with the services around it
- * replaced, so it can assert exactly what reaches `agents.resume` — the setup
- * and the descriptor's route — without mounting a persistence backend. The
- * second group runs the same path against the real agent loop over a Session a
- * killed child left parked, proving the setup is called before publication.
+ * A root Session is loaded by this plugin, so the test asserts what reaches
+ * `agents.resume`. A subagent child belongs to the subagent runtime, so the test
+ * asserts the wake goes through `ctx.subagents.prompt` and that the plugin never
+ * creates an unmanaged Agent for it.
+ *
+ * The last group runs the root path against the real agent loop over a Session
+ * a killed process left parked, proving the preset setup is called before
+ * publication.
  * @module dsh-pause-session/test/resume/composition-resume
  */
 
@@ -16,12 +18,13 @@ import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import type { Agent, ResumeAgentOptions } from '@deepseek-ai/dsh-agent'
-import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import { installResumePath } from '../../src/resume.ts'
+import { WAKE_MARKER } from '../../src/resume-text.ts'
 import { readParkRegistry } from '../registry/read.ts'
 import {
-  continuableDescriptor, observationOf, oneShotDescriptor, parentAgent, presetRoster, selectedEvent,
+  continuableDescriptor, observationOf, oneShotDescriptor, presetRoster, selectedEvent,
 } from './composition-fixtures.ts'
 import { ensureHostEntry } from './build.ts'
 import { parkAndLeave, resumeAll, reviveHome, storageOf, until } from './home.ts'
@@ -68,30 +71,23 @@ function resumedAgent(id: SessionId): Agent {
 function resumePathFixture(options: {
   readonly sessionId: SessionId
   readonly observation: ReturnType<typeof observationOf>
-  readonly parent?: Agent
+  readonly prompt?: (request: unknown, signal: AbortSignal) => Promise<{ messageId: string }>
 }) {
   const ctx = context()
   const presets = presetRoster()
   const agentCtx = context()
-  const prompt = {
-    context: vi.fn(),
-    section: vi.fn(),
-    getContextOrder: vi.fn(() => 0),
-    getSectionOrder: vi.fn(() => 0),
-  }
-  const tools = { restrict: vi.fn() }
   agentCtx.provide('agentPresets', presets as never)
-  agentCtx.provide('systemPrompt', prompt as never)
-  agentCtx.provide('tools', tools as never)
   const resume = vi.fn(async (request: ResumeAgentOptions) => {
     await request.setup?.(agentCtx, resumedAgent(request.resumeSessionId))
     return { agent: resumedAgent(request.resumeSessionId), dispose: async () => {} }
   })
   const agents = {
-    get: vi.fn((id: SessionId) => options.parent?.id === id ? options.parent : undefined),
+    get: vi.fn(() => undefined),
     resume,
   }
   ctx.provide('agents', agents as never)
+  const prompt = vi.fn(options.prompt ?? (async () => ({ messageId: 'message-1' })))
+  ctx.provide('subagents', { prompt } as never)
   const query = { observeSession: vi.fn(async () => options.observation) }
   ctx.provide('sessionQuery', query as never)
   ctx.provide('agentPresets', presets as never)
@@ -113,63 +109,56 @@ function resumePathFixture(options: {
     adopted: vi.fn(() => false),
   }
   const path = installResumePath(ctx, gate as never, registry as never, { silentWakeRoutes: [] }, deps)
-  return { ctx, presets, agentCtx, prompt, tools, resume, query, registry, gate, deps, path }
+  return { ctx, presets, agentCtx, resume, prompt, query, registry, gate, deps, path }
 }
 
-describe('a parked Session resumes into its stored composition', () => {
-  it('passes the child descriptor route and independent preset setup to agents.resume', async () => {
-    const parentCtx = context()
-    const parent = { ...parentAgent(parentCtx), id: SessionId('parent') } as Agent
+describe('a parked Session reaches the owner that can bring it back', () => {
+  it('hands a subagent child to the subagent runtime instead of loading an Agent', async () => {
     const childId = SessionId('child')
     const fixture = resumePathFixture({
       sessionId: childId,
-      parent,
       observation: observationOf({
         events: [
           selectedEvent(0, 'reviewing'),
-          continuableDescriptor(1, {
-            persona: 'Review this child work carefully.',
-            toolFilter: { deny: ['bash'] },
-            agentProvider: 'child-provider',
-            agentModel: 'child-model',
-            agentReasoningEffort: ReasoningEffortId('high'),
-          }),
+          continuableDescriptor(1, { agentProvider: 'child-provider', agentModel: 'child-model' }),
         ],
         projection: { agentPreset: 'reviewing' },
       }),
     })
 
-    const outcome = await fixture.path.resumeSession(childId, { kind: 'none' }, parent.id)
+    const outcome = await fixture.path.resumeSession(childId, { kind: 'silent' })
 
     expect(outcome).toEqual({
       sessionId: childId,
       resumed: true,
       answer: { kind: 'success', text: 'This session resumed from where it paused.' },
     })
-    expect(fixture.resume).toHaveBeenCalledOnce()
-    const request = fixture.resume.mock.calls[0]![0]
-    expect(request.resumeSessionId).toBe(childId)
-    expect(request.parentAgent).toBe(parent)
-    expect(request.agentOptions).toEqual({
-      provider: 'child-provider',
-      model: 'child-model',
-      reasoningEffort: 'high',
+    // The runtime owns the activation: it cold-resumes the child under its live
+    // tree root with the persisted composition, so the plugin must not create a
+    // second, unmanaged Agent on the same Session.
+    expect(fixture.resume).not.toHaveBeenCalled()
+    expect(fixture.prompt).toHaveBeenCalledOnce()
+    expect(fixture.prompt.mock.calls[0]?.[0]).toMatchObject({
+      childSessionId: childId,
+      delivery: 'queue',
+      content: [{ type: 'text', text: WAKE_MARKER }],
     })
-    expect(request.setup).toBeTypeOf('function')
-    expect(fixture.presets.mount).toHaveBeenCalledOnce()
-    expect(fixture.presets.mount.mock.calls[0]?.[1]).toBe('reviewing')
+    expect(fixture.presets.mount).not.toHaveBeenCalled()
     expect(fixture.registry.forget).toHaveBeenCalledWith(childId)
     expect(fixture.gate.resume).toHaveBeenCalledWith(childId)
   })
 
-  it('maps a one-shot stored route to an unresumable refusal and leaves the park in place', async () => {
+  it('maps the runtime\'s one-shot refusal to an unresumable answer and leaves the park in place', async () => {
     const sessionId = SessionId('one-shot')
     const fixture = resumePathFixture({
       sessionId,
       observation: observationOf({ events: [oneShotDescriptor(0)] }),
+      prompt: async () => {
+        throw new RemoteError('subagent/not-resumable', 'one-shot', {})
+      },
     })
 
-    const outcome = await fixture.path.resumeSession(sessionId, { kind: 'none' })
+    const outcome = await fixture.path.resumeSession(sessionId, { kind: 'silent' })
 
     expect(outcome).toEqual({
       sessionId,
@@ -193,11 +182,12 @@ describe('a parked Session resumes into its stored composition', () => {
     })
     const controller = new AbortController()
 
-    const outcome = await fixture.path.resumeSession(sessionId, { kind: 'none' }, undefined, controller.signal)
+    const outcome = await fixture.path.resumeSession(sessionId, { kind: 'silent' }, controller.signal)
 
     expect(outcome.resumed).toBe(true)
     expect(fixture.query.observeSession).toHaveBeenCalledWith(sessionId, { signal: controller.signal })
     expect(fixture.resume.mock.calls[0]?.[0].signal).toBe(controller.signal)
+    expect(fixture.prompt).not.toHaveBeenCalled()
   })
 })
 

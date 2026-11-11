@@ -51,7 +51,7 @@ export type Config = z.infer<typeof ConfigShape>;
 export declare const Config: z.ZodPreprocess<z.ZodObject<{
     silentWakeRoutes: z.ZodDefault<z.ZodArray<z.ZodString>>;
     maxListedLogEvents: z.ZodDefault<z.ZodNumber>;
-}, z.core.$strip>>;
+}, z.core.$strip>, unknown>;
 /**
  * Mount the durable pause registry, the pause gate, the activity fold, their
  * session control, and the clean resume path.

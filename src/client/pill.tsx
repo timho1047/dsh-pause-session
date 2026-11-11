@@ -164,6 +164,8 @@ export function PausePill(props: PausePillProps): ReactNode {
                 {t('triage.refresh.aria')}
               </button>
             </div>
+            {error === undefined ? null : <p className={styles.dspPillError} role="status">{error}</p>}
+            {view.running === undefined ? null : <p className={styles.dspPillPanelNote}>{view.running}</p>}
             {!list.visible
               ? <p className={styles.dspPillPanelNote}>{t('triage.reading')}</p>
               : list.unavailable

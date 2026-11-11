@@ -67,6 +67,7 @@ try {
       'lib/index.js', 'lib/types/remote.d.ts', 'lib/types/remote.js',
       'lib/typert.host.js', 'lib/typert.host.d.ts',
       'lib/typert.remote-client.js', 'lib/typert.remote-client.d.ts',
+      'lib/typert.remote-client.d.ts.map',
     ],
   }
   writeFileSync(join(app, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`)

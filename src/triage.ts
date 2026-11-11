@@ -242,10 +242,10 @@ export function mountTriageList(
     // park exactly as it was, so the row is still there for tomorrow and
     // nothing has been continued — or even activated — on the user's behalf.
     if (action === 'review') {
-      return (await resumePath.decideUnclean(sessionId, { kind: 'none' }, 'review', undefined, signal)).answer
+      return (await resumePath.decideUnclean(sessionId, { kind: 'none' }, 'review', signal)).answer
     }
     const wake: WakeOf = action === 'continue' ? { kind: 'silent' } : { kind: 'message', text: UNKNOWN_OUTCOME_NOTE }
-    return (await resumePath.decideUnclean(sessionId, wake, 'release', undefined, signal)).answer
+    return (await resumePath.decideUnclean(sessionId, wake, 'release', signal)).answer
   }
 
   return {

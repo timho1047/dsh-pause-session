@@ -4,6 +4,23 @@ All notable changes to this project are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- Adapt to DeepSeek Harness `0.2.2-rc.2`. Subagent children now resume through
+  `ctx.subagents.prompt`, so the runtime owns their activation, composition, and
+  tree membership; the plugin no longer loads them as independent Agents.
+- Release ordering reads `listDescendants` depth and reuses the tree walk, so a
+  tree release no longer reads the catalogs twice.
+- The composition seam resolves a root Session's preset only; a child's
+  composition is restored by the subagent runtime.
+
+### Removed
+
+- The `parentAgent` resume option, `listChildren` catalog reads, and the
+  child-composition branch this plugin used to assemble itself.
+
 ## [0.2.0] - 2026-11-08
 
 ### Changed

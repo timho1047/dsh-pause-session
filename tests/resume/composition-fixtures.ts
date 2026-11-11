@@ -10,7 +10,6 @@
 
 import { vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
-import type { Agent } from '@deepseek-ai/dsh-agent'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
@@ -25,11 +24,14 @@ export type ProjectionFixture = 'none' | { readonly agentPreset?: string | null 
 export function observationOf(options: {
   readonly events?: readonly SessionEvent[]
   readonly projection?: ProjectionFixture
+  /** The Session header's origin; `subagent` marks a child without a descriptor. */
+  readonly origin?: 'subagent'
 } = {}): SessionObservation {
   const projection = options.projection ?? { agentPreset: null }
   return {
     source: 'prepared',
     inheritedEventCount: 0,
+    header: { origin: options.origin },
     events: options.events ?? [],
     projections: projection === 'none'
       ? undefined
@@ -99,9 +101,4 @@ export function presetRoster() {
     return 'parent'
   })
   return { resolve, mount, composeFrom, mounts, joins }
-}
-
-/** A parent Agent whose only used face is its context. */
-export function parentAgent(ctx: Context): Agent {
-  return { ctx } as unknown as Agent
 }
